@@ -1,0 +1,717 @@
+package parser
+
+import (
+	"fmt"
+	"os"
+
+	demoinfocs "github.com/markus-wa/demoinfocs-golang/v5/pkg/demoinfocs"
+	"github.com/markus-wa/demoinfocs-golang/v5/pkg/demoinfocs/common"
+	events "github.com/markus-wa/demoinfocs-golang/v5/pkg/demoinfocs/events"
+	"github.com/markus-wa/demoinfocs-golang/v5/pkg/demoinfocs/msg"
+)
+
+type ReplayData struct {
+	Header       DemoHeader
+	Players      []PlayerInfo
+	Rounds       []RoundData
+	Kills        []KillEvent
+	Nades        []NadeEvent
+	PlayerFrames []PlayerFrame
+	Map          MapData
+}
+
+type DemoHeader struct {
+	MapName      string
+	TickRate     int
+	TotalTicks   int
+	ServerName   string
+	PlaybackTime float64
+}
+
+type PlayerInfo struct {
+	SteamID     uint64
+	Name        string
+	Team        int
+	Kills       int
+	Deaths      int
+	Assists     int
+	ADR         float64
+	KAST        int
+	Score       int
+	TotalDamage int
+}
+
+type RoundData struct {
+	RoundNumber       int
+	StartTick         int
+	EndTick           int
+	WinnerTeam        int
+	WinReason         string
+	KillCount         int
+	FreezetimeEndTick int
+}
+
+type KillEvent struct {
+	Tick              int
+	KillerSteamID     uint64
+	VictimSteamID     uint64
+	Weapon            string
+	IsHeadshot        bool
+	PenetratedObjects int
+	KillerX           float32
+	KillerY           float32
+	VictimX           float32
+	VictimY           float32
+}
+
+type NadeEvent struct {
+	Tick           int
+	ThrowerSteamID uint64
+	NadeType       string
+	StartX         float32
+	StartY         float32
+	StartZ         float32
+	EndX           float32
+	EndY           float32
+	EndZ           float32
+	Trajectory     []TrajectoryPoint
+	DetonationTick int
+	FadeTick       int
+	EffectRadius   float32
+}
+
+type TrajectoryPoint struct {
+	Tick int
+	X    float32
+	Y    float32
+	Z    float32
+}
+
+type PlayerFrame struct {
+	Tick    int
+	SteamID uint64
+	X       float32
+	Y       float32
+	Z       float32
+	Yaw     float32
+	Pitch   float32
+	Health  int
+	Armor   int
+	Weapon  string
+	IsAlive bool
+}
+
+type MapData struct {
+	Name   string
+	PosX   float64
+	PosY   float64
+	Scale  float64
+	Rotate float64
+	Zoom   float64
+	Width  int
+	Height int
+}
+
+func ParseFile(path string) (*ReplayData, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer f.Close()
+
+	p := demoinfocs.NewParser(f)
+	defer p.Close()
+
+	recorder := &frameRecorder{
+		playerStats:              make(map[uint64]*playerStatTracker),
+		damageMap:                make(map[uint64]map[uint64]int),
+		lastFrames:               make(map[uint64]PlayerFrame),
+		roundStats:               make(map[int]*roundStats),
+		playerRoundContributions: make(map[uint64]int),
+		playerTotalRounds:        make(map[uint64]int),
+	}
+
+	p.RegisterEventHandler(func(e events.Kill) {
+		recorder.recordKill(e, p)
+	})
+	p.RegisterEventHandler(func(e events.RoundStart) {
+		recorder.recordRoundStart(p)
+	})
+	p.RegisterEventHandler(func(e events.RoundEnd) {
+		recorder.recordRoundEnd(e, p)
+	})
+	p.RegisterEventHandler(func(e events.RoundFreezetimeEnd) {
+		recorder.recordRoundFreezetimeEnd(p)
+	})
+	p.RegisterEventHandler(func(e events.GrenadeProjectileDestroy) {
+		recorder.recordNadeDestroyed(e, p)
+	})
+	p.RegisterEventHandler(func(e events.SmokeStart) {
+		recorder.recordSmokeStart(e, p)
+	})
+	p.RegisterEventHandler(func(e events.SmokeExpired) {
+		recorder.recordSmokeExpired(p)
+	})
+	p.RegisterEventHandler(func(e events.FlashExplode) {
+		recorder.recordFlashExplode(e, p)
+	})
+	p.RegisterEventHandler(func(e events.HeExplode) {
+		recorder.recordHeExplode(e, p)
+	})
+	p.RegisterEventHandler(func(e events.PlayerHurt) {
+		recorder.recordPlayerHurt(e)
+	})
+	p.RegisterEventHandler(func(e events.FrameDone) {
+		recorder.recordFrameDone(p)
+	})
+
+	p.RegisterNetMessageHandler(func(msg *msg.CSVCMsg_ServerInfo) {
+		recorder.recordServerInfo(msg)
+	})
+
+	if err := p.ParseToEnd(); err != nil {
+		return nil, fmt.Errorf("parse error: %w", err)
+	}
+
+	return recorder.buildReplayData(p), nil
+}
+
+type roundStats struct {
+	kills   map[uint64]bool
+	assists map[uint64]bool
+	deaths  map[uint64]bool
+	trades  map[uint64]bool
+}
+
+type killRecord struct {
+	tick   int
+	killer uint64
+	victim uint64
+}
+
+type frameRecorder struct {
+	kills        []KillEvent
+	nades        []NadeEvent
+	rounds       []RoundData
+	currentRound *RoundData
+	playerFrames []PlayerFrame
+	playerStats  map[uint64]*playerStatTracker
+	damageMap    map[uint64]map[uint64]int
+	lastFrames   map[uint64]PlayerFrame
+	lastTick     int
+	mapName      string
+	serverName   string
+	maxTick      int
+
+	roundStats  map[int]*roundStats
+	recentKills []killRecord
+
+	playerRoundContributions map[uint64]int
+	playerTotalRounds        map[uint64]int
+}
+
+type playerStatTracker struct {
+	kills       int
+	deaths      int
+	assists     int
+	totalDamage int
+}
+
+func (r *frameRecorder) recordServerInfo(msg *msg.CSVCMsg_ServerInfo) {
+	if msg.MapName != nil {
+		r.mapName = *msg.MapName
+	}
+	if msg.HostName != nil {
+		r.serverName = *msg.HostName
+	}
+}
+
+func (r *frameRecorder) recordKill(e events.Kill, p demoinfocs.Parser) {
+	tick := p.CurrentFrame()
+	if tick > r.maxTick {
+		r.maxTick = tick
+	}
+
+	kill := KillEvent{
+		Tick:              tick,
+		IsHeadshot:        e.IsHeadshot,
+		PenetratedObjects: e.PenetratedObjects,
+	}
+
+	roundNum := len(r.rounds) + 1
+	if r.currentRound != nil {
+		roundNum = r.currentRound.RoundNumber
+	}
+
+	if e.Killer != nil {
+		kill.KillerSteamID = e.Killer.SteamID64
+		pos := e.Killer.Position()
+		kill.KillerX = float32(pos.X)
+		kill.KillerY = float32(pos.Y)
+		r.ensureStats(e.Killer.SteamID64).kills++
+
+		if _, ok := r.roundStats[roundNum]; !ok {
+			r.roundStats[roundNum] = &roundStats{
+				kills:   make(map[uint64]bool),
+				assists: make(map[uint64]bool),
+				deaths:  make(map[uint64]bool),
+				trades:  make(map[uint64]bool),
+			}
+		}
+		r.roundStats[roundNum].kills[e.Killer.SteamID64] = true
+
+		// Trade detection: check if this kill avenges a recent death
+		for _, prev := range r.recentKills {
+			if prev.killer == kill.KillerSteamID && tick-prev.tick <= 256 {
+				if e.Victim != nil && isTeamMate(prev.victim, e.Killer.SteamID64, p) {
+					r.roundStats[roundNum].trades[e.Killer.SteamID64] = true
+				}
+			}
+		}
+	}
+
+	if e.Victim != nil {
+		kill.VictimSteamID = e.Victim.SteamID64
+		pos := e.Victim.Position()
+		kill.VictimX = float32(pos.X)
+		kill.VictimY = float32(pos.Y)
+		r.ensureStats(e.Victim.SteamID64).deaths++
+
+		if _, ok := r.roundStats[roundNum]; !ok {
+			r.roundStats[roundNum] = &roundStats{
+				kills:   make(map[uint64]bool),
+				assists: make(map[uint64]bool),
+				deaths:  make(map[uint64]bool),
+				trades:  make(map[uint64]bool),
+			}
+		}
+		r.roundStats[roundNum].deaths[e.Victim.SteamID64] = true
+	}
+
+	if e.Assister != nil {
+		r.ensureStats(e.Assister.SteamID64).assists++
+		if _, ok := r.roundStats[roundNum]; !ok {
+			r.roundStats[roundNum] = &roundStats{
+				kills:   make(map[uint64]bool),
+				assists: make(map[uint64]bool),
+				deaths:  make(map[uint64]bool),
+				trades:  make(map[uint64]bool),
+			}
+		}
+		r.roundStats[roundNum].assists[e.Assister.SteamID64] = true
+	}
+
+	if e.Weapon != nil {
+		kill.Weapon = e.Weapon.String()
+	}
+
+	r.kills = append(r.kills, kill)
+
+	// Track recent kills for trade detection
+	if e.Killer != nil && e.Victim != nil {
+		r.recentKills = append(r.recentKills, killRecord{
+			tick:   tick,
+			killer: e.Killer.SteamID64,
+			victim: e.Victim.SteamID64,
+		})
+		// Keep only last 512 ticks worth of kills for trade detection
+		cutoff := tick - 512
+		keep := 0
+		for i, kr := range r.recentKills {
+			if kr.tick >= cutoff {
+				keep = i
+				break
+			}
+		}
+		if keep > 0 {
+			r.recentKills = r.recentKills[keep:]
+		}
+	}
+
+	if r.currentRound != nil {
+		r.currentRound.KillCount++
+	}
+}
+
+func isTeamMate(steamID1, steamID2 uint64, p demoinfocs.Parser) bool {
+	for _, player := range p.GameState().Participants().All() {
+		if player != nil && player.SteamID64 == steamID1 {
+			for _, other := range p.GameState().Participants().All() {
+				if other != nil && other.SteamID64 == steamID2 {
+					return player.Team == other.Team
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (r *frameRecorder) recordRoundStart(p demoinfocs.Parser) {
+	tick := p.CurrentFrame()
+	if tick > r.maxTick {
+		r.maxTick = tick
+	}
+	roundNum := len(r.rounds) + 1
+	r.currentRound = &RoundData{
+		RoundNumber: roundNum,
+		StartTick:   tick,
+	}
+	if _, ok := r.roundStats[roundNum]; !ok {
+		r.roundStats[roundNum] = &roundStats{
+			kills:   make(map[uint64]bool),
+			assists: make(map[uint64]bool),
+			deaths:  make(map[uint64]bool),
+			trades:  make(map[uint64]bool),
+		}
+	}
+}
+
+func (r *frameRecorder) recordRoundEnd(e events.RoundEnd, p demoinfocs.Parser) {
+	if r.currentRound == nil {
+		return
+	}
+	tick := p.CurrentFrame()
+	if tick > r.maxTick {
+		r.maxTick = tick
+	}
+	r.currentRound.EndTick = tick
+	r.currentRound.WinnerTeam = int(e.Winner)
+	r.currentRound.WinReason = roundEndReasonString(e.Reason)
+	r.rounds = append(r.rounds, *r.currentRound)
+
+	// Compute KAST contributions for this round
+	roundNum := r.currentRound.RoundNumber
+	stats := r.roundStats[roundNum]
+	if stats == nil {
+		stats = &roundStats{
+			kills:   make(map[uint64]bool),
+			assists: make(map[uint64]bool),
+			deaths:  make(map[uint64]bool),
+			trades:  make(map[uint64]bool),
+		}
+		r.roundStats[roundNum] = stats
+	}
+
+	// For every player who participated, check contribution
+	for _, player := range p.GameState().Participants().All() {
+		if player == nil || player.SteamID64 == 0 {
+			continue
+		}
+		steamID := player.SteamID64
+		r.playerTotalRounds[steamID]++
+
+		contributed := stats.kills[steamID] || stats.assists[steamID] || stats.trades[steamID] || !stats.deaths[steamID]
+		if contributed {
+			r.playerRoundContributions[steamID]++
+		}
+	}
+
+	r.currentRound = nil
+}
+
+func (r *frameRecorder) recordRoundFreezetimeEnd(p demoinfocs.Parser) {
+	if r.currentRound != nil {
+		r.currentRound.FreezetimeEndTick = p.CurrentFrame()
+	}
+}
+
+func (r *frameRecorder) recordNadeDestroyed(e events.GrenadeProjectileDestroy, p demoinfocs.Parser) {
+	proj := e.Projectile
+	if proj == nil || proj.WeaponInstance == nil {
+		return
+	}
+
+	nadeType := nadeTypeString(proj.WeaponInstance.Type)
+	detTick := p.CurrentFrame()
+
+	nade := NadeEvent{
+		Tick:            detTick,
+		NadeType:        nadeType,
+		DetonationTick:  detTick,
+		EffectRadius:    nadeRadius(nadeType),
+	}
+
+	// Set FadeTick based on nade type duration (in ticks at 64-tick)
+	switch nadeType {
+	case "smoke":
+		nade.FadeTick = detTick + 1152
+	case "hegrenade":
+		nade.FadeTick = detTick + 5
+	case "flashbang":
+		nade.FadeTick = detTick + 3
+	case "molotov", "incendiary":
+		nade.FadeTick = detTick + 448
+	case "decoy":
+		nade.FadeTick = detTick + 960
+	default:
+		nade.FadeTick = detTick
+	}
+
+	if proj.Thrower != nil {
+		nade.ThrowerSteamID = proj.Thrower.SteamID64
+	}
+
+	pos := proj.Position()
+	nade.EndX = float32(pos.X)
+	nade.EndY = float32(pos.Y)
+	nade.EndZ = float32(pos.Z)
+
+	for _, tp := range proj.Trajectory {
+		nade.Trajectory = append(nade.Trajectory, TrajectoryPoint{
+			Tick: tp.Tick,
+			X:    float32(tp.Position.X),
+			Y:    float32(tp.Position.Y),
+			Z:    float32(tp.Position.Z),
+		})
+	}
+
+	if len(nade.Trajectory) > 0 {
+		nade.StartX = nade.Trajectory[0].X
+		nade.StartY = nade.Trajectory[0].Y
+		nade.StartZ = nade.Trajectory[0].Z
+	}
+
+	r.nades = append(r.nades, nade)
+}
+
+func (r *frameRecorder) recordSmokeStart(e events.SmokeStart, p demoinfocs.Parser) {
+	tick := p.CurrentFrame()
+	if tick > r.maxTick {
+		r.maxTick = tick
+	}
+	nade := NadeEvent{
+		Tick:           tick,
+		NadeType:       "smoke",
+		DetonationTick: tick,
+		FadeTick:       tick + 1152,
+		EndX:           float32(e.Position.X),
+		EndY:           float32(e.Position.Y),
+		EndZ:           float32(e.Position.Z),
+		EffectRadius:   200,
+	}
+	if e.Thrower != nil {
+		nade.ThrowerSteamID = e.Thrower.SteamID64
+	}
+	r.nades = append(r.nades, nade)
+}
+
+func (r *frameRecorder) recordSmokeExpired(p demoinfocs.Parser) {
+	tick := p.CurrentFrame()
+	for i := len(r.nades) - 1; i >= 0; i-- {
+		if r.nades[i].NadeType == "smoke" && tick-r.nades[i].FadeTick < 64 {
+			r.nades[i].FadeTick = tick
+			break
+		}
+	}
+}
+
+func (r *frameRecorder) recordFlashExplode(e events.FlashExplode, p demoinfocs.Parser) {
+	tick := p.CurrentFrame()
+	if tick > r.maxTick {
+		r.maxTick = tick
+	}
+	nade := NadeEvent{
+		Tick:           tick,
+		NadeType:       "flashbang",
+		DetonationTick: tick,
+		FadeTick:       tick + 3,
+		EndX:           float32(e.Position.X),
+		EndY:           float32(e.Position.Y),
+		EndZ:           float32(e.Position.Z),
+		EffectRadius:   400,
+	}
+	if e.Thrower != nil {
+		nade.ThrowerSteamID = e.Thrower.SteamID64
+	}
+	r.nades = append(r.nades, nade)
+}
+
+func (r *frameRecorder) recordHeExplode(e events.HeExplode, p demoinfocs.Parser) {
+	tick := p.CurrentFrame()
+	if tick > r.maxTick {
+		r.maxTick = tick
+	}
+	nade := NadeEvent{
+		Tick:           tick,
+		NadeType:       "hegrenade",
+		DetonationTick: tick,
+		FadeTick:       tick + 5,
+		EndX:           float32(e.Position.X),
+		EndY:           float32(e.Position.Y),
+		EndZ:           float32(e.Position.Z),
+		EffectRadius:   250,
+	}
+	if e.Thrower != nil {
+		nade.ThrowerSteamID = e.Thrower.SteamID64
+	}
+	r.nades = append(r.nades, nade)
+}
+
+func (r *frameRecorder) recordPlayerHurt(e events.PlayerHurt) {
+	if e.Attacker == nil || e.Player == nil {
+		return
+	}
+	if r.damageMap[e.Attacker.SteamID64] == nil {
+		r.damageMap[e.Attacker.SteamID64] = make(map[uint64]int)
+	}
+	r.damageMap[e.Attacker.SteamID64][e.Player.SteamID64] += e.HealthDamage
+	r.ensureStats(e.Attacker.SteamID64).totalDamage += e.HealthDamage
+}
+
+func (r *frameRecorder) recordFrameDone(p demoinfocs.Parser) {
+	tick := p.CurrentFrame()
+	if tick == r.lastTick {
+		return
+	}
+	r.lastTick = tick
+	if tick > r.maxTick {
+		r.maxTick = tick
+	}
+
+	for _, player := range p.GameState().Participants().All() {
+		if player == nil {
+			continue
+		}
+		pos := player.Position()
+		frame := PlayerFrame{
+			Tick:    tick,
+			SteamID: player.SteamID64,
+			X:       float32(pos.X),
+			Y:       float32(pos.Y),
+			Z:       float32(pos.Z),
+			Yaw:     player.ViewDirectionX(),
+			Pitch:   player.ViewDirectionY(),
+			Health:  player.Health(),
+			Armor:   player.Armor(),
+			IsAlive: player.IsAlive(),
+		}
+		if wep := player.ActiveWeapon(); wep != nil {
+			frame.Weapon = wep.String()
+		}
+		r.playerFrames = append(r.playerFrames, frame)
+	}
+}
+
+func (r *frameRecorder) ensureStats(steamID uint64) *playerStatTracker {
+	if _, ok := r.playerStats[steamID]; !ok {
+		r.playerStats[steamID] = &playerStatTracker{}
+	}
+	return r.playerStats[steamID]
+}
+
+func (r *frameRecorder) buildReplayData(p demoinfocs.Parser) *ReplayData {
+	replay := &ReplayData{}
+
+	replay.Header = DemoHeader{
+		MapName:    r.mapName,
+		TickRate:   64,
+		TotalTicks: r.maxTick,
+		ServerName: r.serverName,
+	}
+
+	replay.Kills = r.kills
+	replay.Nades = r.nades
+	replay.Rounds = r.rounds
+	replay.PlayerFrames = r.playerFrames
+
+	replay.Map = MapData{
+		Name:   r.mapName,
+		Scale:  4.4,
+		Width:  1024,
+		Height: 1024,
+	}
+
+	for _, player := range p.GameState().Participants().All() {
+		if player == nil || player.SteamID64 == 0 {
+			continue
+		}
+		info := PlayerInfo{
+			SteamID: player.SteamID64,
+			Name:    player.Name,
+			Team:    int(player.Team),
+			Score:   player.Score(),
+		}
+		if stats, ok := r.playerStats[player.SteamID64]; ok {
+			info.Kills = stats.kills
+			info.Deaths = stats.deaths
+			info.TotalDamage = stats.totalDamage
+		}
+		replay.Players = append(replay.Players, info)
+	}
+
+	roundCount := len(replay.Rounds)
+	if roundCount > 0 {
+		for i := range replay.Players {
+			if replay.Players[i].TotalDamage > 0 {
+				replay.Players[i].ADR = float64(replay.Players[i].TotalDamage) / float64(roundCount)
+			}
+			steamID := replay.Players[i].SteamID
+			totalRounds := r.playerTotalRounds[steamID]
+			contributions := r.playerRoundContributions[steamID]
+			if totalRounds > 0 {
+				replay.Players[i].KAST = int(float64(contributions) / float64(totalRounds) * 100)
+			}
+		}
+	}
+
+	return replay
+}
+
+func nadeTypeString(et common.EquipmentType) string {
+	switch et {
+	case common.EqSmoke:
+		return "smoke"
+	case common.EqHE:
+		return "hegrenade"
+	case common.EqFlash:
+		return "flashbang"
+	case common.EqMolotov:
+		return "molotov"
+	case common.EqIncendiary:
+		return "incendiary"
+	case common.EqDecoy:
+		return "decoy"
+	default:
+		return "unknown"
+	}
+}
+
+func nadeRadius(nadeType string) float32 {
+	switch nadeType {
+	case "smoke":
+		return 200
+	case "hegrenade":
+		return 250
+	case "flashbang":
+		return 400
+	case "molotov", "incendiary":
+		return 150
+	case "decoy":
+		return 200
+	default:
+		return 100
+	}
+}
+
+func roundEndReasonString(reason events.RoundEndReason) string {
+	switch reason {
+	case events.RoundEndReasonCTWin:
+		return "ct_win"
+	case events.RoundEndReasonTerroristsWin:
+		return "t_win"
+	case events.RoundEndReasonTargetBombed:
+		return "bomb_detonated"
+	case events.RoundEndReasonBombDefused:
+		return "bomb_defused"
+	case events.RoundEndReasonTargetSaved:
+		return "target_saved"
+	case events.RoundEndReasonDraw:
+		return "draw"
+	case events.RoundEndReasonCTSurrender:
+		return "ct_surrender"
+	case events.RoundEndReasonTerroristsSurrender:
+		return "t_surrender"
+	default:
+		return "unknown"
+	}
+}

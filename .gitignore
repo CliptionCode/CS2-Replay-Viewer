@@ -1,0 +1,80 @@
+# -------------------------
+# Node / Svelte
+# -------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dist/
+build/
+.svelte-kit/
+.vite/
+.env
+.env.*
+!.env.example
+
+# -------------------------
+# Go (Golang)
+# -------------------------
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go workspace
+bin/
+pkg/
+
+# Go modules
+go.sum
+vendor/
+
+# -------------------------
+# Rust (Cargo)
+# -------------------------
+# Build output
+target/
+
+# Rust toolchain files
+**/*.rs.bk
+
+# Cargo package files
+Cargo.lock
+# (Optional: keep Cargo.lock for apps, ignore for libraries)
+
+# -------------------------
+# OS / Editor Junk
+# -------------------------
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# VSCode
+.vscode/
+.history/
+
+# JetBrains
+.idea/
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
