@@ -1,21 +1,18 @@
 <script lang="ts">
 import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
-import { worldToCanvas } from '$lib/canvas/transforms';
+import { MAP_CANVAS_MARGIN } from '$lib/canvas/transforms';
+import { getRadarInfo } from '$lib/maps/radar-info';
 import type { MapData as MapMetadata, ReplayData } from '$lib/types/replay/replay_pb';
 
 export let mapMetadata: MapMetadata;
 export let replayData: ReplayData | null = null;
-export let imgOffsetX: number = 0;
-export let imgOffsetY: number = 0;
-export let imgScaleX: number = 1;
-export let imgScaleY: number = 1;
 
 let container: HTMLElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
 let mapImage: HTMLImageElement | null = null;
-
-const MAP_ICONS_PATH = '/maps';
+let loadedMapName = '';
+let mapLoadId = 0;
 
 function getMapMetadata(): MapMetadata {
     return mapMetadata;
@@ -24,9 +21,10 @@ function getMapMetadata(): MapMetadata {
 function loadMapImage(mapName: string): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
         const image = new Image();
+        const radarInfo = getRadarInfo(mapName);
         image.onload = () => resolve(image);
         image.onerror = () => reject(new Error(`Failed to load map image: ${mapName}`));
-        image.src = `${MAP_ICONS_PATH}/${mapName}.png`;
+        image.src = radarInfo?.imagePath ?? `/maps/${mapName}.png`;
     });
 }
 
@@ -38,7 +36,7 @@ function calculateMapCanvasSize(
 ): { width: number; height: number; scale: number } {
     const widthScale = maxWidth / mapWidth;
     const heightScale = maxHeight / mapHeight;
-    const scale = Math.min(widthScale, heightScale);
+    const scale = Math.min(widthScale, heightScale) * MAP_CANVAS_MARGIN;
 
     return {
         width: mapWidth * scale,
@@ -51,22 +49,22 @@ function drawMapBackground(
     ctx: CanvasRenderingContext2D,
     mapWidth: number,
     mapHeight: number,
-    centerX: number,
-    centerY: number
+    originX: number,
+    originY: number
 ): void {
     // Draw map image (placeholder for now - in v2 load actual PNG)
     ctx.fillStyle = '#1e1e28';
-    ctx.fillRect(0, 0, mapWidth, mapHeight);
+    ctx.fillRect(originX, originY, mapWidth, mapHeight);
 
     // Draw border
     ctx.strokeStyle = '#4a5568';
     ctx.lineWidth = 2;
-    ctx.strokeRect(0, 0, mapWidth, mapHeight);
+    ctx.strokeRect(originX, originY, mapWidth, mapHeight);
 
     // Draw center point
     ctx.fillStyle = '#e53e3e';
     ctx.beginPath();
-    ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
+    ctx.arc(originX + mapWidth / 2, originY + mapHeight / 2, 3, 0, Math.PI * 2);
     ctx.fill();
 
     // Draw coordinate labels
@@ -76,13 +74,13 @@ function drawMapBackground(
     ctx.textBaseline = 'middle';
 
     // North indicator
-    ctx.fillText('N', centerX, 10);
+    ctx.fillText('N', originX + mapWidth / 2, originY + 10);
     // East indicator  
-    ctx.fillText('E', mapWidth - 10, centerY);
+    ctx.fillText('E', originX + mapWidth - 10, originY + mapHeight / 2);
     // South indicator
-    ctx.fillText('S', centerX, mapHeight - 10);
+    ctx.fillText('S', originX + mapWidth / 2, originY + mapHeight - 10);
     // West indicator
-    ctx.fillText('W', 10, centerY);
+    ctx.fillText('W', originX + 10, originY + mapHeight / 2);
 
     // Draw coordinate grid for reference
     ctx.strokeStyle = '#2d3748';
@@ -92,35 +90,18 @@ function drawMapBackground(
     // Horizontal grid lines
     for (let y = 0; y <= mapHeight; y += gridSize) {
         ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(mapWidth, y);
+        ctx.moveTo(originX, originY + y);
+        ctx.lineTo(originX + mapWidth, originY + y);
         ctx.stroke();
     }
 
     // Vertical grid lines  
     for (let x = 0; x <= mapWidth; x += gridSize) {
         ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, mapHeight);
+        ctx.moveTo(originX + x, originY);
+        ctx.lineTo(originX + x, originY + mapHeight);
         ctx.stroke();
     }
-}
-
-function drawMapGrid(
-    ctx: CanvasRenderingContext2D,
-    mapWidth: number,
-    mapHeight: number
-): void {
-    // Draw map name
-    ctx.fillStyle = '#e2e8f0';
-    ctx.font = 'bold 16px Inter, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('MAP NAME', mapWidth / 2, 30);
-
-    // Draw scale indicator
-    ctx.fillStyle = '#a0aec0';
-    ctx.font = '12px Inter, sans-serif';
-    ctx.fillText('Scale: 1 : 4.4', mapWidth / 2, 50);
 }
 
 function drawMapImage(
@@ -128,20 +109,10 @@ function drawMapImage(
     image: HTMLImageElement,
     mapWidth: number,
     mapHeight: number,
-    centerX: number,
-    centerY: number
+    originX: number,
+    originY: number
 ): void {
-    // Draw map image with transparency and alignment adjustments
-    ctx.save();
-    ctx.globalAlpha = 0.3;
-    ctx.drawImage(
-        image,
-        centerX + imgOffsetX,
-        centerY + imgOffsetY,
-        mapWidth * imgScaleX,
-        mapHeight * imgScaleY
-    );
-    ctx.restore();
+    ctx.drawImage(image, originX, originY, mapWidth, mapHeight);
 }
 
 function resizeCanvas(container: HTMLElement): { width: number; height: number } {
@@ -154,7 +125,7 @@ function resizeCanvas(container: HTMLElement): { width: number; height: number }
     if (ctx) {
         ctx.canvas.width = width;
         ctx.canvas.height = height;
-        ctx.scale(dpr, dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
     return { width, height };
@@ -170,20 +141,31 @@ onMount(() => {
         container.height = height;
     }
 
-    // Load map image
-    if (mapMetadata?.name) {
-        loadMapImage(mapMetadata.name)
-            .then(loadedImage => {
-                mapImage = loadedImage;
-                render();
-            })
-            .catch(err => {
-                console.error('Failed to load map image:', err);
-            });
-    }
-
     window.addEventListener('resize', handleResize);
+    render();
 });
+
+function loadCurrentMapImage(mapName: string): void {
+    const radarInfo = getRadarInfo(mapName);
+    const nextMapName = radarInfo?.name ?? mapName;
+    const requestId = ++mapLoadId;
+
+    loadedMapName = nextMapName;
+    mapImage = null;
+    render();
+
+    loadMapImage(nextMapName)
+        .then(loadedImage => {
+            if (requestId !== mapLoadId) return;
+            mapImage = loadedImage;
+            render();
+        })
+        .catch(err => {
+            if (requestId !== mapLoadId) return;
+            console.error('Failed to load map image:', err);
+            render();
+        });
+}
 
 function render() {
     if (!browser || !ctx || !container) return;
@@ -208,17 +190,24 @@ function render() {
     const centerX = (canvasSize.width - mapCanvasSize.width) / 2;
     const centerY = (canvasSize.height - mapCanvasSize.height) / 2;
 
-    drawMapBackground(ctx, mapCanvasSize.width, mapCanvasSize.height, centerX, centerY);
-    drawMapGrid(ctx, mapCanvasSize.width, mapCanvasSize.height);
-
-    // If map image is loaded, draw it
     if (mapImage && mapImage.complete) {
         drawMapImage(ctx, mapImage, mapCanvasSize.width, mapCanvasSize.height, centerX, centerY);
+    } else {
+        drawMapBackground(ctx, mapCanvasSize.width, mapCanvasSize.height, centerX, centerY);
     }
 }
 
 $: {
-    void replayData, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY;
+    void mapMetadata;
+    const radarInfo = getRadarInfo(mapMetadata?.name);
+    const nextMapName = radarInfo?.name ?? mapMetadata?.name ?? '';
+    if (browser && nextMapName && nextMapName !== loadedMapName) {
+        loadCurrentMapImage(nextMapName);
+    }
+}
+
+$: {
+    void replayData, mapMetadata;
     if (ctx) {
         render();
     }

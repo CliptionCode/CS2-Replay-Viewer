@@ -13,6 +13,7 @@ import KillLayer from '$lib/components/KillLayer.svelte';
 import Controls from '$lib/components/Controls.svelte';
 import TimeDisplay from '$lib/components/TimeDisplay.svelte';
 import RoundNav from '$lib/components/RoundNav.svelte';
+import { DEFAULT_RADAR_MAP, getRadarInfo } from '$lib/maps/radar-info';
 import {
     getPlaybackTick,
     notifyPlaybackTickChanged,
@@ -20,36 +21,39 @@ import {
     setPlaybackTickAndNotify,
 } from '$lib/playback-state';
 
-const MAP_COORDINATES: Record<string, { posX: number; posY: number; scale: number; rotate: number; zoom: number; width: number; height: number }> = {
-    de_ancient:  { posX: -2953, posY: 2164, scale: 5,      rotate: 0, zoom: 1, width: 1024, height: 1024 },
-    de_anubis:   { posX: -2796, posY: 3328, scale: 5.22,   rotate: 0, zoom: 1, width: 1024, height: 1024 },
-    de_cache:    { posX: -2000, posY: 3250, scale: 5.5,    rotate: 0, zoom: 1, width: 1024, height: 1024 },
-    de_dust2:    { posX: -2476, posY: 3239, scale: 4.4,    rotate: 0, zoom: 1, width: 1024, height: 1024 },
-    de_inferno:  { posX: -2087, posY: 3870, scale: 4.9,    rotate: 0, zoom: 1, width: 1024, height: 1024 },
-    de_mirage:   { posX: -3230, posY: 1713, scale: 5,      rotate: 0, zoom: 1, width: 1024, height: 1024 },
-    de_nuke:     { posX: -3453, posY: 2887, scale: 7,      rotate: 0, zoom: 1, width: 1024, height: 1024 },
-    de_overpass: { posX: -4831, posY: 1781, scale: 5.2,    rotate: 0, zoom: 1, width: 1024, height: 1024 },
-    de_train:    { posX: -2308, posY: 2078, scale: 4.082077, rotate: 0, zoom: 1, width: 1024, height: 1024 },
-    de_vertigo:  { posX: -3168, posY: 1762, scale: 4,      rotate: 0, zoom: 1, width: 1024, height: 1024 },
-};
+const DEFAULT_RADAR_INFO = getRadarInfo(DEFAULT_RADAR_MAP)!;
 
-function fillMapMetadata(m: MapMetadata): MapMetadata {
-    const coords = MAP_COORDINATES[m.name?.toLowerCase() || ''];
-    if (!coords) return m;
+function createMapMetadataFromRadarInfo(radarInfo = DEFAULT_RADAR_INFO): MapMetadata {
     return create(MapDataSchema, {
-        name: m.name || '',
-        posX: m.posX || coords.posX,
-        posY: m.posY || coords.posY,
-        scale: m.scale || coords.scale,
-        rotate: m.rotate || coords.rotate,
-        zoom: m.zoom || coords.zoom,
-        width: m.width || coords.width,
-        height: m.height || coords.height,
+        name: radarInfo.name,
+        posX: radarInfo.posX,
+        posY: radarInfo.posY,
+        scale: radarInfo.scale,
+        rotate: radarInfo.rotate,
+        zoom: radarInfo.zoom,
+        width: radarInfo.width,
+        height: radarInfo.height,
+    });
+}
+
+function fillMapMetadata(m: MapMetadata | undefined, headerMapName?: string): MapMetadata {
+    const radarInfo = getRadarInfo(m?.name || headerMapName);
+    if (radarInfo) return createMapMetadataFromRadarInfo(radarInfo);
+
+    return create(MapDataSchema, {
+        name: m?.name || headerMapName || DEFAULT_RADAR_MAP,
+        posX: m?.posX ?? DEFAULT_RADAR_INFO.posX,
+        posY: m?.posY ?? DEFAULT_RADAR_INFO.posY,
+        scale: m?.scale || DEFAULT_RADAR_INFO.scale,
+        rotate: m?.rotate ?? DEFAULT_RADAR_INFO.rotate,
+        zoom: m?.zoom ?? DEFAULT_RADAR_INFO.zoom,
+        width: m?.width || DEFAULT_RADAR_INFO.width,
+        height: m?.height || DEFAULT_RADAR_INFO.height,
     });
 }
 
 export let replayData: ReplayData | null = null;
-export let mapMetadata: MapMetadata = create(MapDataSchema, { name: 'de_dust2', posX: -2476, posY: 3239, scale: 4.4, rotate: 0, zoom: 1, width: 1024, height: 1024 });
+export let mapMetadata: MapMetadata = createMapMetadataFromRadarInfo();
 export let isPlaying: boolean = false;
 
 let displayTick: number = 0;
@@ -64,12 +68,6 @@ let lastDisplayUpdateTime: number = 0;
 const SPEED_OPTIONS = [0.5, 1, 2, 3];
 const DISPLAY_UPDATE_INTERVAL_MS = 100;
 
-// Map image alignment controls
-let imgOffsetX = 0;
-let imgOffsetY = 0;
-let imgScaleX = 1;
-let imgScaleY = 1;
-
 let activeStart: number = 0;
 
 async function loadDemo() {
@@ -82,7 +80,7 @@ async function loadDemo() {
         const bytes = await readFile(pbPath);
         const data = fromBinary(ReplayDataSchema, bytes);
         replayData = data;
-        if (data.map) mapMetadata = fillMapMetadata(data.map);
+        mapMetadata = fillMapMetadata(data.map, data.header?.mapName);
         setPlaying(false);
         setTick(0);
     } catch (e: any) {
@@ -96,6 +94,16 @@ function getCurrentRoundData(tick: number = Math.floor(getPlaybackTick())): Roun
     if (!replayData?.rounds) return null;
     for (const round of replayData.rounds) {
         if (tick >= round.startTick && tick <= round.endTick) {
+            return round;
+        }
+    }
+    return null;
+}
+
+function getPlaybackStartRound(tick: number = Math.floor(getPlaybackTick())): RoundData | null {
+    if (!replayData?.rounds) return null;
+    for (const round of replayData.rounds) {
+        if (tick <= round.endTick) {
             return round;
         }
     }
@@ -160,7 +168,7 @@ function startPlayback() {
     if (!browser || !replayData || rafId) return;
 
     let startTick = getPlaybackTick();
-    const round = getCurrentRoundData(Math.floor(startTick));
+    const round = getPlaybackStartRound(Math.floor(startTick));
     if (round) {
         const activeStart = getRoundActiveStart(round);
         if (startTick < activeStart) {
@@ -398,59 +406,6 @@ onMount(() => {
     transform: none;
 }
 
-/* Alignment control panel */
-.align-panel {
-    position: absolute;
-    top: 60px;
-    left: 12px;
-    width: 180px;
-    background: #1a1a24;
-    border: 1px solid #2a2a40;
-    border-radius: 8px;
-    padding: 14px;
-    z-index: 100;
-}
-
-.align-panel-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: #e2e8f0;
-    margin-bottom: 10px;
-}
-
-.align-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 6px;
-}
-
-.align-row label {
-    font-size: 11px;
-    color: #94a3b8;
-    width: 50px;
-}
-
-.align-row input {
-    width: 110px;
-    padding: 3px 6px;
-    background: #2a2a40;
-    border: 1px solid #3a3a50;
-    border-radius: 4px;
-    color: #e2e8f0;
-    font-size: 12px;
-    font-family: 'JetBrains Mono', monospace;
-    outline: none;
-}
-
-.align-row input:focus {
-    border-color: #3b82f6;
-}
-
-.align-row input[type="number"] {
-    -moz-appearance: textfield;
-    appearance: textfield;
-}
 </style>
 
 {#if replayData}
@@ -494,62 +449,25 @@ onMount(() => {
         </div>
     </div>
 
-    <!-- Map image alignment controls -->
-    <div class="align-panel">
-        <div class="align-panel-title">Map Alignment</div>
-        <div class="align-row">
-            <label for="img-offset-x">Offset X</label>
-            <input id="img-offset-x" type="number" bind:value={imgOffsetX} />
-        </div>
-        <div class="align-row">
-            <label for="img-offset-y">Offset Y</label>
-            <input id="img-offset-y" type="number" bind:value={imgOffsetY} />
-        </div>
-        <div class="align-row">
-            <label for="img-scale-x">Scale X</label>
-            <input id="img-scale-x" type="number" bind:value={imgScaleX} step="0.05" />
-        </div>
-        <div class="align-row">
-            <label for="img-scale-y">Scale Y</label>
-            <input id="img-scale-y" type="number" bind:value={imgScaleY} step="0.05" />
-        </div>
-    </div>
-
     <!-- Main canvas layers -->
     <MapLayer 
         bind:mapMetadata={mapMetadata}
         bind:replayData={replayData}
-        bind:imgOffsetX={imgOffsetX}
-        bind:imgOffsetY={imgOffsetY}
-        bind:imgScaleX={imgScaleX}
-        bind:imgScaleY={imgScaleY}
     />
     <PlayerLayer 
         bind:replayData={replayData}
         bind:mapMetadata={mapMetadata}
         bind:isPlaying={isPlaying}
-        bind:imgOffsetX={imgOffsetX}
-        bind:imgOffsetY={imgOffsetY}
-        bind:imgScaleX={imgScaleX}
-        bind:imgScaleY={imgScaleY}
     />
     <NadeLayer 
         bind:replayData={replayData}
         bind:mapMetadata={mapMetadata}
         bind:isPlaying={isPlaying}
-        bind:imgOffsetX={imgOffsetX}
-        bind:imgOffsetY={imgOffsetY}
-        bind:imgScaleX={imgScaleX}
-        bind:imgScaleY={imgScaleY}
     />
     <KillLayer 
         bind:replayData={replayData}
         bind:isPlaying={isPlaying}
         bind:mapMetadata={mapMetadata}
-        bind:imgOffsetX={imgOffsetX}
-        bind:imgOffsetY={imgOffsetY}
-        bind:imgScaleX={imgScaleX}
-        bind:imgScaleY={imgScaleY}
     />
 
     <Controls

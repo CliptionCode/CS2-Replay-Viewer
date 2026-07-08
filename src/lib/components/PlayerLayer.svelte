@@ -8,10 +8,6 @@ import type { ReplayData, PlayerFrame, MapData as MapMetadata } from '$lib/types
 export let replayData: ReplayData | null = null;
 export let mapMetadata: MapMetadata;
 export let isPlaying: boolean = false;
-export let imgOffsetX: number = 0;
-export let imgOffsetY: number = 0;
-export let imgScaleX: number = 1;
-export let imgScaleY: number = 1;
 
 let container: HTMLElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
@@ -213,7 +209,7 @@ function drawPlayer(
     canvasSize: { width: number; height: number },
     tick: number
 ): void {
-    const pos = worldToCanvas(frame.x, frame.y, mapMetadata, canvasSize, 0, 0, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY);
+    const pos = worldToCanvas(frame.x, frame.y, mapMetadata, canvasSize);
     
     const isAlive = frame.isAlive ?? true;
     const team = getPlayerTeam(steamId, tick);
@@ -251,12 +247,12 @@ function drawPlayerTrail(
     ctx.beginPath();
     
     const firstFrame = trail[0];
-    const firstPos = worldToCanvas(firstFrame.x, firstFrame.y, mapMetadata, canvasSize, 0, 0, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY);
+    const firstPos = worldToCanvas(firstFrame.x, firstFrame.y, mapMetadata, canvasSize);
     ctx.moveTo(firstPos.x, firstPos.y);
     
     for (let i = 1; i < trail.length; i++) {
         const frame = trail[i];
-        const pos = worldToCanvas(frame.x, frame.y, mapMetadata, canvasSize, 0, 0, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY);
+        const pos = worldToCanvas(frame.x, frame.y, mapMetadata, canvasSize);
         ctx.lineTo(pos.x, pos.y);
     }
     
@@ -296,7 +292,7 @@ function drawKillMarkers(
     );
     
     for (const kill of recentKills) {
-        const pos = worldToCanvas(kill.victimX, kill.victimY, mapMetadata, canvasSize, 0, 0, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY);
+        const pos = worldToCanvas(kill.victimX, kill.victimY, mapMetadata, canvasSize);
         
         ctx.strokeStyle = '#ef4444';
         ctx.lineWidth = 3;
@@ -421,7 +417,7 @@ $: {
 }
 
 $: {
-    void replayData, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY;
+    void replayData;
     if (replayData && ctx) {
         initializeTrails();
         updatePlayerFrames(getPlaybackTick());

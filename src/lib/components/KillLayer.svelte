@@ -8,10 +8,6 @@ import type { ReplayData, KillEvent, MapData as MapMetadata } from '$lib/types/r
 export let replayData: ReplayData | null = null;
 export let mapMetadata: MapMetadata;
 export let isPlaying: boolean = false;
-export let imgOffsetX: number = 0;
-export let imgOffsetY: number = 0;
-export let imgScaleX: number = 1;
-export let imgScaleY: number = 1;
 
 let container: HTMLElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
@@ -36,11 +32,44 @@ function getKillsInCurrentRound(tick: number): KillEvent[] {
     );
 }
 
+function getKillFeedKills(tick: number): KillEvent[] {
+    return getKillsInCurrentRound(tick).filter(k => k.tick <= tick);
+}
+
 function getRecentKills(tick: number): KillEvent[] {
     const roundKills = getKillsInCurrentRound(tick);
     return roundKills.filter(k =>
         k.tick >= tick - 64 && k.tick <= tick
     );
+}
+
+function getPlayerTeam(steamId: bigint, tick: number): number {
+    if (!replayData?.players || steamId === 0n) return 0;
+
+    const player = replayData.players.find(p => p.steamId === steamId);
+    if (!player) return 0;
+
+    const roundRange = getCurrentRoundRange(tick);
+    if (roundRange) {
+        const round = replayData.rounds.find(r => r.startTick === roundRange.startTick && r.endTick === roundRange.endTick);
+        if (round) {
+            const halfSize = round.roundNumber <= 24 ? 12 : 3;
+            const halfIndex = Math.floor((round.roundNumber - 1) / halfSize);
+            const isOddHalf = halfIndex % 2 === 0;
+            if (isOddHalf) {
+                if (player.team === 2) return 3;
+                if (player.team === 3) return 2;
+            }
+        }
+    }
+
+    return player.team;
+}
+
+function getTeamColor(team: number): string {
+    if (team === 2) return '#f97316';
+    if (team === 3) return '#3b82f6';
+    return '#e2e8f0';
 }
 
 function drawDeathMarker(
@@ -61,12 +90,12 @@ function drawDeathMarker(
 function drawKillFeed(
     ctx: CanvasRenderingContext2D,
     kills: KillEvent[],
-    canvasSize: { width: number; height: number }
+    canvasSize: { width: number; height: number },
+    tick: number
 ): void {
     const maxLines = 5;
     const recentKills = kills.slice(-maxLines);
 
-    ctx.fillStyle = '#e2e8f0';
     ctx.font = 'bold 14px Inter, sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'bottom';
@@ -78,8 +107,21 @@ function drawKillFeed(
         const killerName = killer?.name || 'BOT';
         const victimName = victim?.name || 'BOT';
         const hs = kill.isHeadshot ? ' (HS)' : '';
-        const line = `${killerName} [${kill.weapon}${hs}] ${victimName}`;
-        ctx.fillText(line, 16, y);
+        const killerColor = getTeamColor(getPlayerTeam(kill.killerSteamId, tick));
+        const victimColor = getTeamColor(getPlayerTeam(kill.victimSteamId, tick));
+
+        let x = 16;
+        const segments = [
+            { text: killerName, color: killerColor },
+            { text: ` [${kill.weapon}${hs}] `, color: '#e2e8f0' },
+            { text: victimName, color: victimColor },
+        ];
+
+        for (const segment of segments) {
+            ctx.fillStyle = segment.color;
+            ctx.fillText(segment.text, x, y);
+            x += ctx.measureText(segment.text).width;
+        }
         y -= 24;
     }
 }
@@ -142,11 +184,11 @@ function render() {
     const recentKills = getRecentKills(tick);
 
     for (const kill of recentKills) {
-        const pos = worldToCanvas(kill.victimX, kill.victimY, mapMetadata, canvasSize, 0, 0, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY);
+        const pos = worldToCanvas(kill.victimX, kill.victimY, mapMetadata, canvasSize);
         drawDeathMarker(ctx, pos.x, pos.y);
     }
 
-    drawKillFeed(ctx, getKillsInCurrentRound(tick), canvasSize);
+    drawKillFeed(ctx, getKillFeedKills(tick), canvasSize, tick);
 }
 
 onMount(() => {
@@ -178,7 +220,7 @@ $: {
 }
 
 $: {
-    void replayData, mapMetadata, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY;
+    void replayData, mapMetadata;
     if (replayData && ctx && mapMetadata) {
         scheduleRender();
     }

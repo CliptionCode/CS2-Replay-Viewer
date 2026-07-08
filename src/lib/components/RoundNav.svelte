@@ -96,7 +96,7 @@ $: {
     background: #3b82f6;
 }
 
-.round-button.active {
+:global(.round-button.active) {
     background: #2563eb;
     color: #ffffff;
 }

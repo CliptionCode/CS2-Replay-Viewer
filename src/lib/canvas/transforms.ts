@@ -28,12 +28,12 @@ export interface CanvasSize {
  * Formula: radarX = (worldX - posX) / scale
  * Formula: radarY = (posY - worldY) / scale (Y axis is inverted!)
  */
-const MAP_MARGIN = 0.88;
+export const MAP_CANVAS_MARGIN = 0.88;
 
 function computeDisplayScale(mapData: MapData, canvasSize: CanvasSize): number {
     const scaleX = canvasSize.width / (mapData.width || 1024);
     const scaleY = canvasSize.height / (mapData.height || 1024);
-    return Math.min(scaleX, scaleY) * MAP_MARGIN;
+    return Math.min(scaleX, scaleY) * MAP_CANVAS_MARGIN;
 }
 
 export function worldToCanvas(
@@ -42,40 +42,23 @@ export function worldToCanvas(
     mapData: MapData,
     canvasSize: CanvasSize,
     containerX: number = 0,
-    containerY: number = 0,
-    imgOffsetX: number = 0,
-    imgOffsetY: number = 0,
-    imgScaleX: number = 1,
-    imgScaleY: number = 1
+    containerY: number = 0
 ): { x: number; y: number } {
     // Convert world units to radar pixel coordinates (0 = left/top edge of radar image)
     let px = (worldX - mapData.posX) / mapData.scale;
     let py = (mapData.posY - worldY) / mapData.scale; // Y is inverted
 
     // Scale to fit canvas (same approach as MapLayer's calculateMapCanvasSize)
-    const baseDisplayScale = computeDisplayScale(mapData, canvasSize);
-    const displayScaleX = baseDisplayScale * imgScaleX;
-    const displayScaleY = baseDisplayScale * imgScaleY;
-    const displayWidth = (mapData.width || 1024) * displayScaleX;
-    const displayHeight = (mapData.height || 1024) * displayScaleY;
+    const displayScale = computeDisplayScale(mapData, canvasSize);
+    const displayWidth = (mapData.width || 1024) * displayScale;
+    const displayHeight = (mapData.height || 1024) * displayScale;
 
-    px = px * displayScaleX;
-    py = py * displayScaleY;
+    px = px * displayScale;
+    py = py * displayScale;
 
-    // Apply rotation if map is rotated (most are not)
-    if (mapData.rotate !== 0) {
-        const rad = mapData.rotate * Math.PI / 180;
-        const cos = Math.cos(rad);
-        const sin = Math.sin(rad);
-        const rx = px * cos - py * sin;
-        const ry = px * sin + py * cos;
-        px = rx;
-        py = ry;
-    }
-
-    // Center in canvas + image alignment offset
-    const offsetX = (canvasSize.width - displayWidth) / 2 + imgOffsetX;
-    const offsetY = (canvasSize.height - displayHeight) / 2 + imgOffsetY;
+    // Center in canvas. Overview "rotate" is radar UI metadata, not a coordinate angle.
+    const offsetX = (canvasSize.width - displayWidth) / 2;
+    const offsetY = (canvasSize.height - displayHeight) / 2;
 
     return {
         x: px + offsetX + containerX,
@@ -92,35 +75,18 @@ export function canvasToWorld(
     mapData: MapData,
     canvasSize: CanvasSize,
     containerX: number = 0,
-    containerY: number = 0,
-    imgOffsetX: number = 0,
-    imgOffsetY: number = 0,
-    imgScaleX: number = 1,
-    imgScaleY: number = 1
+    containerY: number = 0
 ): { x: number; y: number } {
-    const baseDisplayScale = computeDisplayScale(mapData, canvasSize);
-    const displayScaleX = baseDisplayScale * imgScaleX;
-    const displayScaleY = baseDisplayScale * imgScaleY;
-    const displayWidth = (mapData.width || 1024) * displayScaleX;
-    const displayHeight = (mapData.height || 1024) * displayScaleY;
+    const displayScale = computeDisplayScale(mapData, canvasSize);
+    const displayWidth = (mapData.width || 1024) * displayScale;
+    const displayHeight = (mapData.height || 1024) * displayScale;
 
-    const offsetX = (canvasSize.width - displayWidth) / 2 + imgOffsetX;
-    const offsetY = (canvasSize.height - displayHeight) / 2 + imgOffsetY;
+    const offsetX = (canvasSize.width - displayWidth) / 2;
+    const offsetY = (canvasSize.height - displayHeight) / 2;
 
     // Remove centering offset and undo display scaling
-    let px = (canvasX - offsetX - containerX) / displayScaleX;
-    let py = (canvasY - offsetY - containerY) / displayScaleY;
-
-    // Reverse rotation
-    if (mapData.rotate !== 0) {
-        const rad = -mapData.rotate * Math.PI / 180;
-        const cos = Math.cos(rad);
-        const sin = Math.sin(rad);
-        const rx = px * cos - py * sin;
-        const ry = px * sin + py * cos;
-        px = rx;
-        py = ry;
-    }
+    const px = (canvasX - offsetX - containerX) / displayScale;
+    const py = (canvasY - offsetY - containerY) / displayScale;
 
     // Convert radar pixels to world units
     const worldX = px * mapData.scale + mapData.posX;

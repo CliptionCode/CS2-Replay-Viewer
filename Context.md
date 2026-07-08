@@ -65,7 +65,7 @@ These are approximate. Always use the **overview.txt coordinate files** for exac
 
 ### 2.2 The Overview Coordinate Transform
 
-Every official CS2 map ships with an `overview.txt` file embedded in the VPK containing pos_x, pos_y, scale, rotate, and zoom values. The transform converts world coordinates to radar pixel coordinates: radarX = (worldX - posX) * scale, radarY = (posY - worldY) * scale (Y axis inverted). The `scale` factor converts Hammer units to radar image pixels. For de_dust2 at 4.4, a 1024×1024 radar covers a world area of (1024/4.4) ≈ 233 units in each direction from the center.
+Every official CS2 map ships with an `overview.txt` file embedded in the VPK containing pos_x, pos_y, scale, rotate, and zoom values. The transform converts world coordinates to radar pixel coordinates: radarX = (worldX - posX) / scale, radarY = (posY - worldY) / scale (Y axis inverted). The `scale` factor is Hammer units per radar pixel. For de_dust2 at 4.4, a 1024×1024 radar covers about 1024 × 4.4 = 4505 Hammer units across. The `rotate` value is retained as source metadata but is not applied as a coordinate angle by the viewer.
 
 ### 2.3 Why Y is Inverted
 
@@ -537,23 +537,20 @@ The playback loop is managed via a `requestAnimationFrame` loop in `+page.svelte
 
 In `$:` reactive statements, using an array literal as a dependency list is broken — the function is never called reactively. The correct pattern uses an immediately-invoked block with explicit `void` dependency references. The `void` expression forces Svelte to track the variables read inside it as dependencies. Without it, variables used only inside called functions are not tracked as dependencies.
 
-### 11.6 Map Alignment Panel
+### 11.6 Radar Assets and Map Calibration
 
-A left-side control panel (`+page.svelte` CSS class `.align-panel`) provides four number inputs for fine-tuning the radar image position:
+The viewer now uses radar assets and overview metadata from `MurkyYT/cs2-map-icons`. Only radar-related files are bundled:
 
-| Control | Variable | Default | Effect |
-|---|---|---|---|
-| Offset X | `imgOffsetX` | 0 | Shift map image right (+) / left (-) in canvas pixels |
-| Offset Y | `imgOffsetY` | 0 | Shift map image down (+) / up (-) in canvas pixels |
-| Scale X | `imgScaleX` | 1.0 | Stretch map image horizontally |
-| Scale Y | `imgScaleY` | 1.0 | Stretch map image vertically |
+- Radar PNGs are stored in `static/maps/<map>.png`
+- Raw overview files are stored in `static/maps/radar_info/<map>.txt`
+- Lower-level radar variants are stored for maps whose overview declares vertical sections: `de_nuke_lower.png`, `de_train_lower.png`, and `de_vertigo_lower.png`
+- Parsed metadata lives in `src/lib/maps/radar-info.ts`
 
-These values are propagated as `bind:` props to all 4 canvas layers (`MapLayer`, `PlayerLayer`, `NadeLayer`, `KillLayer`) and applied in `worldToCanvas()` in `transforms.ts`:
+`+page.svelte` no longer uses the old hardcoded `MAP_COORDINATES` table. When a replay is loaded, `fillMapMetadata()` resolves the demo map name against `RADAR_INFO_BY_MAP` and creates protobuf `MapData` from the bundled MurkyYT values. This intentionally overrides the parser's placeholder map metadata, which currently only contains the map name plus a generic scale.
 
-- Offset is added to the centering calculation: `offsetX = (canvasWidth - displayWidth) / 2 + imgOffsetX`
-- Scale is multiplied into the display scale: `displayScaleX = baseDisplayScale * imgScaleX`
+The old visual Map Alignment panel was removed. Player, nade, kill, and map layers all use the same overview transform now, so the background radar should not be independently offset or stretched. If a map ever needs calibration, adjust the per-map `posX`, `posY`, or `scale` values in `src/lib/maps/radar-info.ts` instead of applying visual canvas offsets.
 
-When adjusting, the map image (in `MapLayer.svelte` `drawMapImage`) and all world-to-canvas coordinate transforms stay in sync — game elements always align with the image at the same offset/scale.
+`MapLayer.svelte` loads the radar image through `getRadarInfo(mapName).imagePath` and reloads it whenever the normalized map name changes. `worldToCanvas()` and `MapLayer.svelte` both use the shared `MAP_CANVAS_MARGIN` constant so the fitted radar rectangle and gameplay overlays stay aligned.
 
 ### 11.7 Playback Speed Controls
 
@@ -569,7 +566,7 @@ The timeline is scoped to the **current round's active phase** (after freezetime
 
 2. **Frontend fallback** (`+page.svelte` `getRoundActiveStart()`): If `freezetimeEndTick` is 0 (old parser data), computes it as `startTick + 960` (~15 seconds at 64 tick).
 
-3. **Play button auto-skip**: When pressing play inside freezetime, `currentTick` jumps to `activeStart` immediately.
+3. **Play button auto-skip**: When pressing play before the first round, between rounds, or inside freezetime, playback chooses the next playable round and jumps to `activeStart` immediately.
 
 **Timeline behavior:**
 - 0% = `freezetimeEndTick` (round active start)
@@ -584,7 +581,9 @@ The timeline is scoped to the **current round's active phase** (after freezetime
 
 Both the kill feed and death markers filter kills to only show those within the current round (the round containing `currentTick`). Previously they showed kills from all rounds combined.
 
-The kill feed shows at most 5 kills, filtered to only those within the last 64 ticks of the current round.
+The kill feed shows at most 5 kills that have already happened in the current round (`kill.tick <= currentTick`), so future kills are not visible early. Death markers still use the short recent-kill window (`currentTick - 64 <= kill.tick <= currentTick`) so the red X appears briefly at the moment of death.
+
+Kill feed player names are color-coded by team at that round: CT names are blue (`#3b82f6`) and T names are orange (`#f97316`). The weapon segment remains neutral text.
 
 ---
 

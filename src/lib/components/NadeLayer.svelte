@@ -8,10 +8,6 @@ import type { ReplayData, NadeEvent, MapData as MapMetadata } from '$lib/types/r
 export let replayData: ReplayData | null = null;
 export let mapMetadata: MapMetadata;
 export let isPlaying: boolean = false;
-export let imgOffsetX: number = 0;
-export let imgOffsetY: number = 0;
-export let imgScaleX: number = 1;
-export let imgScaleY: number = 1;
 
 let container: HTMLElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
@@ -31,9 +27,7 @@ function drawNade(
         isEffect ? nade.endX : nade.startX,
         isEffect ? nade.endY : nade.startY,
         mapMetadata,
-        canvasSize,
-        0, 0,
-        imgOffsetX, imgOffsetY, imgScaleX, imgScaleY
+        canvasSize
     );
     
     if (nade.nadeType === 'smoke') {
@@ -136,12 +130,12 @@ function drawNadeTrajectory(
     ctx.beginPath();
     
     const firstPoint = nade.trajectory[0];
-    const firstPos = worldToCanvas(firstPoint.x, firstPoint.y, mapMetadata, canvasSize, 0, 0, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY);
+    const firstPos = worldToCanvas(firstPoint.x, firstPoint.y, mapMetadata, canvasSize);
     ctx.moveTo(firstPos.x, firstPos.y);
     
     for (let i = 1; i < nade.trajectory.length; i++) {
         const point = nade.trajectory[i];
-        const pos = worldToCanvas(point.x, point.y, mapMetadata, canvasSize, 0, 0, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY);
+        const pos = worldToCanvas(point.x, point.y, mapMetadata, canvasSize);
         ctx.lineTo(pos.x, pos.y);
     }
     
@@ -286,7 +280,7 @@ $: {
 }
 
 $: {
-    void replayData, mapMetadata, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY;
+    void replayData, mapMetadata;
     if (replayData && ctx) {
         scheduleRender();
     }
