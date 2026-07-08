@@ -8,6 +8,8 @@ import type { ReplayData, PlayerFrame, MapData as MapMetadata } from '$lib/types
 export let replayData: ReplayData | null = null;
 export let mapMetadata: MapMetadata;
 export let isPlaying: boolean = false;
+export let sightConeLength: number = 34;
+export let sightConeHalfAngle: number = 0.32;
 
 let container: HTMLElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
@@ -23,6 +25,8 @@ let cachedRoundKey: string | null = null;
 let unsubscribeTick: (() => void) | null = null;
 
 const MAX_INTERPOLATION_GAP_TICKS = 16;
+const TEAM_T = 2;
+const TEAM_CT = 3;
 
 function lerp(start: number, end: number, alpha: number): number {
     return start + (end - start) * alpha;
@@ -61,14 +65,28 @@ function initializeTrails(): void {
     cachedKills = null;
     cachedKillsKey = null;
     if (!replayData?.frames) return;
+
+    const playableSteamIds = getPlayableSteamIds();
+    if (playableSteamIds.size === 0) return;
     
     for (const frame of replayData.frames) {
         const steamId = frame.steamId.toString();
+        if (!playableSteamIds.has(steamId)) continue;
         if (!trails.has(steamId)) {
             trails.set(steamId, []);
         }
         trails.get(steamId)?.push(frame);
     }
+}
+
+function getPlayableSteamIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const player of replayData?.players ?? []) {
+        if (player.team === TEAM_T || player.team === TEAM_CT) {
+            ids.add(player.steamId.toString());
+        }
+    }
+    return ids;
 }
 
 function updatePlayerFrames(tick: number): void {
@@ -225,8 +243,8 @@ function drawPlayerSightCone(
         canvasSize
     );
     const angle = Math.atan2(lookTarget.y - pos.y, lookTarget.x - pos.x);
-    const coneLength = 34;
-    const coneHalfAngle = 0.32;
+    const coneLength = Math.max(8, sightConeLength);
+    const coneHalfAngle = Math.max(0.05, sightConeHalfAngle);
     const leftAngle = angle - coneHalfAngle;
     const rightAngle = angle + coneHalfAngle;
     const leftX = pos.x + Math.cos(leftAngle) * coneLength;
@@ -262,6 +280,8 @@ function drawPlayer(
     
     const isAlive = frame.isAlive ?? true;
     const team = getPlayerTeam(steamId, tick);
+    if (team !== TEAM_T && team !== TEAM_CT) return;
+
     const teamColor = team === 2 ? '#f97316' : team === 3 ? '#3b82f6' : '#6b7280';
 
     if (isAlive) {
@@ -495,6 +515,13 @@ $: {
             rafId = null;
         }
         render();
+    }
+}
+
+$: {
+    void sightConeLength, sightConeHalfAngle;
+    if (browser && ctx) {
+        scheduleRender();
     }
 }
 

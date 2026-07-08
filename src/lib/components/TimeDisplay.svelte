@@ -16,7 +16,7 @@ function formatTime(tick: number, tickRate: number = 64): string {
 <style>
 .time-display {
     position: absolute;
-    top: 50px;
+    top: 96px;
     left: 20px;
     background: rgba(26, 26, 36, 0.8);
     border: 1px solid #2a2a40;

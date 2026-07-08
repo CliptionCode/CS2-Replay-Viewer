@@ -59,6 +59,7 @@ $: {
 <style>
 .round-nav {
     position: absolute;
+    top: 360px;
     bottom: 80px;
     right: 20px;
     background: #1a1a24;
@@ -66,7 +67,6 @@ $: {
     border-radius: 8px;
     padding: 12px;
     z-index: 100;
-    max-height: calc(100vh - 100px);
     overflow-y: auto;
 }
 

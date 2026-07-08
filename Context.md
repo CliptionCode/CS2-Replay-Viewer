@@ -593,6 +593,16 @@ The kill feed shows at most 5 kills that have already happened in the current ro
 
 Kill feed player names are color-coded by team at that round: CT names are blue (`#3b82f6`) and T names are orange (`#f97316`). The weapon segment remains neutral text.
 
+### 11.10 Player Roster, Sight Cone Controls, and Event Markers
+
+`PlayerLayer.svelte` only indexes and renders Steam IDs present in `ReplayData.players` whose stored team is T or CT. Observer/admin/spectator frame samples are ignored, so only real player dots are drawn.
+
+The white player sight cone defaults remain `34` canvas pixels long and `0.32` radians wide. `+page.svelte` exposes two top-left sliders below the time display to adjust `sightConeLength` and `sightConeHalfAngle` dynamically, then passes those values into `PlayerLayer.svelte`.
+
+The top-right roster panel shows two current-round side columns, CT and T. It uses the same stored-team side-switch logic as the canvas renderers, so the columns flip after halftime and every overtime half. Player names are side-colored while alive and greyed out when dead at the current tick.
+
+Clicking a player name selects that player and shows round event markers under the timeline for that player's kills, deaths, and grenade throws (smoke, flashbang, molotov/incendiary, HE, decoy). Markers use the current round's active-start timeline scale, stack vertically when events occur within `EVENT_STACK_WINDOW_TICKS = 128` (~2 seconds), and clicking a marker seeks to `EVENT_SEEK_LEAD_TICKS = 128` (~2 seconds) before the event, clamped to the round active start.
+
 ---
 
 ## 14. Resolved Performance Issue: Controls Lag During Playback
