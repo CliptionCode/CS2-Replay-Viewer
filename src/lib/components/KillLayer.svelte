@@ -2,11 +2,12 @@
 import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
 import { worldToCanvas } from '$lib/canvas/transforms';
+import { getPlaybackTick, subscribePlaybackTick } from '$lib/playback-state';
 import type { ReplayData, KillEvent, MapData as MapMetadata } from '$lib/types/replay/replay_pb';
 
 export let replayData: ReplayData | null = null;
 export let mapMetadata: MapMetadata;
-export let currentTick: number = 0;
+export let isPlaying: boolean = false;
 export let imgOffsetX: number = 0;
 export let imgOffsetY: number = 0;
 export let imgScaleX: number = 1;
@@ -14,30 +15,31 @@ export let imgScaleY: number = 1;
 
 let container: HTMLElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
+let unsubscribeTick: (() => void) | null = null;
 
-function getCurrentRoundRange(): { startTick: number; endTick: number } | null {
+function getCurrentRoundRange(tick: number): { startTick: number; endTick: number } | null {
     if (!replayData?.rounds || replayData.rounds.length === 0) return null;
     for (const round of replayData.rounds) {
-        if (currentTick >= round.startTick && currentTick <= round.endTick) {
+        if (tick >= round.startTick && tick <= round.endTick) {
             return { startTick: round.startTick, endTick: round.endTick };
         }
     }
     return null;
 }
 
-function getKillsInCurrentRound(): KillEvent[] {
+function getKillsInCurrentRound(tick: number): KillEvent[] {
     if (!replayData?.kills) return [];
-    const roundRange = getCurrentRoundRange();
+    const roundRange = getCurrentRoundRange(tick);
     if (!roundRange) return [];
     return replayData.kills.filter(k =>
         k.tick >= roundRange.startTick && k.tick <= roundRange.endTick
     );
 }
 
-function getRecentKills(): KillEvent[] {
-    const roundKills = getKillsInCurrentRound();
+function getRecentKills(tick: number): KillEvent[] {
+    const roundKills = getKillsInCurrentRound(tick);
     return roundKills.filter(k =>
-        k.tick >= currentTick - 64 && k.tick <= currentTick
+        k.tick >= tick - 64 && k.tick <= tick
     );
 }
 
@@ -82,6 +84,34 @@ function drawKillFeed(
     }
 }
 
+let rafId: number | null = null;
+let renderLoopId: number | null = null;
+
+function scheduleRender() {
+    if (rafId !== null) return;
+    rafId = requestAnimationFrame(() => {
+        rafId = null;
+        render();
+    });
+}
+
+function startRenderLoop() {
+    if (renderLoopId !== null) return;
+
+    const loop = () => {
+        render();
+        renderLoopId = requestAnimationFrame(loop);
+    };
+
+    renderLoopId = requestAnimationFrame(loop);
+}
+
+function stopRenderLoop() {
+    if (renderLoopId === null) return;
+    cancelAnimationFrame(renderLoopId);
+    renderLoopId = null;
+}
+
 function resizeCanvas(container: HTMLElement): { width: number; height: number } {
     const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
@@ -101,6 +131,7 @@ function render() {
     if (!browser || !ctx || !container || !replayData) return;
     if (!mapMetadata) return;
 
+    const tick = Math.floor(getPlaybackTick());
     const canvasSize = {
         width: container.clientWidth,
         height: container.clientHeight,
@@ -108,14 +139,14 @@ function render() {
 
     ctx.clearRect(0, 0, canvasSize.width, canvasSize.height);
 
-    const recentKills = getRecentKills();
+    const recentKills = getRecentKills(tick);
 
     for (const kill of recentKills) {
         const pos = worldToCanvas(kill.victimX, kill.victimY, mapMetadata, canvasSize, 0, 0, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY);
         drawDeathMarker(ctx, pos.x, pos.y);
     }
 
-    drawKillFeed(ctx, getKillsInCurrentRound(), canvasSize);
+    drawKillFeed(ctx, getKillsInCurrentRound(tick), canvasSize);
 }
 
 onMount(() => {
@@ -131,12 +162,25 @@ onMount(() => {
     }
 
     window.addEventListener('resize', handleResize);
+    unsubscribeTick = subscribePlaybackTick(scheduleRender);
 });
 
 $: {
-    void currentTick, mapMetadata, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY;
+    void isPlaying;
+    if (browser) {
+        if (isPlaying) {
+            startRenderLoop();
+        } else {
+            stopRenderLoop();
+            scheduleRender();
+        }
+    }
+}
+
+$: {
+    void replayData, mapMetadata, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY;
     if (replayData && ctx && mapMetadata) {
-        render();
+        scheduleRender();
     }
 }
 
@@ -156,6 +200,9 @@ onDestroy(() => {
         window.removeEventListener('resize', handleResize);
     }
     if (resizeTimeout) clearTimeout(resizeTimeout);
+    if (rafId !== null) cancelAnimationFrame(rafId);
+    stopRenderLoop();
+    unsubscribeTick?.();
 });
 </script>
 

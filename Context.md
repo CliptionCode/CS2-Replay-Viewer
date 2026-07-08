@@ -521,13 +521,17 @@ The parser emits a `PlayerFrame` for every player on every tick via `events.Fram
 
 The per-player `trails` map is built once in `initializeTrails()` (called when `replayData` changes). This separates the one-time initialization from the per-tick lookup.
 
+**Smooth movement:** `PlayerLayer.svelte` now reads the fractional playback tick from `playback-state.ts` and interpolates X/Y/Z, yaw, and pitch between the current `PlayerFrame` and the next one. This makes player dots move smoothly between sampled demo ticks instead of teleporting from one integer-tick position to the next. Interpolation is capped for large frame gaps so disconnects, missing samples, or round transitions do not smear players across the map.
+
 ### 11.4 Playback Loop (requestAnimationFrame)
 
-The playback loop is managed via a `requestAnimationFrame` loop. Each frame computes the target tick from elapsed time multiplied by tick rate and playback speed. A reactive block starts the loop on play and cancels it on pause. On play, if the current tick is inside a round's freezetime, it jumps to the active start (post-freezetime) immediately.
+The playback loop is managed via a `requestAnimationFrame` loop in `+page.svelte`. Each frame computes the target tick from elapsed time multiplied by tick rate and playback speed. During playback, the computed tick is written to the non-reactive module-level clock in `src/lib/playback-state.ts` instead of assigning a Svelte prop/state value every tick. On play, if the current tick is inside a round's freezetime, it jumps to the active start (post-freezetime) immediately.
 
 **Per-round playback cap:** The loop stops at the current round's end tick, so playback doesn't bleed into the next round. If no round is active, it falls back to the total ticks from the demo header.
 
-**Reference sync pattern:** The tick setter resets the playback reference tick and time when called during playback, so time-based calculation continues cleanly after seeks (timeline click, kill navigation, round navigation). This ensures seeking during playback doesn't cause jumps. The animation frame is cleaned up on component destroy.
+**Reference sync pattern:** The tick setter resets the playback reference tick and time when called during playback, so time-based calculation continues cleanly after seeks (timeline click, kill navigation, round navigation). This ensures seeking during playback doesn't cause jumps. Explicit seeks call `setPlaybackTickAndNotify()`, so canvas layers repaint immediately even though `currentTick` is no longer passed through the Svelte component tree every frame.
+
+**Display throttling:** The reactive UI uses `displayTick`, which is updated at a lower cadence (~100ms) during playback and immediately on explicit seeks/pause. This keeps `TimeDisplay`, the timeline, and `RoundNav` responsive without re-running Svelte effects 64-192 times/sec.
 
 ### 11.5 Svelte 4 Reactivity Pattern (Critical Gotcha)
 
@@ -581,6 +585,67 @@ The timeline is scoped to the **current round's active phase** (after freezetime
 Both the kill feed and death markers filter kills to only show those within the current round (the round containing `currentTick`). Previously they showed kills from all rounds combined.
 
 The kill feed shows at most 5 kills, filtered to only those within the last 64 ticks of the current round.
+
+---
+
+## 14. Resolved Performance Issue: Controls Lag During Playback
+
+**Status:** FIXED (July 2026)
+
+### Symptom
+
+All bottom-bar controls (play/pause, prev/next kill, speed buttons) and the round navigation panel felt laggy/unresponsive during playback. Clicks were delayed or missed entirely when the replay was actively playing at any speed.
+
+### Root Cause
+
+The root cause was **Svelte reactivity churn**: every `currentTick` change during playback (64-192 times/sec) triggered `$:` reactive blocks in all child components that received `currentTick` as a prop. Even when those blocks did minimal work, Svelte 5's legacy-mode effect scheduling and prop-diffing added overhead across the component tree: `+page.svelte` -> `PlayerLayer` + `NadeLayer` + `KillLayer` + `TimeDisplay` + `RoundNav`. Combined with canvas rendering in rAF callbacks, the main-thread budget per frame was regularly exceeded.
+
+### Fix Implemented
+
+Playback tick state is now split into two paths:
+
+1. **Render clock:** `src/lib/playback-state.ts` stores the actual playback tick as a plain, non-reactive module variable. `+page.svelte` writes the fractional tick to it every animation frame.
+2. **Canvas layers:** `PlayerLayer.svelte`, `NadeLayer.svelte`, and `KillLayer.svelte` no longer receive `currentTick` as a prop. They read `getPlaybackTick()` inside their own rAF render loops while playing, and subscribe to explicit tick notifications for seeks/pause.
+3. **Reactive UI:** `+page.svelte` keeps a separate `displayTick` for `TimeDisplay`, timeline progress, and `RoundNav`. This is throttled during playback and updated immediately for user-driven seeks.
+
+This removes the per-tick Svelte prop cascade while preserving responsive controls and accurate canvas playback.
+
+### Player Movement Fix
+
+Player rendering also now uses fractional ticks. `PlayerLayer.svelte` finds the frame at or before the current playback tick, checks the next frame, and linearly interpolates position and view angles when the gap is small. This makes players move smoothly between points instead of snapping/teleporting from frame to frame.
+
+### What Was Tried (Did Not Fix)
+
+#### Attempt 1: rAF-throttled canvas rendering
+
+`PlayerLayer.svelte`, `NadeLayer.svelte`, and `KillLayer.svelte` were changed to use a `scheduleRender()` function that queues canvas drawing via `requestAnimationFrame` with a guard (`rafId`), coalescing multiple tick changes into one render per frame.
+
+**Result:** Marginal improvement. The canvas calls dropped from 192/sec to 60/sec, but the `$:` blocks still fire on every `currentTick` change. The sync overhead of Svelte reactivity itself (prop comparisons, effect scheduling across the component tree) remains at 64-192 Hz.
+
+#### Attempt 2: Trail caching in PlayerLayer
+
+`getPlayerTrail()` was replaced with `updateTrailCache()` + `getCachedTrail()`. Trails are pre-filtered by round range once; a cursor advances O(1) per tick during forward playback instead of re-filtering thousands of frames every render.
+
+**Result:** Negligible improvement. The per-render trail work was not the dominant bottleneck.
+
+#### Attempt 3: Kill cache & RoundNav guard
+
+Kill lists are cached per round key. `RoundNav.updateActiveRound()` is guarded by `lastActiveRound` to avoid DOM `classList.toggle()` on ticks within the same round.
+
+**Result:** No perceptible change.
+
+### Previous Suspected Real Cause
+
+Despite all canvas-level and caching optimizations, **Svelte reactivity itself is the bottleneck**. Every `currentTick` assignment triggers a cascade through the component tree:
+
+1. `+page.svelte` `$:` block (roundProgressPct computation + template re-eval for timeline width/left)
+2. `PlayerLayer` `$:` block (updatePlayerFrames + updateTrailCache)
+3. `NadeLayer` `$:` block (just scheduleRender now)
+4. `KillLayer` `$:` block (just scheduleRender now)
+5. `TimeDisplay` template uses `{currentTick - activeStart}` directly
+6. `RoundNav` `$:` block (guarded but still checks guard every tick)
+
+On Svelte 5, `$:` blocks compile to `$effect` under the hood. Each prop change triggers effect re-evaluation for every component in the binding chain. Even with no-op effects, the scheduling overhead at 64-192 Hz monopolizes the main thread microtask queue, delaying user input processing between frames. Canvas rendering in rAF callbacks compounds this by consuming the remaining frame budget.
 
 ---
 

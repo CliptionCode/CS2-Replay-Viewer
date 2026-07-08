@@ -2,11 +2,11 @@
 import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
 import { worldToCanvas } from '$lib/canvas/transforms';
+import { getPlaybackTick, subscribePlaybackTick } from '$lib/playback-state';
 import type { ReplayData, PlayerFrame, MapData as MapMetadata } from '$lib/types/replay/replay_pb';
 
 export let replayData: ReplayData | null = null;
 export let mapMetadata: MapMetadata;
-export let currentTick: number = 0;
 export let isPlaying: boolean = false;
 export let imgOffsetX: number = 0;
 export let imgOffsetY: number = 0;
@@ -21,9 +21,49 @@ let trails: Map<string, PlayerFrame[]> = new Map();
 let playerFrameIndices = new Map<string, number>();
 let trailLength = 128;
 
+let trailCache = new Map<string, PlayerFrame[]>();
+let trailCursor = new Map<string, number>();
+let cachedRoundKey: string | null = null;
+let unsubscribeTick: (() => void) | null = null;
+
+const MAX_INTERPOLATION_GAP_TICKS = 16;
+
+function lerp(start: number, end: number, alpha: number): number {
+    return start + (end - start) * alpha;
+}
+
+function lerpAngle(start: number, end: number, alpha: number): number {
+    const delta = ((end - start + 540) % 360) - 180;
+    return start + delta * alpha;
+}
+
+function interpolateFrame(current: PlayerFrame, next: PlayerFrame | undefined, tick: number): PlayerFrame {
+    if (!next || next.tick <= current.tick) return current;
+
+    const tickGap = next.tick - current.tick;
+    if (tickGap > MAX_INTERPOLATION_GAP_TICKS) return current;
+
+    const alpha = Math.max(0, Math.min(1, (tick - current.tick) / tickGap));
+    if (alpha <= 0) return current;
+
+    return {
+        ...current,
+        x: lerp(current.x, next.x, alpha),
+        y: lerp(current.y, next.y, alpha),
+        z: lerp(current.z, next.z, alpha),
+        yaw: lerpAngle(current.yaw, next.yaw, alpha),
+        pitch: lerp(current.pitch, next.pitch, alpha),
+    };
+}
+
 function initializeTrails(): void {
     trails.clear();
     playerFrameIndices.clear();
+    trailCache.clear();
+    trailCursor.clear();
+    cachedRoundKey = null;
+    cachedKills = null;
+    cachedKillsKey = null;
     if (!replayData?.frames) return;
     
     for (const frame of replayData.frames) {
@@ -35,18 +75,18 @@ function initializeTrails(): void {
     }
 }
 
-function updatePlayerFrames(): void {
+function updatePlayerFrames(tick: number): void {
     playerFrames.clear();
     if (!replayData?.frames) return;
     
     for (const [steamId, trail] of trails) {
         let idx = playerFrameIndices.get(steamId) ?? 0;
         
-        if (idx >= trail.length || trail[idx].tick > currentTick) {
+        if (idx >= trail.length || trail[idx].tick > tick) {
             let lo = 0, hi = trail.length - 1, best = 0;
             while (lo <= hi) {
                 const mid = (lo + hi) >>> 1;
-                if (trail[mid].tick <= currentTick) {
+                if (trail[mid].tick <= tick) {
                     best = mid;
                     lo = mid + 1;
                 } else {
@@ -55,38 +95,38 @@ function updatePlayerFrames(): void {
             }
             idx = best;
         } else {
-            while (idx < trail.length - 1 && trail[idx + 1].tick <= currentTick) {
+            while (idx < trail.length - 1 && trail[idx + 1].tick <= tick) {
                 idx++;
             }
         }
         
         playerFrameIndices.set(steamId, idx);
-        playerFrames.set(steamId, trail[idx]);
+        playerFrames.set(steamId, interpolateFrame(trail[idx], trail[idx + 1], tick));
     }
 }
 
 // Look up the team for a player by steamId
-function getCurrentRoundData(): any {
+function getCurrentRoundData(tick: number): any {
     if (!replayData?.rounds) return null;
     for (const round of replayData.rounds) {
-        if (currentTick >= round.startTick && currentTick <= round.endTick) {
+        if (tick >= round.startTick && tick <= round.endTick) {
             return round;
         }
     }
     return null;
 }
 
-function getCurrentRoundRange(): { startTick: number; endTick: number } | null {
+function getCurrentRoundRange(tick: number): { startTick: number; endTick: number } | null {
     if (!replayData?.rounds || replayData.rounds.length === 0) return null;
     for (const round of replayData.rounds) {
-        if (currentTick >= round.startTick && currentTick <= round.endTick) {
+        if (tick >= round.startTick && tick <= round.endTick) {
             return { startTick: round.startTick, endTick: round.endTick };
         }
     }
     return null;
 }
 
-function getPlayerTeam(steamId: string): number {
+function getPlayerTeam(steamId: string, tick: number): number {
     if (!replayData?.players) return 0;
     const id = BigInt(steamId);
     const player = replayData.players.find(p => p.steamId === id);
@@ -95,7 +135,7 @@ function getPlayerTeam(steamId: string): number {
     // The stored team is from the end of the match (second half).
     // In CS2 MR12, teams switch after round 12.
     // For rounds before the side switch, flip T<->CT.
-    const round = getCurrentRoundData();
+    const round = getCurrentRoundData(tick);
     if (round) {
         // Regulation: half size = 12. Overtime: half size = 3.
         const halfSize = round.roundNumber <= 24 ? 12 : 3;
@@ -110,26 +150,59 @@ function getPlayerTeam(steamId: string): number {
     return player.team;
 }
 
-function getPlayerTrail(steamId: string): PlayerFrame[] {
-    const trail = trails.get(steamId);
+function updateTrailCache(tick: number): void {
+    const roundRange = getCurrentRoundRange(tick);
+    const roundKey = roundRange ? `${roundRange.startTick}-${roundRange.endTick}` : 'full';
+
+    if (roundKey !== cachedRoundKey) {
+        trailCache.clear();
+        trailCursor.clear();
+        cachedRoundKey = roundKey;
+
+        for (const [steamId, fullTrail] of trails) {
+            let filtered: PlayerFrame[];
+            if (roundRange) {
+                filtered = fullTrail.filter(f =>
+                    f.tick >= roundRange.startTick && f.tick <= roundRange.endTick
+                );
+            } else {
+                filtered = [...fullTrail];
+            }
+            trailCache.set(steamId, filtered);
+            trailCursor.set(steamId, -1);
+        }
+    }
+
+    for (const [steamId, trail] of trailCache) {
+        let cur = trailCursor.get(steamId) ?? -1;
+        if (cur >= 0 && cur < trail.length && trail[cur].tick <= tick) {
+            while (cur + 1 < trail.length && trail[cur + 1].tick <= tick) {
+                cur++;
+            }
+        } else {
+            let lo = 0, hi = trail.length - 1, best = -1;
+            while (lo <= hi) {
+                const mid = (lo + hi) >>> 1;
+                if (trail[mid].tick <= tick) {
+                    best = mid;
+                    lo = mid + 1;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            cur = best;
+        }
+        trailCursor.set(steamId, cur);
+    }
+}
+
+function getCachedTrail(steamId: string): PlayerFrame[] {
+    const trail = trailCache.get(steamId);
     if (!trail) return [];
-    
-    const roundRange = getCurrentRoundRange();
-    
-    let filteredTrail = trail.filter(f => f.tick <= currentTick);
-    
-    if (roundRange) {
-        filteredTrail = filteredTrail.filter(f =>
-            f.tick >= roundRange.startTick && f.tick <= roundRange.endTick
-        );
-    }
-    
-    const maxFrames = trailLength;
-    if (filteredTrail.length > maxFrames) {
-        return filteredTrail.slice(-maxFrames);
-    }
-    
-    return filteredTrail;
+    const endIdx = trailCursor.get(steamId) ?? -1;
+    if (endIdx < 0) return [];
+    const startIdx = Math.max(0, endIdx - trailLength + 1);
+    return trail.slice(startIdx, endIdx + 1);
 }
 
 function drawPlayer(
@@ -137,12 +210,13 @@ function drawPlayer(
     frame: PlayerFrame,
     steamId: string,
     mapMetadata: MapMetadata,
-    canvasSize: { width: number; height: number }
+    canvasSize: { width: number; height: number },
+    tick: number
 ): void {
     const pos = worldToCanvas(frame.x, frame.y, mapMetadata, canvasSize, 0, 0, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY);
     
     const isAlive = frame.isAlive ?? true;
-    const team = getPlayerTeam(steamId);
+    const team = getPlayerTeam(steamId, tick);
     const teamColor = team === 2 ? '#f97316' : team === 3 ? '#3b82f6' : '#6b7280';
     
     ctx.beginPath();
@@ -191,13 +265,23 @@ function drawPlayerTrail(
     ctx.stroke();
 }
 
-function getKillsInCurrentRound(): any[] {
-    if (!replayData?.rounds || replayData.rounds.length === 0) return replayData?.kills || [];
-    const roundRange = getCurrentRoundRange();
-    if (!roundRange) return replayData?.kills || [];
-    return (replayData?.kills || []).filter(k =>
-        k.tick >= roundRange.startTick && k.tick <= roundRange.endTick
-    );
+let cachedKills: any[] | null = null;
+let cachedKillsKey: string | null = null;
+
+function getCachedKillsInCurrentRound(tick: number): any[] {
+    const roundRange = getCurrentRoundRange(tick);
+    const key = roundRange ? `${roundRange.startTick}-${roundRange.endTick}` : 'full';
+    if (key !== cachedKillsKey || cachedKills === null) {
+        cachedKillsKey = key;
+        if (!roundRange || !replayData?.kills) {
+            cachedKills = replayData?.kills || [];
+        } else {
+            cachedKills = replayData.kills.filter(k =>
+                k.tick >= roundRange.startTick && k.tick <= roundRange.endTick
+            );
+        }
+    }
+    return cachedKills;
 }
 
 function drawKillMarkers(
@@ -225,6 +309,34 @@ function drawKillMarkers(
     }
 }
 
+let rafId: number | null = null;
+let renderLoopId: number | null = null;
+
+function scheduleRender() {
+    if (rafId !== null) return;
+    rafId = requestAnimationFrame(() => {
+        rafId = null;
+        render();
+    });
+}
+
+function startRenderLoop() {
+    if (renderLoopId !== null) return;
+
+    const loop = () => {
+        render();
+        renderLoopId = requestAnimationFrame(loop);
+    };
+
+    renderLoopId = requestAnimationFrame(loop);
+}
+
+function stopRenderLoop() {
+    if (renderLoopId === null) return;
+    cancelAnimationFrame(renderLoopId);
+    renderLoopId = null;
+}
+
 function resizeCanvas(container: HTMLElement): { width: number; height: number } {
     const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
@@ -245,6 +357,11 @@ function render() {
     if (!browser || !ctx || !container || !replayData) return;
 
     try {
+        const playbackTick = getPlaybackTick();
+        const tick = Math.floor(playbackTick);
+        updatePlayerFrames(playbackTick);
+        updateTrailCache(tick);
+
         const canvasSize = {
             width: container.clientWidth,
             height: container.clientHeight,
@@ -253,14 +370,14 @@ function render() {
         ctx.clearRect(0, 0, canvasSize.width, canvasSize.height);
 
         for (const [steamId] of trails) {
-            const trail = getPlayerTrail(steamId);
+            const trail = getCachedTrail(steamId);
             drawPlayerTrail(ctx, trail, mapMetadata, canvasSize);
         }
 
-        drawKillMarkers(ctx, getKillsInCurrentRound(), mapMetadata, canvasSize, currentTick);
+        drawKillMarkers(ctx, getCachedKillsInCurrentRound(tick), mapMetadata, canvasSize, tick);
 
         for (const [steamId, frame] of playerFrames) {
-            drawPlayer(ctx, frame, steamId, mapMetadata, canvasSize);
+            drawPlayer(ctx, frame, steamId, mapMetadata, canvasSize, tick);
         }
     } catch (error) {
         console.error('Error rendering player layer:', error);
@@ -278,7 +395,8 @@ onMount(() => {
     try {
         if (replayData) {
             initializeTrails();
-            updatePlayerFrames();
+            updatePlayerFrames(getPlaybackTick());
+            updateTrailCache(Math.floor(getPlaybackTick()));
             render();
         }
     } catch (error) {
@@ -287,13 +405,18 @@ onMount(() => {
 
     window.addEventListener('resize', handleResize);
     document.addEventListener('visibilitychange', handleVisibility);
+    unsubscribeTick = subscribePlaybackTick(scheduleRender);
 });
 
 $: {
-    void currentTick, isPlaying, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY;
-    if (replayData && ctx) {
-        updatePlayerFrames();
-        render();
+    void isPlaying;
+    if (browser) {
+        if (isPlaying) {
+            startRenderLoop();
+        } else {
+            stopRenderLoop();
+            scheduleRender();
+        }
     }
 }
 
@@ -301,7 +424,12 @@ $: {
     void replayData, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY;
     if (replayData && ctx) {
         initializeTrails();
-        updatePlayerFrames();
+        updatePlayerFrames(getPlaybackTick());
+        updateTrailCache(Math.floor(getPlaybackTick()));
+        if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+        }
         render();
     }
 }
@@ -328,9 +456,10 @@ onDestroy(() => {
         window.removeEventListener('resize', handleResize);
         document.removeEventListener('visibilitychange', handleVisibility);
     }
-    if (resizeTimeout) {
-        clearTimeout(resizeTimeout);
-    }
+    if (resizeTimeout) clearTimeout(resizeTimeout);
+    if (rafId !== null) cancelAnimationFrame(rafId);
+    stopRenderLoop();
+    unsubscribeTick?.();
 });
 </script>
 

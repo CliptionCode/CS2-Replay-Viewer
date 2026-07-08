@@ -10,6 +10,15 @@ import MapLayer from '$lib/components/MapLayer.svelte';
 import PlayerLayer from '$lib/components/PlayerLayer.svelte';
 import NadeLayer from '$lib/components/NadeLayer.svelte';
 import KillLayer from '$lib/components/KillLayer.svelte';
+import Controls from '$lib/components/Controls.svelte';
+import TimeDisplay from '$lib/components/TimeDisplay.svelte';
+import RoundNav from '$lib/components/RoundNav.svelte';
+import {
+    getPlaybackTick,
+    notifyPlaybackTickChanged,
+    setPlaybackTick,
+    setPlaybackTickAndNotify,
+} from '$lib/playback-state';
 
 const MAP_COORDINATES: Record<string, { posX: number; posY: number; scale: number; rotate: number; zoom: number; width: number; height: number }> = {
     de_ancient:  { posX: -2953, posY: 2164, scale: 5,      rotate: 0, zoom: 1, width: 1024, height: 1024 },
@@ -42,23 +51,26 @@ function fillMapMetadata(m: MapMetadata): MapMetadata {
 export let replayData: ReplayData | null = null;
 export let mapMetadata: MapMetadata = create(MapDataSchema, { name: 'de_dust2', posX: -2476, posY: 3239, scale: 4.4, rotate: 0, zoom: 1, width: 1024, height: 1024 });
 export let isPlaying: boolean = false;
-export let currentTick: number = 0;
 
+let displayTick: number = 0;
 let roundProgressPct: number = 0;
-let selectedPlayer: string | null = null;
 let isLoading = false;
 let playbackSpeed: number = 1;
 let rafId: number | null = null;
 let playbackRefTick: number = 0;
 let playbackRefTime: number = 0;
+let lastDisplayUpdateTime: number = 0;
 
 const SPEED_OPTIONS = [0.5, 1, 2, 3];
+const DISPLAY_UPDATE_INTERVAL_MS = 100;
 
 // Map image alignment controls
 let imgOffsetX = 0;
 let imgOffsetY = 0;
 let imgScaleX = 1;
 let imgScaleY = 1;
+
+let activeStart: number = 0;
 
 async function loadDemo() {
     if (!browser) return;
@@ -71,6 +83,8 @@ async function loadDemo() {
         const data = fromBinary(ReplayDataSchema, bytes);
         replayData = data;
         if (data.map) mapMetadata = fillMapMetadata(data.map);
+        setPlaying(false);
+        setTick(0);
     } catch (e: any) {
         console.error('Failed to load demo:', e);
     } finally {
@@ -78,10 +92,10 @@ async function loadDemo() {
     }
 }
 
-function getCurrentRoundData(): RoundData | null {
+function getCurrentRoundData(tick: number = Math.floor(getPlaybackTick())): RoundData | null {
     if (!replayData?.rounds) return null;
     for (const round of replayData.rounds) {
-        if (currentTick >= round.startTick && currentTick <= round.endTick) {
+        if (tick >= round.startTick && tick <= round.endTick) {
             return round;
         }
     }
@@ -94,14 +108,14 @@ function getRoundActiveStart(round: RoundData): number {
     return round.startTick + estimatedFreezetimeTicks;
 }
 
-function getRoundProgressPercentage(): number {
-    const round = getCurrentRoundData();
-    if (!round) return 0;
-    const activeStart = getRoundActiveStart(round);
-    const roundDuration = round.endTick - activeStart;
-    if (roundDuration <= 0) return 0;
-    const tickInRound = currentTick - activeStart;
-    return (tickInRound / roundDuration) * 100;
+function syncDisplayTick(force = false, timestamp = performance.now()) {
+    if (!force && timestamp - lastDisplayUpdateTime < DISPLAY_UPDATE_INTERVAL_MS) return;
+
+    const nextTick = Math.floor(getPlaybackTick());
+    if (force || nextTick !== displayTick) {
+        displayTick = nextTick;
+    }
+    lastDisplayUpdateTime = timestamp;
 }
 
 function playbackLoop(timestamp: number) {
@@ -109,7 +123,7 @@ function playbackLoop(timestamp: number) {
 
     const elapsed = (timestamp - playbackRefTime) / 1000;
     const tickRate = replayData.header?.tickRate || 64;
-    const round = getCurrentRoundData();
+    const round = getCurrentRoundData(Math.floor(getPlaybackTick()));
     const maxTick = round ? round.endTick : (replayData.header?.totalTicks || 1) - 1;
 
     const targetFloat = playbackRefTick + elapsed * tickRate * playbackSpeed;
@@ -120,57 +134,100 @@ function playbackLoop(timestamp: number) {
         return;
     }
 
-    const targetTick = Math.floor(targetFloat);
-    if (targetTick > currentTick) {
-        setTick(targetTick);
-    }
+    setPlaybackTick(targetFloat);
+    syncDisplayTick(false, timestamp);
 
     rafId = requestAnimationFrame(playbackLoop);
 }
 
-// Update timeline fill whenever tick or round changes
+// Update timeline fill and active start whenever tick or round changes
 $: {
-    void currentTick, replayData;
-    roundProgressPct = getRoundProgressPercentage();
-}
-
-// Reactive playback loop: start/stop requestAnimationFrame
-$: {
-    void replayData, playbackSpeed, isPlaying;
-    if (isPlaying && !rafId && replayData) {
-        const round = getCurrentRoundData();
-        if (round) {
-            const activeStart = getRoundActiveStart(round);
-            const tickAfterFreeze = Math.max(currentTick, activeStart);
-            playbackRefTick = tickAfterFreeze;
-            if (tickAfterFreeze !== currentTick) currentTick = tickAfterFreeze;
-        } else {
-            playbackRefTick = currentTick;
-        }
-        playbackRefTime = performance.now();
-        rafId = requestAnimationFrame(playbackLoop);
-    } else if (!isPlaying && rafId) {
-        cancelAnimationFrame(rafId);
-        rafId = null;
+    void displayTick, replayData;
+    const round = getCurrentRoundData(displayTick);
+    if (round) {
+        const as = getRoundActiveStart(round);
+        const tickInRound = displayTick - as;
+        const roundDuration = round.endTick - as;
+        roundProgressPct = roundDuration > 0 ? (tickInRound / roundDuration) * 100 : 0;
+        activeStart = as;
+    } else {
+        roundProgressPct = 0;
+        activeStart = 0;
     }
 }
 
+function startPlayback() {
+    if (!browser || !replayData || rafId) return;
+
+    let startTick = getPlaybackTick();
+    const round = getCurrentRoundData(Math.floor(startTick));
+    if (round) {
+        const activeStart = getRoundActiveStart(round);
+        if (startTick < activeStart) {
+            startTick = activeStart;
+            setPlaybackTickAndNotify(startTick);
+            syncDisplayTick(true);
+        }
+    }
+
+    playbackRefTick = startTick;
+    playbackRefTime = performance.now();
+    lastDisplayUpdateTime = playbackRefTime;
+    rafId = requestAnimationFrame(playbackLoop);
+}
+
+function stopPlayback() {
+    if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+    }
+    syncDisplayTick(true);
+    notifyPlaybackTickChanged();
+}
+
 function setTick(tick: number) {
-    if (tick === currentTick) return;
-    currentTick = tick;
+    const nextTick = Math.max(0, Math.floor(tick));
+    if (getPlaybackTick() === nextTick) {
+        syncDisplayTick(true);
+        notifyPlaybackTickChanged();
+        return;
+    }
+
+    setPlaybackTickAndNotify(nextTick);
+    syncDisplayTick(true);
     if (isPlaying) {
-        playbackRefTick = tick;
+        playbackRefTick = nextTick;
         playbackRefTime = performance.now();
+        lastDisplayUpdateTime = playbackRefTime;
     }
 }
 
 function setPlaying(value: boolean) {
+    if (value && !replayData) return;
+    if (value === isPlaying) return;
     isPlaying = value;
+    if (isPlaying) {
+        startPlayback();
+    } else {
+        stopPlayback();
+    }
 }
 
-function seekToRound(roundNumber: number) {
-    if (!replayData?.rounds) return;
-    const round = replayData.rounds.find(r => r.roundNumber === roundNumber);
+function togglePlay() {
+    setPlaying(!isPlaying);
+}
+
+function setSpeed(speed: number) {
+    if (speed === playbackSpeed) return;
+    if (isPlaying) {
+        playbackRefTick = getPlaybackTick();
+        playbackRefTime = performance.now();
+        lastDisplayUpdateTime = playbackRefTime;
+    }
+    playbackSpeed = speed;
+}
+
+function seekToRound(round: RoundData) {
     if (round) {
         setTick(getRoundActiveStart(round));
     }
@@ -178,7 +235,8 @@ function seekToRound(roundNumber: number) {
 
 function nextKill() {
     if (!replayData?.kills) return;
-    const currentKills = replayData.kills.filter(k => k.tick >= currentTick);
+    const tick = Math.floor(getPlaybackTick());
+    const currentKills = replayData.kills.filter(k => k.tick >= tick);
     if (currentKills.length > 0) {
         setTick(currentKills[0].tick);
     }
@@ -186,52 +244,11 @@ function nextKill() {
 
 function prevKill() {
     if (!replayData?.kills) return;
-    const currentKills = replayData.kills.filter(k => k.tick <= currentTick);
+    const tick = Math.floor(getPlaybackTick());
+    const currentKills = replayData.kills.filter(k => k.tick <= tick);
     if (currentKills.length > 0) {
         setTick(currentKills[currentKills.length - 1].tick);
     }
-}
-
-// Calculate current round number based on tick
-function getCurrentRound(): number {
-    return getCurrentRoundData()?.roundNumber ?? 0;
-}
-
-// Get total kills
-function getKillCount(): number {
-    return replayData?.kills?.length || 0;
-}
-
-// Calculate average damage per round
-function getADR(): number {
-    if (!replayData?.players) return 0;
-    const totalDamage = replayData.players.reduce((sum, p) => sum + p.totalDamage, 0);
-    const roundCount = replayData.rounds?.length || 1;
-    return Math.round(totalDamage / roundCount);
-}
-
-// Calculate average KAST across all players
-function getAverageKAST(): number {
-    if (!replayData?.players || replayData.players.length === 0) return 0;
-    const total = replayData.players.reduce((sum, p) => sum + p.kast, 0);
-    return Math.round(total / replayData.players.length);
-}
-
-// Get rounds for navigation
-function getRounds() {
-    if (!replayData?.rounds) return [];
-    return [...replayData.rounds].sort((a, b) => a.roundNumber - b.roundNumber);
-}
-
-function formatTime(tick: number, tickRate: number = 64): string {
-    const seconds = tick / tickRate;
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = Math.floor(seconds % 60);
-
-    if (minutes > 0) {
-        return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
-    }
-    return `${remainingSeconds}s`;
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -242,12 +259,12 @@ function handleKeydown(e: KeyboardEvent) {
         e.preventDefault();
         const totalTicks = replayData?.header?.totalTicks || 1;
         const step = Math.floor(totalTicks / 100);
-        setTick(Math.min(currentTick + step, totalTicks));
+        setTick(Math.min(Math.floor(getPlaybackTick()) + step, totalTicks));
     } else if (e.key === 'ArrowLeft') {
         e.preventDefault();
         const totalTicks = replayData?.header?.totalTicks || 1;
         const step = Math.floor(totalTicks / 100);
-        setTick(Math.max(currentTick - step, 0));
+        setTick(Math.max(Math.floor(getPlaybackTick()) - step, 0));
     }
 }
 
@@ -325,192 +342,6 @@ onMount(() => {
     width: 16px;
     height: 16px;
     top: 2px;
-}
-
-/* Controls panel */
-.controls {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 60px;
-    background: #1a1a24;
-    border-top: 1px solid #2a2a40;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 20px;
-    z-index: 100;
-}
-
-.control-button {
-    width: 40px;
-    height: 40px;
-    background: #2a2a40;
-    border: none;
-    border-radius: 50%;
-    color: #e2e8f0;
-    font-size: 18px;
-    cursor: pointer;
-    transition: all 0.15s ease;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.control-button:hover {
-    background: #3b82f6;
-    transform: scale(1.05);
-}
-
-.control-button:active {
-    transform: scale(0.95);
-}
-
-.control-button:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-}
-
-.speed-group {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-left: 12px;
-    padding-left: 12px;
-    border-left: 1px solid #2a2a40;
-}
-
-.speed-label {
-    font-size: 12px;
-    color: #94a3b8;
-    font-weight: 500;
-}
-
-.speed-button {
-    padding: 4px 10px;
-    font-size: 12px;
-    font-weight: 600;
-    background: #2a2a40;
-    border: 1px solid #3a3a50;
-    border-radius: 4px;
-    color: #94a3b8;
-    cursor: pointer;
-    transition: all 0.15s ease;
-    font-family: inherit;
-}
-
-.speed-button:hover {
-    background: #3a3a50;
-    color: #e2e8f0;
-}
-
-.speed-button.active {
-    background: #3b82f6;
-    border-color: #3b82f6;
-    color: #ffffff;
-}
-
-/* Stats panel (simplified) */
-.stats-panel {
-    position: absolute;
-    top: 20px;
-    right: 20px;
-    width: 250px;
-    background: #1a1a24;
-    border: 1px solid #2a2a40;
-    border-radius: 8px;
-    padding: 16px;
-    z-index: 100;
-    max-height: calc(100vh - 40px);
-    overflow-y: auto;
-}
-
-.stats-header {
-    font-size: 18px;
-    font-weight: 600;
-    color: #e2e8f0;
-    margin-bottom: 12px;
-}
-
-.stats-content {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.stat-entry {
-    display: flex;
-    justify-content: space-between;
-    padding: 8px;
-    background: #2a2a40;
-    border-radius: 4px;
-    font-size: 13px;
-}
-
-.stat-value {
-    font-weight: 600;
-    color: #60a5fa;
-}
-
-/* Round navigation panel */
-.round-nav {
-    position: absolute;
-    bottom: 80px;
-    right: 20px;
-    background: #1a1a24;
-    border: 1px solid #2a2a40;
-    border-radius: 8px;
-    padding: 12px;
-    z-index: 100;
-    max-height: calc(100vh - 100px);
-    overflow-y: auto;
-}
-
-.round-nav-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: #e2e8f0;
-    margin-bottom: 8px;
-}
-
-.round-button {
-    display: block;
-    width: 100%;
-    padding: 6px 10px;
-    margin-bottom: 4px;
-    background: #2a2a40;
-    border: none;
-    border-radius: 4px;
-    color: #e2e8f0;
-    text-align: left;
-    cursor: pointer;
-    font-size: 12px;
-    transition: all 0.1s ease;
-}
-
-.round-button:hover {
-    background: #3b82f6;
-}
-
-.round-button.active {
-    background: #2563eb;
-    color: #ffffff;
-}
-
-/* Time display */
-.time-display {
-    position: absolute;
-    top: 50px;
-    left: 20px;
-    background: rgba(26, 26, 36, 0.8);
-    border: 1px solid #2a2a40;
-    border-radius: 6px;
-    padding: 8px 12px;
-    color: #e2e8f0;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 14px;
-    z-index: 100;
 }
 
 /* Empty state */
@@ -650,11 +481,11 @@ onMount(() => {
                         const activeStart = getRoundActiveStart(round);
                         const roundDuration = round.endTick - activeStart;
                         const step = Math.floor(roundDuration / 100);
-                        setTick(currentTick + (e.key === 'ArrowRight' ? step : -step));
+                        setTick(Math.floor(getPlaybackTick()) + (e.key === 'ArrowRight' ? step : -step));
                     } else {
                         const totalTicks = replayData?.header?.totalTicks || 1;
                         const step = Math.floor(totalTicks / 100);
-                        setTick(currentTick + (e.key === 'ArrowRight' ? step : -step));
+                        setTick(Math.floor(getPlaybackTick()) + (e.key === 'ArrowRight' ? step : -step));
                     }
                 }
             }}>
@@ -696,7 +527,6 @@ onMount(() => {
     <PlayerLayer 
         bind:replayData={replayData}
         bind:mapMetadata={mapMetadata}
-        bind:currentTick={currentTick}
         bind:isPlaying={isPlaying}
         bind:imgOffsetX={imgOffsetX}
         bind:imgOffsetY={imgOffsetY}
@@ -706,7 +536,7 @@ onMount(() => {
     <NadeLayer 
         bind:replayData={replayData}
         bind:mapMetadata={mapMetadata}
-        bind:currentTick={currentTick}
+        bind:isPlaying={isPlaying}
         bind:imgOffsetX={imgOffsetX}
         bind:imgOffsetY={imgOffsetY}
         bind:imgScaleX={imgScaleX}
@@ -714,7 +544,7 @@ onMount(() => {
     />
     <KillLayer 
         bind:replayData={replayData}
-        bind:currentTick={currentTick}
+        bind:isPlaying={isPlaying}
         bind:mapMetadata={mapMetadata}
         bind:imgOffsetX={imgOffsetX}
         bind:imgOffsetY={imgOffsetY}
@@ -722,70 +552,19 @@ onMount(() => {
         bind:imgScaleY={imgScaleY}
     />
 
-    <!-- Playback controls -->
-    <div class="controls">
-        <button class="control-button" on:click={() => setPlaying(!isPlaying)}>
-            {#if isPlaying}⏸{:else}▶{/if}
-        </button>
-        <button class="control-button" on:click={prevKill} title="Previous Kill">◀</button>
-        <button class="control-button" on:click={nextKill} title="Next Kill">▶</button>
-        <div class="speed-group">
-            <span class="speed-label">Speed</span>
-            {#each SPEED_OPTIONS as speed}
-                <button
-                    class="speed-button {playbackSpeed === speed ? 'active' : ''}"
-                    on:click={() => { playbackSpeed = speed; }}
-                >
-                    {speed}x
-                </button>
-            {/each}
-        </div>
-    </div>
+    <Controls
+        {isPlaying}
+        {playbackSpeed}
+        speedOptions={SPEED_OPTIONS}
+        ontoggleplay={togglePlay}
+        onprevkill={prevKill}
+        onnextkill={nextKill}
+        onsetspeed={setSpeed}
+    />
 
-    <!-- Time display -->
-    <div class="time-display">
-        {formatTime(getCurrentRoundData() ? currentTick - getRoundActiveStart(getCurrentRoundData()!) : currentTick, 64)}
-    </div>
+    <TimeDisplay currentTick={displayTick} activeStart={activeStart} />
 
-    <!-- Stats panel (simplified) -->
-    <div class="stats-panel">
-        <div class="stats-header">Stats</div>
-        <div class="stats-content">
-            <div class="stat-entry">
-                <span>Round</span>
-                <span class="stat-value">{getCurrentRound()}</span>
-            </div>
-            <div class="stat-entry">
-                <span>Kills</span>
-                <span class="stat-value">{getKillCount()}</span>
-            </div>
-            <div class="stat-entry">
-                <span>ADR</span>
-                <span class="stat-value">{getADR()}</span>
-            </div>
-            <div class="stat-entry">
-                <span>Avg KAST</span>
-                <span class="stat-value">{getAverageKAST()}%</span>
-            </div>
-            <div class="stat-entry">
-                <span>Players</span>
-                <span class="stat-value">{replayData?.players?.length || 0}</span>
-            </div>
-        </div>
-    </div>
-
-    <!-- Round navigation panel -->
-    <div class="round-nav">
-        <div class="round-nav-title">Rounds</div>
-        {#each getRounds() as round}
-            <button 
-                class="round-button {round.roundNumber === getCurrentRound() ? 'active' : ''}"
-                on:click={() => seekToRound(round.roundNumber)}
-            >
-                Round {round.roundNumber} ({round.winnerTeam === 2 ? 'T' : 'CT'} {round.killCount > 0 ? `+${round.killCount}` : ''})
-            </button>
-        {/each}
-    </div>
+    <RoundNav {replayData} currentTick={displayTick} onseekround={seekToRound} />
 </div>
 {:else}
 <div class="empty-state">
@@ -798,4 +577,3 @@ onMount(() => {
     </div>
 </div>
 {/if}
-

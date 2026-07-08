@@ -2,11 +2,12 @@
 import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
 import { worldToCanvas } from '$lib/canvas/transforms';
+import { getPlaybackTick, subscribePlaybackTick } from '$lib/playback-state';
 import type { ReplayData, NadeEvent, MapData as MapMetadata } from '$lib/types/replay/replay_pb';
 
 export let replayData: ReplayData | null = null;
 export let mapMetadata: MapMetadata;
-export let currentTick: number = 0;
+export let isPlaying: boolean = false;
 export let imgOffsetX: number = 0;
 export let imgOffsetY: number = 0;
 export let imgScaleX: number = 1;
@@ -14,6 +15,7 @@ export let imgScaleY: number = 1;
 
 let container: HTMLElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
+let unsubscribeTick: (() => void) | null = null;
 
 const TRAJECTORY_FADE_DURATION = 192; // ~3 seconds at 64 tick
 
@@ -22,6 +24,7 @@ function drawNade(
     nade: NadeEvent,
     mapMetadata: MapMetadata,
     canvasSize: { width: number; height: number },
+    tick: number,
     isEffect: boolean = false
 ): void {
     const pos = worldToCanvas(
@@ -46,7 +49,7 @@ function drawNade(
         }
         
         // Draw effect zone if active
-        if (isEffect || (nade.detonationTick && nade.detonationTick <= currentTick && nade.fadeTick && nade.fadeTick >= currentTick)) {
+        if (isEffect || (nade.detonationTick && nade.detonationTick <= tick && nade.fadeTick && nade.fadeTick >= tick)) {
             ctx.fillStyle = 'rgba(156, 163, 175, 0.35)';
             ctx.beginPath();
             ctx.arc(pos.x, pos.y, 50, 0, Math.PI * 2);
@@ -149,6 +152,34 @@ function drawNadeTrajectory(
     ctx.restore();
 }
 
+let rafId: number | null = null;
+let renderLoopId: number | null = null;
+
+function scheduleRender() {
+    if (rafId !== null) return;
+    rafId = requestAnimationFrame(() => {
+        rafId = null;
+        render();
+    });
+}
+
+function startRenderLoop() {
+    if (renderLoopId !== null) return;
+
+    const loop = () => {
+        render();
+        renderLoopId = requestAnimationFrame(loop);
+    };
+
+    renderLoopId = requestAnimationFrame(loop);
+}
+
+function stopRenderLoop() {
+    if (renderLoopId === null) return;
+    cancelAnimationFrame(renderLoopId);
+    renderLoopId = null;
+}
+
 function resizeCanvas(container: HTMLElement): { width: number; height: number } {
     const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
@@ -165,33 +196,34 @@ function resizeCanvas(container: HTMLElement): { width: number; height: number }
     return { width, height };
 }
 
-function getCurrentRoundRange(): { startTick: number; endTick: number } | null {
+function getCurrentRoundRange(tick: number): { startTick: number; endTick: number } | null {
     if (!replayData?.rounds || replayData.rounds.length === 0) return null;
     for (const round of replayData.rounds) {
-        if (currentTick >= round.startTick && currentTick <= round.endTick) {
+        if (tick >= round.startTick && tick <= round.endTick) {
             return { startTick: round.startTick, endTick: round.endTick };
         }
     }
     return null;
 }
 
-function getActiveNades(): NadeEvent[] {
+function getActiveNades(tick: number): NadeEvent[] {
     if (!replayData?.nades) return [];
     return replayData.nades.filter(n => {
         const detTick = n.detonationTick ?? -1;
         const fadeTick = n.fadeTick ?? -1;
-        return detTick > 0 && fadeTick > 0 && detTick <= currentTick && currentTick <= fadeTick;
+        return detTick > 0 && fadeTick > 0 && detTick <= tick && tick <= fadeTick;
     });
 }
 
 function drawNadeTrajectoryFading(
     nade: NadeEvent,
-    canvasSize: { width: number; height: number }
+    canvasSize: { width: number; height: number },
+    tick: number
 ): void {
     if (!nade.trajectory || nade.trajectory.length < 2) return;
-    if (nade.tick > currentTick) return;
+    if (nade.tick > tick) return;
 
-    const ticksSinceThrow = currentTick - nade.tick;
+    const ticksSinceThrow = tick - nade.tick;
     const alpha = Math.max(0, 1 - ticksSinceThrow / TRAJECTORY_FADE_DURATION);
     if (alpha <= 0) return;
 
@@ -201,6 +233,7 @@ function drawNadeTrajectoryFading(
 function render() {
     if (!browser || !ctx || !container || !replayData) return;
 
+    const tick = Math.floor(getPlaybackTick());
     const canvasSize = {
         width: container.clientWidth,
         height: container.clientHeight,
@@ -208,19 +241,19 @@ function render() {
 
     ctx.clearRect(0, 0, canvasSize.width, canvasSize.height);
 
-    const roundRange = getCurrentRoundRange();
-    const activeNades = getActiveNades();
+    const roundRange = getCurrentRoundRange(tick);
+    const activeNades = getActiveNades(tick);
 
     // Draw nade trajectories with fade (only within current round)
     for (const nade of replayData.nades) {
         if (roundRange && (nade.tick < roundRange.startTick || nade.tick > roundRange.endTick)) continue;
-        drawNadeTrajectoryFading(nade, canvasSize);
+        drawNadeTrajectoryFading(nade, canvasSize, tick);
     }
 
     // Draw nade effect zones for active nades (only within current round)
     for (const nade of activeNades) {
         if (roundRange && (nade.tick < roundRange.startTick || nade.tick > roundRange.endTick)) continue;
-        drawNade(ctx, nade, mapMetadata, canvasSize, true);
+        drawNade(ctx, nade, mapMetadata, canvasSize, tick, true);
     }
 }
 
@@ -237,12 +270,25 @@ onMount(() => {
     }
 
     window.addEventListener('resize', handleResize);
+    unsubscribeTick = subscribePlaybackTick(scheduleRender);
 });
 
 $: {
-    void currentTick, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY;
+    void isPlaying;
+    if (browser) {
+        if (isPlaying) {
+            startRenderLoop();
+        } else {
+            stopRenderLoop();
+            scheduleRender();
+        }
+    }
+}
+
+$: {
+    void replayData, mapMetadata, imgOffsetX, imgOffsetY, imgScaleX, imgScaleY;
     if (replayData && ctx) {
-        render();
+        scheduleRender();
     }
 }
 
@@ -261,9 +307,10 @@ onDestroy(() => {
     if (browser) {
         window.removeEventListener('resize', handleResize);
     }
-    if (resizeTimeout) {
-        clearTimeout(resizeTimeout);
-    }
+    if (resizeTimeout) clearTimeout(resizeTimeout);
+    if (rafId !== null) cancelAnimationFrame(rafId);
+    stopRenderLoop();
+    unsubscribeTick?.();
 });
 </script>
 
