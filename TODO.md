@@ -93,3 +93,89 @@ Approach:
 - The safest approach is to apply a temporary canvas viewport transform centered on the selected player while preserving the underlying world-to-radar mapping.
 - Define fallback behavior when no player is selected: disable zoom effect or keep normal view.
 - Verify that overlays, player labels, nade trails, and kill markers still align during zoom.
+
+## 10. Copy Tick Command When Double-Clicking Markers
+
+When double-clicking a marker, such as a kill, death, HE grenade, smoke, flash, molotov, or similar event marker, copy a CS2 demo tick command to the user's clipboard. The copied tick should be the event tick minus 2 seconds so the user can see the lead-up to the event. Copy the full command in this format: `demo_goto <Tick Number>`, for example `demo_goto 72401`.
+
+Approach:
+- Add double-click handling to marker elements or the marker layer.
+- Derive the target tick from the event tick minus 2 seconds, using the demo tick rate to convert seconds to ticks.
+- Clamp the target tick so it never goes below the beginning of the demo or current round.
+- Use the Clipboard API to copy the full `demo_goto` command.
+- Show a short toast or equivalent feedback for 2-3 seconds confirming that the tick command was copied.
+- Keep the feedback non-blocking and avoid interfering with marker selection or playback controls.
+
+## 11. Show Flash Opacity Circle Around Flashed Players
+
+Draw a grey filled circle around the player dot while the player is flashed. The circle opacity should reflect flash strength: fully flashed players should have an opaque grey circle, partially flashed players should have a more transparent circle, and lightly flashed players should have a very transparent circle. The circle should continuously fade until the player can see again.
+
+Approach:
+- Determine whether flash duration or flash alpha data is available in the parsed demo state.
+- Pass the current flash strength or remaining flash duration into `PlayerLayer.svelte`.
+- Draw the flash circle around the affected player without hiding the player dot or label.
+- Map flash strength to grey circle opacity, with full flash using maximum opacity and partial flashes using proportional opacity.
+- Decrease opacity continuously as the flash wears off.
+- Remove the circle once the player is no longer flashed.
+
+## 12. Show Noise Radius Circles Around Alive Players
+
+Draw a noise circle around each alive player who makes noise, such as jumping, shooting a weapon, or running to a location. The circle should use the correct noise radius, have a red border, and keep the inner area transparent so the player dot remains fully visible. Remove the noise circle after the noise duration ends.
+
+Approach:
+- Identify or derive sound events for alive players, including jump, shot, and running noise events.
+- Store active noise events with player identity, origin, radius, start tick, and end tick or duration.
+- Render the noise circle using the event radius converted through the existing radar coordinate transform.
+- Style the circle with a red stroke and transparent fill.
+- Remove expired noise circles as playback advances.
+- Ensure multiple overlapping noise events do not permanently obscure the map or player dots.
+
+## 13. Make Kill Feed Items Clickable
+
+Make each kill feed item clickable. Clicking a kill feed item should select the killing player and skip playback to 2 seconds before the kill event happened.
+
+Approach:
+- Add click handling to kill feed items.
+- Store or pass each kill event's killer Steam ID and event tick into the kill feed component.
+- On click, update the selected player to the killer.
+- Seek to the kill tick minus 2 seconds, converting seconds to ticks using the demo tick rate.
+- Clamp the target tick to the valid playback range.
+- Keep keyboard and timeline behavior consistent after the seek.
+
+## 14. Show Alive and Total Player Counts Per Team Section
+
+Add the amount of living players and total players to each team section header. Example labels: `CT (3/5)` and `T (1/5)`.
+
+Approach:
+- Derive team totals from the current round/player roster.
+- Derive alive counts from the current playback tick.
+- Update the CT and T section header rendering to include `alive/total`.
+- Use current-round side assignments so counts remain correct after side switches.
+- Confirm disconnected, dead, spectator, or unassigned players are not counted incorrectly.
+
+## 15. Show Bomb Planted and Defuse Status Labels
+
+If the bomb has been planted, show a centered orange label beneath the timeline with the text `Bomb Planted XXs`, where `XXs` is the number of seconds until the bomb would detonate. Update the countdown continuously. When the bomb explodes, show `Bomb exploded, Terrorists Win!`.
+
+If the bomb is currently being defused, show a centered blue label beneath the bomb-planted label with the text `Defusing XXs`, where `XXs` is the number of seconds until the bomb would be defused. Hide the defuse text if the defuser is killed or cancels the defuse. If the bomb is successfully defused, show `Bomb has been defused. Counter Terrorists Win`.
+
+Approach:
+- Track bomb planted, exploded, defusing, cancelled, and defused states from demo events.
+- Compute countdown values from current tick, plant tick, explosion tick, defuse start tick, and defuse completion tick.
+- Add centered status labels beneath the timeline.
+- Color the bomb planted/exploded state orange.
+- Color the defusing/defused state blue.
+- Hide labels when the state no longer applies, except for final exploded or defused result text where appropriate.
+- Verify the labels do not overlap playback controls or timeline markers on narrow screens.
+
+## 16. Add Bomb Explosion and Bomb Defused Timeline Markers
+
+If the round win reason is bomb explosion, add a timeline marker labeled `BE` for Bomb Explosion and color it orange. If the bomb is defused, add a timeline marker labeled `BD` for Bomb Defused and color it blue.
+
+Approach:
+- Check whether bomb explosion and bomb defused markers already exist.
+- If missing, create marker events from round win reason or bomb lifecycle events.
+- Label bomb explosion markers as `BE` and bomb defused markers as `BD`.
+- Use orange for `BE` and blue for `BD`.
+- Place the marker at the exact explosion or defuse tick.
+- Avoid duplicate markers if the parser already emits equivalent bomb events.
