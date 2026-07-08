@@ -146,6 +146,13 @@ function getPlayerTeam(steamId: string, tick: number): number {
     return player.team;
 }
 
+function getPlayerName(steamId: string): string {
+    if (!replayData?.players) return `Player ${steamId}`;
+    const id = BigInt(steamId);
+    const player = replayData.players.find(p => p.steamId === id);
+    return player?.name || `Player ${steamId}`;
+}
+
 function updateTrailCache(tick: number): void {
     const roundRange = getCurrentRoundRange(tick);
     const roundKey = roundRange ? `${roundRange.startTick}-${roundRange.endTick}` : 'full';
@@ -201,6 +208,48 @@ function getCachedTrail(steamId: string): PlayerFrame[] {
     return trail.slice(startIdx, endIdx + 1);
 }
 
+function drawPlayerSightCone(
+    ctx: CanvasRenderingContext2D,
+    frame: PlayerFrame,
+    pos: { x: number; y: number },
+    mapMetadata: MapMetadata,
+    canvasSize: { width: number; height: number }
+): void {
+    if (!Number.isFinite(frame.yaw)) return;
+
+    const yawRad = frame.yaw * Math.PI / 180;
+    const lookTarget = worldToCanvas(
+        frame.x + Math.cos(yawRad) * 128,
+        frame.y + Math.sin(yawRad) * 128,
+        mapMetadata,
+        canvasSize
+    );
+    const angle = Math.atan2(lookTarget.y - pos.y, lookTarget.x - pos.x);
+    const coneLength = 34;
+    const coneHalfAngle = 0.32;
+    const leftAngle = angle - coneHalfAngle;
+    const rightAngle = angle + coneHalfAngle;
+    const leftX = pos.x + Math.cos(leftAngle) * coneLength;
+    const leftY = pos.y + Math.sin(leftAngle) * coneLength;
+    const rightX = pos.x + Math.cos(rightAngle) * coneLength;
+    const rightY = pos.y + Math.sin(rightAngle) * coneLength;
+    const tipX = pos.x + Math.cos(angle) * (coneLength + 4);
+    const tipY = pos.y + Math.sin(angle) * (coneLength + 4);
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y);
+    ctx.lineTo(leftX, leftY);
+    ctx.quadraticCurveTo(tipX, tipY, rightX, rightY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+}
+
 function drawPlayer(
     ctx: CanvasRenderingContext2D,
     frame: PlayerFrame,
@@ -214,6 +263,10 @@ function drawPlayer(
     const isAlive = frame.isAlive ?? true;
     const team = getPlayerTeam(steamId, tick);
     const teamColor = team === 2 ? '#f97316' : team === 3 ? '#3b82f6' : '#6b7280';
+
+    if (isAlive) {
+        drawPlayerSightCone(ctx, frame, pos, mapMetadata, canvasSize);
+    }
     
     ctx.beginPath();
     ctx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
@@ -223,12 +276,27 @@ function drawPlayer(
     ctx.lineWidth = 2;
     ctx.stroke();
     
-    if (isAlive && frame.weapon) {
-        ctx.fillStyle = '#e2e8f0';
-        ctx.font = '12px Inter, sans-serif';
+    if (isAlive) {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'bottom';
-        ctx.fillText(frame.weapon, pos.x, pos.y - 10);
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.85)';
+
+        const playerName = getPlayerName(steamId);
+        const weapon = frame.weapon || '';
+        const nameY = weapon ? pos.y - 24 : pos.y - 10;
+
+        ctx.font = '600 12px Inter, sans-serif';
+        ctx.fillStyle = teamColor;
+        ctx.strokeText(playerName, pos.x, nameY);
+        ctx.fillText(playerName, pos.x, nameY);
+
+        if (weapon) {
+            ctx.font = '12px Inter, sans-serif';
+            ctx.fillStyle = '#e2e8f0';
+            ctx.strokeText(weapon, pos.x, pos.y - 10);
+            ctx.fillText(weapon, pos.x, pos.y - 10);
+        }
     }
     
     const healthColor = frame.health && frame.health < 50 ? '#ef4444' : '#4ade80';
@@ -343,7 +411,7 @@ function resizeCanvas(container: HTMLElement): { width: number; height: number }
     if (ctx) {
         ctx.canvas.width = width;
         ctx.canvas.height = height;
-        ctx.scale(dpr, dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
     return { width, height };

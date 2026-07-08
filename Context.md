@@ -84,7 +84,7 @@ CS2 uses Y-up for north, but screen coordinates use Y-down for north. The formul
 - Positive = looking down (90° = straight down)
 - Negative = looking up (-90° = straight up)
 
-For the 2D radar view, you only need **yaw** to show the direction the player is facing. You can draw a small line/triangle emanating from the player dot in the direction of `yaw`.
+For the 2D radar view, **yaw** is used to show the direction the player is facing. The viewer draws a white radar-style sight cone from the player dot. CS/Source yaw is treated as 0° toward positive X and 90° toward positive Y, then passed through `worldToCanvas()` so the radar's inverted Y axis is handled consistently.
 
 ### 2.5 Nuke / Vertigo Multi-Tier Problem
 
@@ -216,14 +216,20 @@ Approximate durations (at 64 tick/sec = 1 tick = 15.625ms):
 
 Your nade effect rendering: **Binary** — circles visible for active nades (between detonation tick and fade tick). Expansion/fade ignored for v1.
 
-### 4.8 Nade Trajectory Fading (Implemented)
+### 4.8 Nade Flight Trails (Implemented)
 
-Nade trajectories are drawn as ghost lines that fade over time. The fading is computed per nade in `NadeLayer.svelte`:
+Nade trajectories are drawn progressively in `NadeLayer.svelte`. The full trajectory is not revealed immediately. The renderer uses stored `NadeTrajectoryPoint` positions for path shape, but does not blindly trust their raw ticks because those samples can include stale or stationary spans. It retimes the compacted path by distance so the projectile reaches the endpoint exactly at the canonical pop/explosion tick.
 
-- `TRAJECTORY_FADE_DURATION = 192` ticks (~3 seconds at 64 tick)
-- Alpha = `max(0, 1 - ticksSinceThrow / TRAJECTORY_FADE_DURATION)`
-- Only trajectories with `nade.tick <= currentTick` are considered
-- Uses `ctx.save()`/`ctx.restore()` with `globalAlpha` to avoid affecting subsequent draws
+- `FALLBACK_FLIGHT_DURATION_TICKS = 96` is used only when a nade has start/end positions but no sampled trajectory ticks.
+- Raw trajectory timing is trusted if the flight span is between `MIN_FLIGHT_DURATION_TICKS = 24` and the per-type maximum. Most nades use `MAX_TRUSTED_RAW_FLIGHT_TICKS = 256`; smoke uses `MAX_TRUSTED_SMOKE_RAW_FLIGHT_TICKS = 640` so long smoke lineups can start at their actual throw tick instead of being compressed into the short fallback window.
+- `TRAJECTORY_VISIBLE_TICKS = Math.round(64 * 0.6)` keeps dashed trail segments visible for about 0.6 seconds.
+- Before detonation, only the recent rolling path window is drawn; older dashed segments disappear.
+- After detonation, the remaining dashed trail fades out within about 0.6 seconds while the active effect zone is drawn between `DetonationTick` and `FadeTick`.
+- Nearby no-trajectory pop/explosion events are matched against trajectory-backed nades and used as the canonical `DetonationTick`, `FadeTick`, and endpoint.
+- Smoke matching uses a wider `SMOKE_MATCH_TICK_WINDOW = 1536` because trajectory-backed smoke records can arrive when the smoke entity is removed, much later than `SmokeStart`.
+- Trajectory-backed duplicate effect zones are skipped when a matched pop/explosion event exists, preventing HE explosions from appearing once at the event tick and again later from the projectile-destroyed record.
+- Event-only nades without a usable start position do not draw a fake origin-to-end path.
+- Uses `ctx.save()`/`ctx.restore()` with `globalAlpha` to avoid affecting subsequent draws.
 
 Color coding by nade type:
 - Smoke: `#9ca3af` (grey)
@@ -231,6 +237,8 @@ Color coding by nade type:
 - Flash: `#fde047` (yellow)
 - Molotov: `#dc2626` (red)
 - Decoy: `#60a5fa` (blue)
+
+Player labels in `PlayerLayer.svelte` show the player name above the current weapon label. Alive players also get a white radar-style sight cone computed from interpolated `yaw` to indicate look direction.
 
 ### 4.5 Team Color Convention
 
