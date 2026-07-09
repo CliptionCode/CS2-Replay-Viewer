@@ -20,6 +20,7 @@ import MapLayer from '$lib/components/MapLayer.svelte';
 import PlayerLayer from '$lib/components/PlayerLayer.svelte';
 import NadeLayer from '$lib/components/NadeLayer.svelte';
 import KillLayer from '$lib/components/KillLayer.svelte';
+import DrawingLayer from '$lib/components/DrawingLayer.svelte';
 import Controls from '$lib/components/Controls.svelte';
 import TimeDisplay from '$lib/components/TimeDisplay.svelte';
 import RoundNav from '$lib/components/RoundNav.svelte';
@@ -95,6 +96,8 @@ const DEFAULT_SIGHT_CONE_HALF_ANGLE = 0.32;
 const EVENT_SEEK_LEAD_SECONDS = 2;
 const DEFAULT_LINE_OF_SIGHT_LENGTH = 300;
 const DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT = 250;
+const DEFAULT_DRAWING_COLOR = '#22c55e';
+const DEFAULT_DRAWING_STROKE_WIDTH = 4;
 const TOAST_DURATION_MS = 2600;
 const DEFAULT_BOMB_TIME_SECONDS = 40;
 const DEFAULT_PLANT_SECONDS = 3.2;
@@ -140,6 +143,10 @@ let showLineOfSight = false;
 let lineOfSightLength = DEFAULT_LINE_OF_SIGHT_LENGTH;
 let zoomSelectedPlayer = false;
 let selectedPlayerZoomPercent = DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT;
+let drawingColor = DEFAULT_DRAWING_COLOR;
+let drawingStrokeWidth = DEFAULT_DRAWING_STROKE_WIDTH;
+let isDrawingEnabled = false;
+let drawingClearSignal = 0;
 let selectedPlayerSteamId: bigint | null = null;
 let showNoiseCircle = false;
 let noiseForSelectedPlayer = false;
@@ -979,6 +986,14 @@ function setTimelineCombatEventEnabled(eventType: TimelineCombatEventKey, enable
     timelineEventsKey = '';
 }
 
+function clearAllDrawings(): void {
+    drawingClearSignal += 1;
+}
+
+function toggleDrawingMode(): void {
+    isDrawingEnabled = !isDrawingEnabled;
+}
+
 function handleTimelineEventClick(event: PlayerTimelineEvent): void {
     const eventPlayerSteamId = event.playerSteamId;
     if (
@@ -1530,6 +1545,70 @@ onMount(() => {
     text-align: right;
 }
 
+.drawing-control,
+.drawing-color-control {
+    display: grid;
+    grid-template-columns: 84px 1fr 34px;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    color: #cbd5e1;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.drawing-control input[type='range'] {
+    width: 100%;
+    accent-color: #60a5fa;
+}
+
+.drawing-color-control {
+    grid-template-columns: 84px 44px 1fr;
+}
+
+.drawing-color-control input[type='color'] {
+    width: 40px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+}
+
+.drawing-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.panel-button {
+    width: 100%;
+    min-height: 30px;
+    padding: 0 10px;
+    border: 1px solid #3a3a50;
+    border-radius: 4px;
+    background: #2a2a40;
+    color: #e2e8f0;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 800;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.panel-button:hover {
+    background: #3a3a50;
+    border-color: #475569;
+}
+
+.panel-button.drawing-toggle.active {
+    border-color: #22c55e;
+    background: #15803d;
+    color: #ffffff;
+}
+
 .checkbox-control {
     display: flex;
     align-items: center;
@@ -1777,6 +1856,12 @@ onMount(() => {
         feedLeftOffset={KILL_FEED_LEFT_OFFSET}
         onselectkillfeed={handleKillFeedSelect}
     />
+    <DrawingLayer
+        {isDrawingEnabled}
+        {drawingColor}
+        strokeWidth={drawingStrokeWidth}
+        clearSignal={drawingClearSignal}
+    />
 
     <Controls
         {isPlaying}
@@ -1919,6 +2004,37 @@ onMount(() => {
                     <span>{utility.label}</span>
                 </label>
             {/each}
+        </section>
+        <section class="control-section">
+            <div class="controls-heading">Drawing</div>
+            <label class="drawing-color-control">
+                <span>Color</span>
+                <input type="color" bind:value={drawingColor} />
+            </label>
+            <label class="drawing-control">
+                <span>Stroke Width</span>
+                <input
+                    type="range"
+                    min="1"
+                    max="10"
+                    step="1"
+                    bind:value={drawingStrokeWidth}
+                />
+                <span class="sight-control-value">{Math.round(drawingStrokeWidth)}</span>
+            </label>
+            <div class="drawing-actions">
+                <button type="button" class="panel-button" onclick={clearAllDrawings}>
+                    Clear all Drawings
+                </button>
+                <button
+                    type="button"
+                    class="panel-button drawing-toggle"
+                    class:active={isDrawingEnabled}
+                    onclick={toggleDrawingMode}
+                >
+                    {isDrawingEnabled ? 'Stop Drawing' : 'Start Drawing'}
+                </button>
+            </div>
         </section>
     </div>
 
