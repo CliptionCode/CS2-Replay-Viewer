@@ -218,7 +218,7 @@ Approximate durations (at 64 tick/sec = 1 tick = 15.625ms):
 
 **Used in:** `recordSmokeStart`, `recordFlashExplode`, `recordHeExplode`, and `recordNadeDestroyed` (backend `parser.go`). The tick durations above are added to `DetonationTick` to compute `FadeTick`.
 
-Your nade effect rendering: **Binary** — circles visible for active nades (between detonation tick and fade tick). Expansion/fade ignored for v1.
+Your nade effect rendering: **Binary** — circles visible for active smokes, HEs, flashes, and fire nades (between detonation tick and fade tick). Decoys are the exception: they render only a brown endpoint dot with a `Decoy` label while active. Expansion/fade ignored for v1.
 
 ### 4.8 Nade Flight Trails (Implemented)
 
@@ -228,7 +228,7 @@ Nade trajectories are drawn progressively in `NadeLayer.svelte`. The full trajec
 - Raw trajectory timing is trusted if the flight span is between `MIN_FLIGHT_DURATION_TICKS = 24` and the per-type maximum. Most nades use `MAX_TRUSTED_RAW_FLIGHT_TICKS = 256`; smoke uses `MAX_TRUSTED_SMOKE_RAW_FLIGHT_TICKS = 640` so long smoke lineups can start at their actual throw tick instead of being compressed into the short fallback window.
 - `TRAJECTORY_VISIBLE_TICKS = Math.round(64 * 0.6)` keeps dashed trail segments visible for about 0.6 seconds.
 - Before detonation, only the recent rolling path window is drawn; older dashed segments disappear.
-- After detonation, the remaining dashed trail fades out within about 0.6 seconds while the active effect zone is drawn between `DetonationTick` and `FadeTick`.
+- After detonation, the remaining dashed trail fades out within about 0.6 seconds while the active effect zone is drawn between `DetonationTick` and `FadeTick`. Decoys draw only their active labeled endpoint dot, with no surrounding effect zone.
 - Nearby no-trajectory pop/explosion events are matched against trajectory-backed nades and used as the canonical `DetonationTick`, `FadeTick`, and endpoint.
 - Smoke matching uses a wider `SMOKE_MATCH_TICK_WINDOW = 1536` because trajectory-backed smoke records can arrive when the smoke entity is removed, much later than `SmokeStart`.
 - Decoy matching uses the wider smoke-style tick window because the lifecycle event starts when the decoy begins and the projectile-destroyed trajectory can arrive when it expires. `DecoyStart`/`DecoyExpired` define the active brown endpoint dot; older parsed data can infer the landing tick from the stationary end of the trajectory.
@@ -506,7 +506,7 @@ The UI uses 4 stacked `<canvas>` elements, each rendered by its own Svelte compo
 |---|---|---|
 | Map | `MapLayer.svelte` | Loads radar PNG, draws background/grid, applies `worldToCanvas()` transform |
 | Player | `PlayerLayer.svelte` | Draws player dots + direction indicators, weapon labels, health bars, trails |
-| Nade | `NadeLayer.svelte` | Draws nade trajectories (arcs), active effect zones (circles), color-coded by type |
+| Nade | `NadeLayer.svelte` | Draws nade trajectories (arcs), active effect zones for damaging/vision-blocking nades, and labeled active decoy endpoint dots, color-coded by type |
 | Kill | `KillLayer.svelte` | Draws death markers (X on victim position), kill feed text overlay |
 
 *Note: `ReplayCanvas.svelte` and `renderer.ts` are legacy from an earlier single-canvas approach. The active rendering is done by the 4 individual layer components.*
@@ -523,7 +523,7 @@ Nade effect zones and projectile indicators were reduced to **1/4 of original si
 - HE effect zone: **62** (was 250)
 - Flash effect zone: **100** (was 400)
 - Molotov effect zone: **38** (was 150)
-- Decoy effect zone: **50** (was 200)
+- Decoy active marker: **5px dot plus `Decoy` label**; no effect-zone circle
 
 ### 11.2.3 Kill Feed Position
 
@@ -637,7 +637,7 @@ Kill feed rows in `KillLayer.svelte` are clickable canvas hitboxes. Clicking a r
 
 The Go parser records `events.PlayerFlashed`, `events.Footstep`, `events.PlayerJump`, `events.PlayerSound`, `events.WeaponFire`, fall-damage `events.PlayerHurt`, `events.BombPlantBegin`, `events.BombPlantAborted`, `events.BombPlanted`, `events.BombExplode`, `events.BombDefuseStart`, `events.BombDefuseAborted`, and `events.BombDefused` into protobuf event arrays. Existing parsed protobuf files may not contain these arrays or typed noise values; load and parse the original `.dem` again to see parser-backed behavior.
 
-`PlayerLayer.svelte` renders a grey filled circle around flashed players while the flash is active. Opacity is proportional to flash duration and fades continuously until `FlashEvent.endTick`.
+`PlayerLayer.svelte` renders a grey filled circle around flashed players while the flash is active. Opacity is proportional to flash duration, receives an additional 20% alpha boost for readability, and fades continuously until `FlashEvent.endTick`.
 
 Noise events render as red stroked circles around alive players when `Show Noice Circle` is enabled. The radius is converted through the same radar/world transform as other overlays. Jump and falling noise events render at the event origin and fade with remaining event lifetime. Shooting noise renders around the shooter's current position during its short lifetime. Running noise uses one persistent circle per running player, follows the player's current position, holds briefly while running continues, and fades quickly after running stops.
 

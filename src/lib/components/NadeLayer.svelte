@@ -44,7 +44,6 @@ function getNadeEffectFill(nadeType: string): string {
     if (nadeType === 'hegrenade') return 'rgba(249, 115, 22, 0.3)';
     if (nadeType === 'flashbang') return 'rgba(253, 224, 71, 0.2)';
     if (nadeType === 'molotov' || nadeType === 'incendiary') return 'rgba(220, 38, 38, 0.3)';
-    if (nadeType === 'decoy') return 'rgba(146, 64, 14, 0.18)';
     return 'rgba(96, 165, 250, 0.2)';
 }
 
@@ -325,12 +324,16 @@ function drawNadeEffect(
     const pos = worldToCanvas(endPoint.x, endPoint.y, mapMetadata, canvasSize);
 
     ctx.save();
-    ctx.fillStyle = getNadeEffectFill(nade.nadeType);
-    ctx.beginPath();
-    ctx.arc(pos.x, pos.y, getNadeEffectRadius(nade.nadeType), 0, Math.PI * 2);
-    ctx.fill();
-
     if (isDecoyNade(nade)) {
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.9)';
+        ctx.fillStyle = DECOY_COLOR;
+        ctx.font = '800 12px Inter, sans-serif';
+        ctx.strokeText('Decoy', pos.x, pos.y - 10);
+        ctx.fillText('Decoy', pos.x, pos.y - 10);
+
         ctx.fillStyle = getNadeColor(nade.nadeType);
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
@@ -338,7 +341,14 @@ function drawNadeEffect(
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 1.5;
         ctx.stroke();
+        ctx.restore();
+        return;
     }
+
+    ctx.fillStyle = getNadeEffectFill(nade.nadeType);
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, getNadeEffectRadius(nade.nadeType), 0, Math.PI * 2);
+    ctx.fill();
     ctx.restore();
 }
 
