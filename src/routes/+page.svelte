@@ -95,7 +95,10 @@ const DEFAULT_SIGHT_CONE_LENGTH = 34;
 const DEFAULT_SIGHT_CONE_HALF_ANGLE = 0.32;
 const EVENT_SEEK_LEAD_SECONDS = 2;
 const DEFAULT_LINE_OF_SIGHT_LENGTH = 300;
+const DEFAULT_LINE_OF_SIGHT_WIDTH = 2;
 const DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT = 250;
+const MAX_MOUSE_VIEWPORT_ZOOM_SCALE = 5;
+const PLAYER_DOT_CLICK_RADIUS = 12;
 const DEFAULT_DRAWING_COLOR = '#22c55e';
 const DEFAULT_DRAWING_STROKE_WIDTH = 4;
 const TOAST_DURATION_MS = 2600;
@@ -141,8 +144,12 @@ let showSightCone = true;
 let sightConeForSelectedPlayer = false;
 let showLineOfSight = false;
 let lineOfSightLength = DEFAULT_LINE_OF_SIGHT_LENGTH;
+let lineOfSightWidth = DEFAULT_LINE_OF_SIGHT_WIDTH;
 let zoomSelectedPlayer = false;
 let selectedPlayerZoomPercent = DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT;
+let mouseViewportZoomScale = 1;
+let mouseViewportTranslateX = 0;
+let mouseViewportTranslateY = 0;
 let drawingColor = DEFAULT_DRAWING_COLOR;
 let drawingStrokeWidth = DEFAULT_DRAWING_STROKE_WIDTH;
 let isDrawingEnabled = false;
@@ -226,6 +233,12 @@ type MatchScore = {
     right: MatchScoreSegment;
 };
 
+type ViewportTransform = {
+    scale: number;
+    translateX: number;
+    translateY: number;
+};
+
 function resetLoadedReplayState(clearReplayData = false): void {
     setPlaying(false);
     if (rafId) {
@@ -254,6 +267,7 @@ function resetLoadedReplayState(clearReplayData = false): void {
     roundProgressPct = 0;
     playerFrameTrails.clear();
     playerFrameLookupIndices.clear();
+    resetMouseViewportZoom();
     resetReplayViewportTransform();
     setTick(0);
 }
@@ -1067,6 +1081,47 @@ function getSelectedPlayerZoomScale(): number {
     return Math.max(1, Math.min(5, selectedPlayerZoomPercent / 100));
 }
 
+function getSelectedPlayerViewportTransform(tick = getPlaybackTick()): ViewportTransform {
+    if (!zoomSelectedPlayer || selectedPlayerSteamId === null || !replayData || !replayContainer) {
+        return { scale: 1, translateX: 0, translateY: 0 };
+    }
+
+    const zoom = getSelectedPlayerZoomScale();
+    if (zoom <= 1) {
+        return { scale: 1, translateX: 0, translateY: 0 };
+    }
+
+    const selectedFrame = getPlayerFrameAtTick(selectedPlayerSteamId, tick);
+    if (!selectedFrame) {
+        return { scale: 1, translateX: 0, translateY: 0 };
+    }
+
+    const rect = replayContainer.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+        return { scale: 1, translateX: 0, translateY: 0 };
+    }
+
+    const focus = worldToCanvas(selectedFrame.x, selectedFrame.y, mapMetadata, {
+        width: rect.width,
+        height: rect.height,
+    });
+
+    return {
+        scale: zoom,
+        translateX: rect.width / 2 - focus.x * zoom,
+        translateY: rect.height / 2 - focus.y * zoom,
+    };
+}
+
+function getReplayViewportTransform(tick = getPlaybackTick()): ViewportTransform {
+    const selectedTransform = getSelectedPlayerViewportTransform(tick);
+    return {
+        scale: mouseViewportZoomScale * selectedTransform.scale,
+        translateX: mouseViewportTranslateX + mouseViewportZoomScale * selectedTransform.translateX,
+        translateY: mouseViewportTranslateY + mouseViewportZoomScale * selectedTransform.translateY,
+    };
+}
+
 function resetReplayViewportTransform(): void {
     replayContainer?.style.setProperty('--replay-viewport-transform', 'none');
 }
@@ -1074,40 +1129,99 @@ function resetReplayViewportTransform(): void {
 function updateReplayViewportTransform(tick = getPlaybackTick()): void {
     if (!browser || !replayContainer) return;
 
-    if (!zoomSelectedPlayer || selectedPlayerSteamId === null || !replayData) {
+    const transform = getReplayViewportTransform(tick);
+    if (
+        transform.scale <= 1 &&
+        Math.abs(transform.translateX) < 0.01 &&
+        Math.abs(transform.translateY) < 0.01
+    ) {
         resetReplayViewportTransform();
         return;
     }
-
-    const zoom = getSelectedPlayerZoomScale();
-    if (zoom <= 1) {
-        resetReplayViewportTransform();
-        return;
-    }
-
-    const selectedFrame = getPlayerFrameAtTick(selectedPlayerSteamId, tick);
-    if (!selectedFrame) {
-        resetReplayViewportTransform();
-        return;
-    }
-
-    const rect = replayContainer.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) {
-        resetReplayViewportTransform();
-        return;
-    }
-
-    const focus = worldToCanvas(selectedFrame.x, selectedFrame.y, mapMetadata, {
-        width: rect.width,
-        height: rect.height,
-    });
-    const translateX = rect.width / 2 - focus.x * zoom;
-    const translateY = rect.height / 2 - focus.y * zoom;
 
     replayContainer.style.setProperty(
         '--replay-viewport-transform',
-        `translate(${translateX.toFixed(2)}px, ${translateY.toFixed(2)}px) scale(${zoom.toFixed(3)})`
+        `translate(${transform.translateX.toFixed(2)}px, ${transform.translateY.toFixed(2)}px) scale(${transform.scale.toFixed(3)})`
     );
+}
+
+function resetMouseViewportZoom(): void {
+    mouseViewportZoomScale = 1;
+    mouseViewportTranslateX = 0;
+    mouseViewportTranslateY = 0;
+}
+
+function handleViewportWheel(event: WheelEvent): void {
+    if (!(event.target instanceof HTMLCanvasElement) || !replayContainer) return;
+
+    event.preventDefault();
+
+    const rect = replayContainer.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    const pointerX = event.clientX - rect.left;
+    const pointerY = event.clientY - rect.top;
+    const currentTransform = getReplayViewportTransform();
+    const sourceX = (pointerX - currentTransform.translateX) / currentTransform.scale;
+    const sourceY = (pointerY - currentTransform.translateY) / currentTransform.scale;
+    const nextZoomScale = Math.max(
+        1,
+        Math.min(MAX_MOUSE_VIEWPORT_ZOOM_SCALE, mouseViewportZoomScale * Math.exp(-event.deltaY * 0.0015))
+    );
+
+    if (nextZoomScale === mouseViewportZoomScale) return;
+
+    if (nextZoomScale <= 1) {
+        resetMouseViewportZoom();
+        updateReplayViewportTransform();
+        return;
+    }
+
+    const selectedTransform = getSelectedPlayerViewportTransform();
+    mouseViewportZoomScale = nextZoomScale;
+    mouseViewportTranslateX = pointerX
+        - sourceX * nextZoomScale * selectedTransform.scale
+        - nextZoomScale * selectedTransform.translateX;
+    mouseViewportTranslateY = pointerY
+        - sourceY * nextZoomScale * selectedTransform.scale
+        - nextZoomScale * selectedTransform.translateY;
+    updateReplayViewportTransform();
+}
+
+function handleReplayCanvasClick(event: MouseEvent): void {
+    if (isDrawingEnabled || !(event.target instanceof HTMLCanvasElement) || !replayContainer) return;
+
+    const rect = replayContainer.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    const transform = getReplayViewportTransform();
+    const clickX = (event.clientX - rect.left - transform.translateX) / transform.scale;
+    const clickY = (event.clientY - rect.top - transform.translateY) / transform.scale;
+    const playbackTick = getPlaybackTick();
+    let closestSteamId: bigint | null = null;
+    let closestDistanceSquared = PLAYER_DOT_CLICK_RADIUS * PLAYER_DOT_CLICK_RADIUS;
+
+    for (const player of playablePlayers) {
+        const frame = getPlayerFrameAtTick(player.steamId, playbackTick);
+        if (!frame) continue;
+
+        const playerPosition = worldToCanvas(frame.x, frame.y, mapMetadata, {
+            width: rect.width,
+            height: rect.height,
+        });
+        const distanceX = clickX - playerPosition.x;
+        const distanceY = clickY - playerPosition.y;
+        const distanceSquared = distanceX * distanceX + distanceY * distanceY;
+
+        if (distanceSquared <= closestDistanceSquared) {
+            closestSteamId = player.steamId;
+            closestDistanceSquared = distanceSquared;
+        }
+    }
+
+    if (closestSteamId !== null) {
+        selectPlayer(closestSteamId);
+    }
 }
 
 function syncDisplayTick(force = false, timestamp = performance.now()) {
@@ -1190,7 +1304,7 @@ $: {
 }
 
 $: {
-    void zoomSelectedPlayer, selectedPlayerZoomPercent, selectedPlayerSteamId, replayData, mapMetadata;
+    void zoomSelectedPlayer, selectedPlayerZoomPercent, selectedPlayerSteamId, mouseViewportZoomScale, mouseViewportTranslateX, mouseViewportTranslateY, replayData, mapMetadata;
     updateReplayViewportTransform();
 }
 
@@ -1839,6 +1953,7 @@ onMount(() => {
         {sightConeForSelectedPlayer}
         {showLineOfSight}
         {lineOfSightLength}
+        {lineOfSightWidth}
         {selectedPlayerSteamId}
         {showNoiseCircle}
         {noiseForSelectedPlayer}
@@ -1931,6 +2046,17 @@ onMount(() => {
                     bind:value={lineOfSightLength}
                 />
                 <span class="sight-control-value">{Math.round(lineOfSightLength)}</span>
+            </label>
+            <label class="sight-control">
+                <span>LOS Width</span>
+                <input
+                    type="range"
+                    min="0.1"
+                    max="5.0"
+                    step="0.1"
+                    bind:value={lineOfSightWidth}
+                />
+                <span class="sight-control-value">{lineOfSightWidth.toFixed(1)}</span>
             </label>
         </section>
         <section class="control-section">
@@ -2086,3 +2212,5 @@ onMount(() => {
     </div>
 </div>
 {/if}
+
+<svelte:window onclick={handleReplayCanvasClick} onwheel={handleViewportWheel} />

@@ -299,6 +299,7 @@ function handleClick(event: MouseEvent): void {
     const hitbox = getKillFeedHitboxAt(event);
     if (!hitbox) return;
     event.preventDefault();
+    event.stopPropagation();
     onselectkillfeed(hitbox.kill);
 }
 

@@ -15,6 +15,7 @@ export let showSightCone = true;
 export let sightConeForSelectedPlayer = false;
 export let showLineOfSight = false;
 export let lineOfSightLength = 160;
+export let lineOfSightWidth = 2;
 export let selectedPlayerSteamId: bigint | null = null;
 export let showNoiseCircle = false;
 export let noiseForSelectedPlayer = false;
@@ -46,7 +47,6 @@ const TEAM_CT = 3;
 const HIGHLIGHT_COLOR = '#22c55e';
 const RUNNING_NOISE_HOLD_TICKS = 28;
 const RUNNING_NOISE_FADE_TICKS = 14;
-const FLASH_CIRCLE_ALPHA_BOOST = 0.2;
 
 function lerp(start: number, end: number, alpha: number): number {
     return start + (end - start) * alpha;
@@ -385,7 +385,7 @@ function drawPlayerLineOfSight(
 
     ctx.save();
     ctx.strokeStyle = hexToRgba(color, 0.9);
-    ctx.lineWidth = 2;
+    ctx.lineWidth = Math.max(0.1, Math.min(5, lineOfSightWidth));
     ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(pos.x, pos.y);
@@ -418,8 +418,7 @@ function drawFlashCircle(
 
     const totalTicks = Math.max(1, flash.endTick - flash.tick);
     const remainingRatio = Math.max(0, Math.min(1, (flash.endTick - tick) / totalTicks));
-    const strength = Math.max(0, Math.min(1, flash.durationSeconds / 5));
-    const alpha = Math.min(1, (0.12 + strength * 0.58 + FLASH_CIRCLE_ALPHA_BOOST) * remainingRatio);
+    const alpha = 0.6 + 0.4 * remainingRatio;
     if (alpha <= 0) return;
 
     ctx.save();
@@ -830,7 +829,7 @@ $: {
 }
 
 $: {
-    void sightConeLength, sightConeHalfAngle, showSightCone, sightConeForSelectedPlayer, showLineOfSight, lineOfSightLength, selectedPlayerSteamId, showNoiseCircle, noiseForSelectedPlayer, enabledNoiseSources;
+    void sightConeLength, sightConeHalfAngle, showSightCone, sightConeForSelectedPlayer, showLineOfSight, lineOfSightLength, lineOfSightWidth, selectedPlayerSteamId, showNoiseCircle, noiseForSelectedPlayer, enabledNoiseSources;
     if (browser && ctx) {
         scheduleRender();
     }

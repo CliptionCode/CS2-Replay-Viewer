@@ -2,6 +2,8 @@
 
 > Supplementary information for an AI implementing this project. Contains background knowledge, gotchas, library deep-dives, and reference material not covered in the implementation plan.
 
+> **Application version:** `0.1.2`. This version was applied after the player-dot selection, utility-visual, sight-control, and mouse-viewport zoom changes. Keep `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` on the same version when releasing later changes.
+
 > **IMPORTANT:** Whenever writing or modifying **Svelte** code, always load the `svelte-core-bestpractices` and `svelte-code-writer` skills first. Whenever writing or modifying **Rust** code, always load the `rust-best-practices` skill first.
 >
 > **Project workflow constraints:** Do not run `pnpm tauri dev`. Do not start or host a Vite dev server automatically; the user wants to run and verify manually. Never run `npx @sveltejs/mcp svelte-autofixer` or any other Svelte autofixer command in this repository.
@@ -521,9 +523,11 @@ Nade effect zones and projectile indicators were reduced to **1/4 of original si
 - All projectile circles: **25** (was 100)
 - Smoke effect zone: **50** (was 200)
 - HE effect zone: **62** (was 250)
-- Flash effect zone: **100** (was 400)
+- Flash effect zone: **200** (was 400; doubled from the previous 100px viewer radius)
 - Molotov effect zone: **38** (was 150)
 - Decoy active marker: **5px dot plus `Decoy` label**; no effect-zone circle
+
+Smoke effect-zone fill opacity is **45%** (was 35%), making it 10 percentage points less transparent.
 
 ### 11.2.3 Kill Feed Position
 
@@ -615,9 +619,11 @@ Kill feed player names are color-coded by team at that round: CT names are blue 
 
 `PlayerLayer.svelte` only indexes and renders Steam IDs present in `ReplayData.players` whose stored team is T or CT. Observer/admin/spectator frame samples are ignored, so only real player dots are drawn.
 
-The player sight cone defaults remain `34` canvas pixels long and `0.32` radians wide. `+page.svelte` exposes a compact top-left `Sight` panel below the time display. It includes `Show Sight Cone` (checked by default), `Show for selected Player` (unchecked by default), a width slider, a sight cone length slider with max `240`, a `Show Line of Sight` checkbox, and a separate line-of-sight length slider with range `18` to `800`. Sight cone controls are independent from line-of-sight controls. `Line of Sight Len` defaults to `300`. The panel scrolls vertically within the viewport so it does not collide with the bottom toolbar.
+The player sight cone defaults remain `34` canvas pixels long and `0.32` radians wide. `+page.svelte` exposes a compact top-left `Sight` panel below the time display. It includes `Show Sight Cone` (checked by default), `Show for selected Player` (unchecked by default), a width slider, a sight cone length slider with max `240`, a `Show Line of Sight` checkbox, a separate `LOS Len` slider with range `18` to `800`, and a `LOS Width` slider directly below it. Sight cone controls are independent from line-of-sight controls. `LOS Len` defaults to `300`; `LOS Width` defaults to `2.0px` (the former fixed line width), ranges from `0.1` to `5.0`, and steps by `0.1`. The panel scrolls vertically within the viewport so it does not collide with the bottom toolbar.
 
-The `Player Selection` section below the sight controls contains `Zoom Selected Player` plus a zoom percentage slider capped at `500%`. This is a visual viewport transform centered on the selected player's current world position. The page writes `--replay-viewport-transform` directly on the replay container from the playback tick, and map/player/nade/death-marker canvases inherit that CSS transform. Layer drawing, trajectories, map calibration, and world coordinate transforms stay unchanged. If no player is selected, zoom has no effect.
+The `Player Selection` section below the sight controls contains `Zoom Selected Player` plus a zoom percentage slider capped at `500%`. This is a visual viewport transform centered on the selected player's current world position. The page writes `--replay-viewport-transform` directly on the replay container from the playback tick, and map/player/nade/death-marker canvases inherit that CSS transform. Layer drawing, trajectories, map calibration, and world coordinate transforms stay unchanged. If no player is selected, this selection-follow zoom has no effect.
+
+The replay viewport also supports independent mouse-wheel zoom over the canvas. It starts at the unzoomed view (`0%` additional zoom / `1×` scale), is capped at `500%` (`5×` scale), and keeps the point under the mouse fixed while zooming. Its transform is composed with the optional selected-player camera, so it does not mutate any canvas data or rendering coordinates; it only changes the viewport. Loading a different replay resets this mouse viewport zoom.
 
 The `Noise` section below `Player Selection` contains `Show Noice Circle` (unchecked by default), `Noise for Selected Player` (unchecked by default), and per-source checkboxes for the distinguishable sources `Running Noise`, `Jump Noise`, `Shooting Noise`, and `Falling Noise` (checked by default). `Show Noice Circle` is the master visibility toggle for red noise circles. `Noise for Selected Player` limits noise rendering to the selected Steam ID. Unknown noise types are not exposed as a separate UI option.
 
@@ -629,7 +635,7 @@ The top-right roster panel shows two current-round side columns, CT and T, with 
 
 The top-center match score label is formatted as `Team <playerName> (XX) vs Team <playerName> (XX)`. The representative names are selected from the two sides in the first visible round and remain stable after side switches. Round wins are counted by mapping each completed round winner back to that first-round team identity, so users do not have to manually add T-side wins before halftime and CT-side wins after halftime. Each `Team <playerName> (XX)` segment is colored by that team's current side in the shown round: blue for CT and orange for T.
 
-Clicking a player name selects that player; clicking the currently selected player again clears the selection. Selected alive players use green (`#22c55e`) for the dot, sight cone, and line-of-sight ray; selected dead players keep the dead grey fill but receive a green selection ring.
+Clicking a player name or a player dot selects that player; clicking the currently selected player again clears the selection. Player-dot hit testing uses the current playback tick and the inverse viewport transform, so it remains available while playback is running and while either viewport zoom is active. Kill-feed hitboxes continue to take precedence over dot selection. Selected alive players use green (`#22c55e`) for the dot, sight cone, and line-of-sight ray; selected dead players keep the dead grey fill but receive a green selection ring.
 
 Selecting a player shows round event markers under the timeline for that player's enabled kills, deaths, and grenade throws (smoke, flashbang, molotov/incendiary, HE, decoy). Bomb plant/explosion/defuse markers are also shown as `BP`, `BE`, and `BD`. `BP` prefers the parsed completed-plant event, falls back to `plant_begin + plant duration` when available, and finally falls back to `objective end - bomb timer` for bomb-objective rounds. `BE` and `BD` use parsed events when available and fall back to round win reason. Markers use the current round's active-start timeline scale, stack vertically when events occur within `EVENT_STACK_WINDOW_TICKS = 128` (~2 seconds), and clicking a marker seeks to 2 seconds before the event, clamped to the event round. Clicking a `K` marker selects the killer, clicking an `X` marker selects the victim, clicking a utility marker selects the thrower, and clicking `BP` or `BD` selects the planter or defuser when the parsed event includes a player Steam ID. Double-clicking a marker copies `demo_goto <tick>` for the same lead-in tick and shows a short non-blocking toast.
 
@@ -641,7 +647,7 @@ Kill feed rows in `KillLayer.svelte` are clickable canvas hitboxes. Clicking a r
 
 The Go parser records `events.PlayerFlashed`, `events.Footstep`, `events.PlayerJump`, `events.PlayerSound`, `events.WeaponFire`, fall-damage `events.PlayerHurt`, `events.BombPlantBegin`, `events.BombPlantAborted`, `events.BombPlanted`, `events.BombExplode`, `events.BombDefuseStart`, `events.BombDefuseAborted`, and `events.BombDefused` into protobuf event arrays. Existing parsed protobuf files may not contain these arrays or typed noise values; load and parse the original `.dem` again to see parser-backed behavior.
 
-`PlayerLayer.svelte` renders a grey filled circle around flashed players while the flash is active. Opacity is proportional to flash duration, receives an additional 20% alpha boost for readability, and fades continuously until `FlashEvent.endTick`.
+`PlayerLayer.svelte` renders a grey filled circle around flashed players while the flash is active. Its transparency ranges from 0% at the start of the flash to no more than 40% near the end (opacity ranges from 100% down to 60%), so the indicator remains readable for the full flash duration.
 
 Noise events render as red stroked circles around alive players when `Show Noice Circle` is enabled. The radius is converted through the same radar/world transform as other overlays. Jump and falling noise events render at the event origin and fade with remaining event lifetime. Shooting noise renders around the shooter's current position during its short lifetime. Running noise uses one persistent circle per running player, follows the player's current position, holds briefly while running continues, and fades quickly after running stops.
 

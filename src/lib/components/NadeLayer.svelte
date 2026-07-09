@@ -40,7 +40,7 @@ function getNadeColor(nadeType: string): string {
 }
 
 function getNadeEffectFill(nadeType: string): string {
-    if (nadeType === 'smoke') return 'rgba(156, 163, 175, 0.35)';
+    if (nadeType === 'smoke') return 'rgba(156, 163, 175, 0.45)';
     if (nadeType === 'hegrenade') return 'rgba(249, 115, 22, 0.3)';
     if (nadeType === 'flashbang') return 'rgba(253, 224, 71, 0.2)';
     if (nadeType === 'molotov' || nadeType === 'incendiary') return 'rgba(220, 38, 38, 0.3)';
@@ -50,7 +50,7 @@ function getNadeEffectFill(nadeType: string): string {
 function getNadeEffectRadius(nadeType: string): number {
     if (nadeType === 'smoke') return 50;
     if (nadeType === 'hegrenade') return 62;
-    if (nadeType === 'flashbang') return 100;
+    if (nadeType === 'flashbang') return 200;
     if (nadeType === 'molotov' || nadeType === 'incendiary') return 38;
     return 50;
 }
