@@ -113,8 +113,23 @@ const NOISE_SOURCE_OPTIONS = [
     { key: 'falling', label: 'Falling Noise' },
 ] as const;
 
+const TIMELINE_UTILITY_OPTIONS = [
+    { key: 'smoke', label: 'Show Smokes' },
+    { key: 'flashbang', label: 'Show Flashes' },
+    { key: 'hegrenade', label: 'Show HE Nades' },
+    { key: 'molotov', label: 'Show Molotovs' },
+    { key: 'decoy', label: 'Show Decoys' },
+] as const;
+
+const TIMELINE_COMBAT_EVENT_OPTIONS = [
+    { key: 'kill', label: 'Show Kills' },
+    { key: 'death', label: 'Show Deaths' },
+] as const;
+
 type MapVariant = 'default' | 'lower';
 type NoiseSourceKey = typeof NOISE_SOURCE_OPTIONS[number]['key'];
+type TimelineUtilityKey = typeof TIMELINE_UTILITY_OPTIONS[number]['key'];
+type TimelineCombatEventKey = typeof TIMELINE_COMBAT_EVENT_OPTIONS[number]['key'];
 
 let activeStart: number = 0;
 let sightConeLength = DEFAULT_SIGHT_CONE_LENGTH;
@@ -133,6 +148,18 @@ let enabledNoiseSources: Record<NoiseSourceKey, boolean> = {
     jump: true,
     shooting: true,
     falling: true,
+};
+let showAllTimelineUtilities = false;
+let enabledTimelineUtilities: Record<TimelineUtilityKey, boolean> = {
+    smoke: true,
+    flashbang: true,
+    hegrenade: true,
+    molotov: true,
+    decoy: true,
+};
+let enabledTimelineCombatEvents: Record<TimelineCombatEventKey, boolean> = {
+    kill: true,
+    death: true,
 };
 let mapVariant: MapVariant = 'default';
 let hasLowerMapVariant = false;
@@ -165,6 +192,7 @@ type BasePlayerTimelineEvent = {
     label: string;
     color: string;
     title: string;
+    playerSteamId?: bigint;
 };
 
 type PlayerTimelineEvent = BasePlayerTimelineEvent & {
@@ -530,6 +558,14 @@ function shouldShowNadeThrowMarker(nade: NadeEvent, steamId: bigint): boolean {
     return !hasMatchingTrajectoryNade(nade, steamId);
 }
 
+function isTimelineUtilityType(type: PlayerEventType): type is TimelineUtilityKey {
+    return type === 'smoke' || type === 'flashbang' || type === 'hegrenade' || type === 'molotov' || type === 'decoy';
+}
+
+function isTimelineUtilityEnabled(type: PlayerEventType): boolean {
+    return isTimelineUtilityType(type) && (enabledTimelineUtilities[type] ?? false);
+}
+
 function formatRoundEventTime(tick: number, round: RoundData): string {
     const seconds = Math.max(0, Math.floor((tick - getRoundActiveStart(round)) / 64));
     const minutes = Math.floor(seconds / 60);
@@ -562,7 +598,27 @@ function stackTimelineEvents(events: BasePlayerTimelineEvent[], round: RoundData
         });
 }
 
-function buildSelectedPlayerBaseEvents(steamId: bigint, round: RoundData): BasePlayerTimelineEvent[] {
+function buildNadeTimelineEvent(nade: NadeEvent, round: RoundData): BasePlayerTimelineEvent | null {
+    const meta = getNadeMeta(nade.nadeType);
+    if (!meta || !isTimelineUtilityEnabled(meta.type) || !shouldShowNadeThrowMarker(nade, nade.throwerSteamId)) {
+        return null;
+    }
+
+    const throwTick = getNadeThrowTick(nade);
+    if (throwTick < round.startTick || throwTick > getRoundDisplayEndTick(replayData, round)) return null;
+
+    const playerName = nade.throwerSteamId !== 0n ? `${getPlayerName(nade.throwerSteamId)} threw ` : 'Threw ';
+    return {
+        tick: throwTick,
+        type: meta.type,
+        label: meta.label,
+        color: meta.color,
+        title: `${playerName}${getNadeTypeName(nade.nadeType)} at ${formatRoundEventTime(throwTick, round)}`,
+        playerSteamId: nade.throwerSteamId || undefined,
+    };
+}
+
+function buildKillDeathTimelineEvents(round: RoundData, steamId: bigint | null = null): BasePlayerTimelineEvent[] {
     if (!replayData) return [];
 
     const events: BasePlayerTimelineEvent[] = [];
@@ -571,43 +627,55 @@ function buildSelectedPlayerBaseEvents(steamId: bigint, round: RoundData): BaseP
     ) ?? [];
 
     for (const kill of roundKills) {
-        if (kill.killerSteamId === steamId) {
+        if (enabledTimelineCombatEvents.kill && (steamId === null || kill.killerSteamId === steamId)) {
             events.push({
                 tick: kill.tick,
                 type: 'kill',
                 label: 'K',
                 color: '#22c55e',
-                title: `Killed ${getPlayerName(kill.victimSteamId)} with ${kill.weapon} at ${formatRoundEventTime(kill.tick, round)}`,
+                title: `${getPlayerName(kill.killerSteamId)} killed ${getPlayerName(kill.victimSteamId)} with ${kill.weapon} at ${formatRoundEventTime(kill.tick, round)}`,
+                playerSteamId: kill.killerSteamId || undefined,
             });
         }
-        if (kill.victimSteamId === steamId) {
+        if (enabledTimelineCombatEvents.death && (steamId === null || kill.victimSteamId === steamId)) {
             events.push({
                 tick: kill.tick,
                 type: 'death',
                 label: 'X',
                 color: '#ef4444',
-                title: `Died to ${getPlayerName(kill.killerSteamId)} at ${formatRoundEventTime(kill.tick, round)}`,
+                title: `${getPlayerName(kill.victimSteamId)} died to ${getPlayerName(kill.killerSteamId)} at ${formatRoundEventTime(kill.tick, round)}`,
+                playerSteamId: kill.victimSteamId || undefined,
             });
         }
     }
 
-    for (const nade of replayData.nades ?? []) {
-        if (nade.throwerSteamId !== steamId) continue;
-        const meta = getNadeMeta(nade.nadeType);
-        if (!meta || !shouldShowNadeThrowMarker(nade, steamId)) continue;
+    return events;
+}
 
-        const throwTick = getNadeThrowTick(nade);
-        if (throwTick < round.startTick || throwTick > getRoundDisplayEndTick(replayData, round)) continue;
+function buildSelectedPlayerBaseEvents(steamId: bigint, round: RoundData, includeUtilities = true): BasePlayerTimelineEvent[] {
+    if (!replayData) return [];
 
-        events.push({
-            tick: throwTick,
-            type: meta.type,
-            label: meta.label,
-            color: meta.color,
-            title: `Threw ${getNadeTypeName(nade.nadeType)} at ${formatRoundEventTime(throwTick, round)}`,
-        });
+    const events: BasePlayerTimelineEvent[] = buildKillDeathTimelineEvents(round, steamId);
+
+    if (includeUtilities) {
+        for (const nade of replayData.nades ?? []) {
+            if (nade.throwerSteamId !== steamId) continue;
+            const event = buildNadeTimelineEvent(nade, round);
+            if (event) events.push(event);
+        }
     }
 
+    return events;
+}
+
+function buildAllUtilityRoundEvents(round: RoundData): BasePlayerTimelineEvent[] {
+    if (!replayData) return [];
+
+    const events: BasePlayerTimelineEvent[] = [];
+    for (const nade of replayData.nades ?? []) {
+        const event = buildNadeTimelineEvent(nade, round);
+        if (event) events.push(event);
+    }
     return events;
 }
 
@@ -641,6 +709,7 @@ function buildBombRoundEvents(round: RoundData): BasePlayerTimelineEvent[] {
             label: 'BP',
             color: TEAM_T_COLOR,
             title: `Bomb planted${site} at ${formatRoundEventTime(plantTick, round)}`,
+            playerSteamId: planted?.playerSteamId || plantBegin?.playerSteamId || undefined,
         });
     }
 
@@ -663,6 +732,7 @@ function buildBombRoundEvents(round: RoundData): BasePlayerTimelineEvent[] {
             label: 'BD',
             color: TEAM_CT_COLOR,
             title: `Bomb defused at ${formatRoundEventTime(tick, round)}`,
+            playerSteamId: defused?.playerSteamId || undefined,
         });
     }
 
@@ -671,7 +741,10 @@ function buildBombRoundEvents(round: RoundData): BasePlayerTimelineEvent[] {
 
 function buildTimelineEvents(selectedSteamId: bigint | null, round: RoundData): PlayerTimelineEvent[] {
     const events = buildBombRoundEvents(round);
-    if (selectedSteamId !== null) {
+    if (showAllTimelineUtilities) {
+        events.push(...buildKillDeathTimelineEvents(round));
+        events.push(...buildAllUtilityRoundEvents(round));
+    } else if (selectedSteamId !== null) {
         events.push(...buildSelectedPlayerBaseEvents(selectedSteamId, round));
     }
     return stackTimelineEvents(events, round);
@@ -679,7 +752,13 @@ function buildTimelineEvents(selectedSteamId: bigint | null, round: RoundData): 
 
 function getTimelineEventsKey(round: RoundData | null, selectedSteamId: bigint | null): string {
     if (!round) return 'no-round';
-    return `${round.roundNumber}:${round.startTick}:${getRoundDisplayEndTick(replayData, round)}:${selectedSteamId?.toString() ?? 'none'}`;
+    const utilityFilterKey = TIMELINE_UTILITY_OPTIONS
+        .map(option => `${option.key}:${enabledTimelineUtilities[option.key] ? 1 : 0}`)
+        .join(',');
+    const combatFilterKey = TIMELINE_COMBAT_EVENT_OPTIONS
+        .map(option => `${option.key}:${enabledTimelineCombatEvents[option.key] ? 1 : 0}`)
+        .join(',');
+    return `${round.roundNumber}:${round.startTick}:${getRoundDisplayEndTick(replayData, round)}:${selectedSteamId?.toString() ?? 'none'}:${showAllTimelineUtilities ? 'all-utils' : 'selected'}:${utilityFilterKey}:${combatFilterKey}`;
 }
 
 function updateTimelineEvents(round: RoundData | null): void {
@@ -884,6 +963,37 @@ function setNoiseSourceEnabled(source: NoiseSourceKey, enabled: boolean): void {
     };
 }
 
+function setTimelineUtilityEnabled(source: TimelineUtilityKey, enabled: boolean): void {
+    enabledTimelineUtilities = {
+        ...enabledTimelineUtilities,
+        [source]: enabled,
+    };
+    timelineEventsKey = '';
+}
+
+function setTimelineCombatEventEnabled(eventType: TimelineCombatEventKey, enabled: boolean): void {
+    enabledTimelineCombatEvents = {
+        ...enabledTimelineCombatEvents,
+        [eventType]: enabled,
+    };
+    timelineEventsKey = '';
+}
+
+function handleTimelineEventClick(event: PlayerTimelineEvent): void {
+    const eventPlayerSteamId = event.playerSteamId;
+    if (
+        eventPlayerSteamId &&
+        eventPlayerSteamId !== 0n &&
+        (isTimelineUtilityType(event.type) || event.type === 'kill' || event.type === 'death' || event.type === 'bomb_planted' || event.type === 'bomb_defused')
+    ) {
+        selectedPlayerSteamId = eventPlayerSteamId;
+        timelineEventsKey = '';
+        updateReplayViewportTransform();
+    }
+
+    seekToPlayerEvent(event.tick);
+}
+
 function setMapVariant(variant: MapVariant): void {
     if (variant === mapVariant) return;
     if (variant === 'lower' && !hasLowerMapVariant) return;
@@ -1052,7 +1162,7 @@ $: {
 }
 
 $: {
-    void replayData, displayTick, playablePlayers, selectedPlayerSteamId;
+    void replayData, displayTick, playablePlayers, selectedPlayerSteamId, showAllTimelineUtilities, enabledTimelineUtilities, enabledTimelineCombatEvents;
     const round = getCurrentRoundData(displayTick) ?? getPlaybackStartRound(displayTick);
     const rosterEntries = buildRosterEntries(round, displayTick);
     ctRoster = rosterEntries.filter(entry => entry.side === TEAM_CT);
@@ -1594,7 +1704,7 @@ onMount(() => {
                     class="event-marker"
                     style="left: {playerEvent.leftPct}%; top: {playerEvent.lane * 18}px; --marker-color: {playerEvent.color}; color: {playerEvent.type === 'death' ? '#ffffff' : '#0f172a'};"
                     title={playerEvent.title}
-                    onclick={() => seekToPlayerEvent(playerEvent.tick)}
+                    onclick={() => handleTimelineEventClick(playerEvent)}
                     ondblclick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
@@ -1685,7 +1795,7 @@ onMount(() => {
 
     <div class="sight-controls">
         <section class="control-section">
-            <div class="controls-heading">Sight Cone Controls</div>
+            <div class="controls-heading">Sight</div>
             <label class="checkbox-control">
                 <input type="checkbox" bind:checked={showSightCone} />
                 <span>Show Sight Cone</span>
@@ -1780,6 +1890,33 @@ onMount(() => {
                         onchange={(event) => setNoiseSourceEnabled(source.key, (event.currentTarget as HTMLInputElement).checked)}
                     />
                     <span>{source.label}</span>
+                </label>
+            {/each}
+        </section>
+        <section class="control-section">
+            <div class="controls-heading">Timeline</div>
+            <label class="checkbox-control">
+                <input type="checkbox" bind:checked={showAllTimelineUtilities} />
+                <span>Show all Utilities</span>
+            </label>
+            {#each TIMELINE_COMBAT_EVENT_OPTIONS as combatEvent (combatEvent.key)}
+                <label class="checkbox-control">
+                    <input
+                        type="checkbox"
+                        checked={enabledTimelineCombatEvents[combatEvent.key]}
+                        onchange={(event) => setTimelineCombatEventEnabled(combatEvent.key, (event.currentTarget as HTMLInputElement).checked)}
+                    />
+                    <span>{combatEvent.label}</span>
+                </label>
+            {/each}
+            {#each TIMELINE_UTILITY_OPTIONS as utility (utility.key)}
+                <label class="checkbox-control">
+                    <input
+                        type="checkbox"
+                        checked={enabledTimelineUtilities[utility.key]}
+                        onchange={(event) => setTimelineUtilityEnabled(utility.key, (event.currentTarget as HTMLInputElement).checked)}
+                    />
+                    <span>{utility.label}</span>
                 </label>
             {/each}
         </section>
