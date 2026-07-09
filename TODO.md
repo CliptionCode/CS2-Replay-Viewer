@@ -20,6 +20,8 @@ These items were requested for implementation and are now complete in the curren
 - Added alive/total counts to team roster headers, e.g. `CT (3/5)` and `T (1/5)`.
 - Added parser-backed bomb lifecycle events and centered bomb/defuse status labels.
 - Added `BP`, `BE`, and `BD` timeline markers for bomb plant, explosion, and defuse outcomes.
+- Added active `Planting Bomb Xs`, `Defusing Bomb Xs`, and planted countdown `Bomb has been Planted XXs` labels.
+- Rebuilt the Tauri sidecar parser binary so newly parsed demos include plant-begin/abort events.
 
 ## Notes
 

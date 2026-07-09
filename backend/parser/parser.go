@@ -196,6 +196,12 @@ func ParseFile(path string) (*ReplayData, error) {
 	p.RegisterEventHandler(func(e events.PlayerSound) {
 		recorder.recordPlayerSound(e, p)
 	})
+	p.RegisterEventHandler(func(e events.BombPlantBegin) {
+		recorder.recordBombPlantBegin(e, p)
+	})
+	p.RegisterEventHandler(func(e events.BombPlantAborted) {
+		recorder.recordBombPlantAborted(e, p)
+	})
 	p.RegisterEventHandler(func(e events.BombPlanted) {
 		recorder.recordBombPlanted(e, p)
 	})
@@ -665,6 +671,14 @@ func (r *frameRecorder) recordPlayerSound(e events.PlayerSound, p demoinfocs.Par
 
 func (r *frameRecorder) recordBombPlanted(e events.BombPlanted, p demoinfocs.Parser) {
 	r.recordBombEvent("planted", e.Player, e.Site, false, p)
+}
+
+func (r *frameRecorder) recordBombPlantBegin(e events.BombPlantBegin, p demoinfocs.Parser) {
+	r.recordBombEvent("plant_begin", e.Player, e.Site, false, p)
+}
+
+func (r *frameRecorder) recordBombPlantAborted(e events.BombPlantAborted, p demoinfocs.Parser) {
+	r.recordBombEvent("plant_aborted", e.Player, events.BomsiteUnknown, false, p)
 }
 
 func (r *frameRecorder) recordBombExploded(e events.BombExplode, p demoinfocs.Parser) {

@@ -90,6 +90,7 @@ const DEFAULT_LINE_OF_SIGHT_LENGTH = 160;
 const DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT = 250;
 const TOAST_DURATION_MS = 2600;
 const DEFAULT_BOMB_TIME_SECONDS = 40;
+const DEFAULT_PLANT_SECONDS = 3.2;
 const DEFUSE_SECONDS_WITH_KIT = 5;
 const DEFUSE_SECONDS_WITHOUT_KIT = 10;
 const EVENT_STACK_WINDOW_TICKS = 128;
@@ -485,18 +486,23 @@ function getBombEventForRound(round: RoundData, eventType: string): BombEvent | 
 
 function buildBombRoundEvents(round: RoundData): BasePlayerTimelineEvent[] {
     const events: BasePlayerTimelineEvent[] = [];
-    const planted = getBombEventForRound(round, 'planted');
-    const exploded = getBombEventForRound(round, 'exploded');
-    const defused = getBombEventForRound(round, 'defused');
+    const bombEvents = getBombEventsForRound(round);
+    const plantBegin = bombEvents.find(event => event.eventType === 'plant_begin') ?? null;
+    const planted = bombEvents.find(event => event.eventType === 'planted') ?? null;
+    const exploded = bombEvents.find(event => event.eventType === 'exploded') ?? null;
+    const defused = bombEvents.find(event => event.eventType === 'defused') ?? null;
+    const fallbackPlantTick = getFallbackBombPlantTick(round, bombEvents);
 
-    if (planted) {
-        const site = planted.site ? ` ${planted.site}` : '';
+    if (planted || fallbackPlantTick > 0) {
+        const plantTick = planted?.tick ?? fallbackPlantTick;
+        const siteName = planted?.site || plantBegin?.site || '';
+        const site = siteName ? ` ${siteName}` : '';
         events.push({
-            tick: planted.tick,
+            tick: plantTick,
             type: 'bomb_planted',
             label: 'BP',
             color: TEAM_T_COLOR,
-            title: `Bomb planted${site} at ${formatRoundEventTime(planted.tick, round)}`,
+            title: `Bomb planted${site} at ${formatRoundEventTime(plantTick, round)}`,
         });
     }
 
@@ -554,10 +560,20 @@ function getBombTimeSeconds(): number {
     return replayData?.header?.bombTimeSeconds || DEFAULT_BOMB_TIME_SECONDS;
 }
 
-function getBombCountdownEndTick(plant: BombEvent, round: RoundData): number {
+function getBombTimeTicks(): number {
+    return Math.round(getBombTimeSeconds() * getTickRate());
+}
+
+function getBombCountdownEndTick(plantTick: number, round: RoundData): number {
     const exploded = getBombEventForRound(round, 'exploded');
-    if (exploded && exploded.tick >= plant.tick) return exploded.tick;
-    return plant.tick + Math.round(getBombTimeSeconds() * getTickRate());
+    if (exploded && exploded.tick >= plantTick) return exploded.tick;
+    return plantTick + getBombTimeTicks();
+}
+
+function getPlantEndTick(plantBegin: BombEvent, events: BombEvent[]): number {
+    const completedPlant = getFirstBombEventAfter(events, 'planted', plantBegin.tick);
+    if (completedPlant) return completedPlant.tick;
+    return plantBegin.tick + Math.round(DEFAULT_PLANT_SECONDS * getTickRate());
 }
 
 function getLastBombEventBefore(events: BombEvent[], eventType: string, tick: number): BombEvent | null {
@@ -570,6 +586,28 @@ function getLastBombEventBefore(events: BombEvent[], eventType: string, tick: nu
 
 function getFirstBombEventAfter(events: BombEvent[], eventType: string, tick: number): BombEvent | null {
     return events.find(event => event.tick >= tick && event.eventType === eventType) ?? null;
+}
+
+function getFallbackBombPlantTick(round: RoundData, events: BombEvent[]): number {
+    const plantBegin = events.find(event => event.eventType === 'plant_begin') ?? null;
+    const planted = events.find(event => event.eventType === 'planted') ?? null;
+    if (planted) return planted.tick;
+
+    const exploded = events.find(event => event.eventType === 'exploded') ?? null;
+    const defused = events.find(event => event.eventType === 'defused') ?? null;
+    const hasBombObjectiveResult = Boolean(
+        exploded ||
+        defused ||
+        round.winReason === 'bomb_detonated' ||
+        round.winReason === 'bomb_defused'
+    );
+    if (!hasBombObjectiveResult) return 0;
+
+    if (plantBegin) return getPlantEndTick(plantBegin, events);
+
+    const objectiveEndTick = exploded?.tick ?? defused?.tick ?? round.endTick;
+    const activeStart = getRoundActiveStart(round);
+    return Math.max(activeStart, objectiveEndTick - getBombTimeTicks());
 }
 
 function hasBombEventBetween(events: BombEvent[], eventTypes: string[], startTick: number, endTick: number): boolean {
@@ -585,9 +623,22 @@ function isPlayerAliveAtTick(steamId: bigint, tick: number): boolean {
     return frame?.isAlive ?? false;
 }
 
-function getActiveDefuseStatus(events: BombEvent[], plant: BombEvent, tick: number): string {
+function getActivePlantingStatus(events: BombEvent[], tick: number): string {
+    const plantBegin = getLastBombEventBefore(events, 'plant_begin', tick);
+    if (!plantBegin) return '';
+    if (hasBombEventBetween(events, ['plant_aborted', 'planted'], plantBegin.tick, tick)) return '';
+    if (plantBegin.playerSteamId !== 0n && !isPlayerAliveAtTick(plantBegin.playerSteamId, tick)) return '';
+
+    const plantEndTick = getPlantEndTick(plantBegin, events);
+    if (tick >= plantEndTick) return '';
+
+    const secondsLeft = Math.max(0, Math.ceil((plantEndTick - tick) / getTickRate()));
+    return `Planting Bomb ${secondsLeft}s`;
+}
+
+function getActiveDefuseStatus(events: BombEvent[], plantTick: number, tick: number): string {
     const defuseStart = getLastBombEventBefore(events, 'defuse_start', tick);
-    if (!defuseStart || defuseStart.tick < plant.tick) return '';
+    if (!defuseStart || defuseStart.tick < plantTick) return '';
     if (hasBombEventBetween(events, ['defuse_aborted', 'defused', 'exploded'], defuseStart.tick, tick)) return '';
     if (defuseStart.playerSteamId !== 0n && !isPlayerAliveAtTick(defuseStart.playerSteamId, tick)) return '';
 
@@ -596,7 +647,7 @@ function getActiveDefuseStatus(events: BombEvent[], plant: BombEvent, tick: numb
     if (tick >= defuseEndTick) return '';
 
     const secondsLeft = Math.max(0, Math.ceil((defuseEndTick - tick) / getTickRate()));
-    return `Defusing ${secondsLeft}s`;
+    return `Defusing Bomb ${secondsLeft}s`;
 }
 
 function getRoundEndBombStatus(round: RoundData, tick: number): BombStatus | null {
@@ -630,10 +681,22 @@ function getBombStatus(tick: number): BombStatus {
     const events = getBombEventsForRound(round);
     const roundEndStatus = getRoundEndBombStatus(round, tick);
     const plant = getLastBombEventBefore(events, 'planted', tick);
-    if (!plant) return roundEndStatus ?? emptyBombStatus();
+    const fallbackPlantTick = getFallbackBombPlantTick(round, events);
+    const plantTick = plant?.tick ?? (fallbackPlantTick > 0 && tick >= fallbackPlantTick ? fallbackPlantTick : 0);
+    const plantingText = getActivePlantingStatus(events, tick);
+    if (!plantTick) {
+        return plantingText
+            ? {
+                bombText: plantingText,
+                bombClass: 'bomb-label-t',
+                defuseText: '',
+                defuseClass: '',
+            }
+            : roundEndStatus ?? emptyBombStatus();
+    }
 
     const exploded = getLastBombEventBefore(events, 'exploded', tick);
-    if (exploded && exploded.tick >= plant.tick) {
+    if (exploded && exploded.tick >= plantTick) {
         return {
             bombText: 'Bomb exploded, Terrorists Win!',
             bombClass: 'bomb-label-t',
@@ -644,7 +707,7 @@ function getBombStatus(tick: number): BombStatus {
     if (roundEndStatus?.bombText) return roundEndStatus;
 
     const defused = getLastBombEventBefore(events, 'defused', tick);
-    if (defused && defused.tick >= plant.tick) {
+    if (defused && defused.tick >= plantTick) {
         return {
             bombText: '',
             bombClass: '',
@@ -654,15 +717,12 @@ function getBombStatus(tick: number): BombStatus {
     }
     if (roundEndStatus?.defuseText) return roundEndStatus;
 
-    const countdownEndTick = getBombCountdownEndTick(plant, round);
+    const countdownEndTick = getBombCountdownEndTick(plantTick, round);
     const secondsLeft = Math.max(0, Math.ceil((countdownEndTick - tick) / getTickRate()));
-    const upcomingDefuse = getFirstBombEventAfter(events, 'defused', tick);
-    const defuseText = upcomingDefuse && upcomingDefuse.tick < countdownEndTick
-        ? getActiveDefuseStatus(events, plant, tick)
-        : getActiveDefuseStatus(events, plant, tick);
+    const defuseText = getActiveDefuseStatus(events, plantTick, tick);
 
     return {
-        bombText: `Bomb Planted ${secondsLeft}s`,
+        bombText: `Bomb has been Planted ${secondsLeft}s`,
         bombClass: 'bomb-label-t',
         defuseText,
         defuseClass: defuseText ? 'bomb-label-ct' : '',
