@@ -26,8 +26,10 @@ import RoundNav from '$lib/components/RoundNav.svelte';
 import { DEFAULT_RADAR_MAP, getRadarInfo } from '$lib/maps/radar-info';
 import {
     getPlaybackStartRound as getReplayPlaybackStartRound,
+    getRoundEndDelayTicks,
     getRoundDisplayEndTick,
     getRoundForTick as getReplayRoundForTick,
+    getRoundTerminalTick,
 } from '$lib/replay/rounds';
 import {
     getPlaybackTick,
@@ -141,6 +143,7 @@ let ctAliveCount = 0;
 let tAliveCount = 0;
 let timelineEvents: PlayerTimelineEvent[] = [];
 let timelineEventsKey = '';
+let matchScore: MatchScore | null = null;
 let toastMessage = '';
 let toastTimeout: ReturnType<typeof setTimeout> | null = null;
 let bombStatus: BombStatus = { bombText: '', bombClass: '', defuseText: '', defuseClass: '' };
@@ -177,6 +180,17 @@ type BombStatus = {
     defuseClass: string;
 };
 
+type MatchScoreSegment = {
+    name: string;
+    score: number;
+    side: number;
+};
+
+type MatchScore = {
+    left: MatchScoreSegment;
+    right: MatchScoreSegment;
+};
+
 function resetLoadedReplayState(clearReplayData = false): void {
     setPlaying(false);
     if (rafId) {
@@ -199,6 +213,7 @@ function resetLoadedReplayState(clearReplayData = false): void {
     tAliveCount = 0;
     timelineEvents = [];
     timelineEventsKey = '';
+    matchScore = null;
     bombStatus = emptyBombStatus();
     activeStart = 0;
     roundProgressPct = 0;
@@ -215,6 +230,7 @@ function applyLoadedReplay(data: ReplayData): void {
     mapVariant = 'default';
     timelineEvents = [];
     timelineEventsKey = '';
+    matchScore = null;
     bombStatus = emptyBombStatus();
     setPlaying(false);
     setTick(data.rounds[0] ? getRoundActiveStart(data.rounds[0]) : 0);
@@ -294,6 +310,77 @@ function getPlayerTeamForRound(player: PlayerInfo, round: RoundData | null): num
     }
 
     return player.team;
+}
+
+function getOppositeSide(side: number): number {
+    if (side === TEAM_T) return TEAM_CT;
+    if (side === TEAM_CT) return TEAM_T;
+    return 0;
+}
+
+function getSideForInitialSide(initialSide: number, round: RoundData): number {
+    if (initialSide !== TEAM_T && initialSide !== TEAM_CT) return 0;
+
+    const halfSize = round.roundNumber <= 24 ? 12 : 3;
+    const halfIndex = Math.floor((round.roundNumber - 1) / halfSize);
+    return halfIndex % 2 === 0 ? initialSide : getOppositeSide(initialSide);
+}
+
+function getRepresentativeNameForInitialSide(firstRound: RoundData, initialSide: number): string {
+    const player = playablePlayers.find(candidate =>
+        getPlayerTeamForRound(candidate, firstRound) === initialSide
+    );
+    return player?.name || (initialSide === TEAM_T ? 'T' : 'CT');
+}
+
+function getRoundScoreTick(round: RoundData): number {
+    const terminalTick = getRoundTerminalTick(replayData, round);
+    if (terminalTick !== null) return terminalTick;
+
+    const delayedEndFallback = round.endTick - getRoundEndDelayTicks(replayData);
+    return Math.max(round.startTick, delayedEndFallback);
+}
+
+function buildMatchScore(tick: number, currentRound: RoundData | null): MatchScore | null {
+    const rounds = replayData?.rounds ?? [];
+    if (rounds.length === 0 || playablePlayers.length === 0) return null;
+
+    const firstRound = rounds[0];
+    const sideRound = currentRound ?? firstRound;
+    const initialTName = getRepresentativeNameForInitialSide(firstRound, TEAM_T);
+    const initialCTName = getRepresentativeNameForInitialSide(firstRound, TEAM_CT);
+    let initialTScore = 0;
+    let initialCTScore = 0;
+
+    for (const round of rounds) {
+        if (round.winnerTeam !== TEAM_T && round.winnerTeam !== TEAM_CT) continue;
+        if (tick < getRoundScoreTick(round)) continue;
+
+        if (round.winnerTeam === getSideForInitialSide(TEAM_T, round)) {
+            initialTScore++;
+        } else if (round.winnerTeam === getSideForInitialSide(TEAM_CT, round)) {
+            initialCTScore++;
+        }
+    }
+
+    return {
+        left: {
+            name: initialTName,
+            score: initialTScore,
+            side: getSideForInitialSide(TEAM_T, sideRound),
+        },
+        right: {
+            name: initialCTName,
+            score: initialCTScore,
+            side: getSideForInitialSide(TEAM_CT, sideRound),
+        },
+    };
+}
+
+function getMatchScoreSideClass(side: number): string {
+    if (side === TEAM_CT) return 'side-ct';
+    if (side === TEAM_T) return 'side-t';
+    return 'side-neutral';
 }
 
 function getTeamColor(team: number): string {
@@ -974,6 +1061,7 @@ $: {
     tAliveCount = tRoster.filter(entry => entry.isAlive).length;
     updateTimelineEvents(round);
     bombStatus = getBombStatus(displayTick);
+    matchScore = buildMatchScore(displayTick, round);
 }
 
 $: {
@@ -1187,7 +1275,7 @@ onMount(() => {
 
 .bomb-status {
     position: absolute;
-    top: 96px;
+    top: 132px;
     left: 50%;
     display: flex;
     flex-direction: column;
@@ -1196,6 +1284,44 @@ onMount(() => {
     transform: translateX(-50%);
     z-index: 112;
     pointer-events: none;
+}
+
+.match-score-label {
+    position: absolute;
+    top: 96px;
+    left: 50%;
+    z-index: 112;
+    max-width: min(560px, calc(100vw - 40px));
+    padding: 7px 14px;
+    transform: translateX(-50%);
+    border: 1px solid rgba(148, 163, 184, 0.34);
+    border-radius: 5px;
+    background: rgba(15, 23, 42, 0.88);
+    color: #e2e8f0;
+    font-size: 13px;
+    font-weight: 800;
+    overflow: hidden;
+    pointer-events: none;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.match-score-team.side-ct {
+    color: #93c5fd;
+}
+
+.match-score-team.side-t {
+    color: #fdba74;
+}
+
+.match-score-team.side-neutral {
+    color: #e2e8f0;
+}
+
+.match-score-separator {
+    color: #94a3b8;
+    margin: 0 8px;
 }
 
 .bomb-label {
@@ -1480,6 +1606,18 @@ onMount(() => {
             {/each}
         </div>
     </div>
+
+    {#if matchScore}
+        <div class="match-score-label">
+            <span class="match-score-team {getMatchScoreSideClass(matchScore.left.side)}">
+                Team {matchScore.left.name} ({matchScore.left.score})
+            </span>
+            <span class="match-score-separator">vs</span>
+            <span class="match-score-team {getMatchScoreSideClass(matchScore.right.side)}">
+                Team {matchScore.right.name} ({matchScore.right.score})
+            </span>
+        </div>
+    {/if}
 
     {#if bombStatus.bombText || bombStatus.defuseText}
         <div class="bomb-status">

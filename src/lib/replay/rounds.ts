@@ -48,7 +48,7 @@ function getEliminationTerminalTick(replayData: ReplayData | null | undefined, r
     return kill?.tick ?? round.endTick;
 }
 
-function getRoundTerminalTick(replayData: ReplayData | null | undefined, round: RoundData): number | null {
+export function getRoundTerminalTick(replayData: ReplayData | null | undefined, round: RoundData): number | null {
     return getBombTerminalTick(replayData, round) ?? getEliminationTerminalTick(replayData, round);
 }
 
