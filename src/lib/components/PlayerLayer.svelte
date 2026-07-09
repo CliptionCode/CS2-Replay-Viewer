@@ -46,6 +46,7 @@ const TEAM_CT = 3;
 const HIGHLIGHT_COLOR = '#22c55e';
 const RUNNING_NOISE_HOLD_TICKS = 28;
 const RUNNING_NOISE_FADE_TICKS = 14;
+const FLASH_CIRCLE_ALPHA_BOOST = 0.2;
 
 function lerp(start: number, end: number, alpha: number): number {
     return start + (end - start) * alpha;
@@ -418,7 +419,7 @@ function drawFlashCircle(
     const totalTicks = Math.max(1, flash.endTick - flash.tick);
     const remainingRatio = Math.max(0, Math.min(1, (flash.endTick - tick) / totalTicks));
     const strength = Math.max(0, Math.min(1, flash.durationSeconds / 5));
-    const alpha = (0.12 + strength * 0.58) * remainingRatio;
+    const alpha = Math.min(1, (0.12 + strength * 0.58 + FLASH_CIRCLE_ALPHA_BOOST) * remainingRatio);
     if (alpha <= 0) return;
 
     ctx.save();
