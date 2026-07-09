@@ -54,6 +54,7 @@ type RoundData struct {
 	WinReason         string
 	KillCount         int
 	FreezetimeEndTick int
+	KnifeOnly         bool
 }
 
 type KillEvent struct {
@@ -193,8 +194,17 @@ func ParseFile(path string) (*ReplayData, error) {
 	p.RegisterEventHandler(func(e events.PlayerFlashed) {
 		recorder.recordPlayerFlashed(e, p)
 	})
+	p.RegisterEventHandler(func(e events.Footstep) {
+		recorder.recordFootstep(e, p)
+	})
+	p.RegisterEventHandler(func(e events.PlayerJump) {
+		recorder.recordPlayerJump(e, p)
+	})
 	p.RegisterEventHandler(func(e events.PlayerSound) {
 		recorder.recordPlayerSound(e, p)
+	})
+	p.RegisterEventHandler(func(e events.WeaponFire) {
+		recorder.recordWeaponFire(e, p)
 	})
 	p.RegisterEventHandler(func(e events.BombPlantBegin) {
 		recorder.recordBombPlantBegin(e, p)
@@ -218,7 +228,7 @@ func ParseFile(path string) (*ReplayData, error) {
 		recorder.recordBombDefused(e, p)
 	})
 	p.RegisterEventHandler(func(e events.PlayerHurt) {
-		recorder.recordPlayerHurt(e)
+		recorder.recordPlayerHurt(e, p)
 	})
 	p.RegisterEventHandler(func(e events.FrameDone) {
 		recorder.recordFrameDone(p)
@@ -270,6 +280,8 @@ type frameRecorder struct {
 
 	playerRoundContributions map[uint64]int
 	playerTotalRounds        map[uint64]int
+	firstRoundKnifeOnlySeen  bool
+	firstRoundNonKnifeSeen   bool
 }
 
 type playerStatTracker struct {
@@ -365,6 +377,9 @@ func (r *frameRecorder) recordKill(e events.Kill, p demoinfocs.Parser) {
 
 	if e.Weapon != nil {
 		kill.Weapon = e.Weapon.String()
+		if r.isRecordingInitialRound() && e.Weapon.Type != common.EqKnife && e.Weapon.Type != common.EqWorld {
+			r.markInitialRoundNonKnife()
+		}
 	}
 
 	r.kills = append(r.kills, kill)
@@ -418,6 +433,11 @@ func (r *frameRecorder) recordRoundStart(p demoinfocs.Parser) {
 		RoundNumber: roundNum,
 		StartTick:   tick,
 	}
+	if roundNum == 1 {
+		r.firstRoundKnifeOnlySeen = false
+		r.firstRoundNonKnifeSeen = false
+		r.observeInitialRoundInventory(p)
+	}
 	if _, ok := r.roundStats[roundNum]; !ok {
 		r.roundStats[roundNum] = &roundStats{
 			kills:   make(map[uint64]bool),
@@ -436,9 +456,16 @@ func (r *frameRecorder) recordRoundEnd(e events.RoundEnd, p demoinfocs.Parser) {
 	if tick > r.maxTick {
 		r.maxTick = tick
 	}
-	r.currentRound.EndTick = tick
+	r.observeInitialRoundInventory(p)
+	if r.isRecordingInitialRound() {
+		r.currentRound.KnifeOnly = r.firstRoundKnifeOnlySeen && !r.firstRoundNonKnifeSeen
+	}
+	r.currentRound.EndTick = tick + secondsToTicks(7, p)
 	r.currentRound.WinnerTeam = int(e.Winner)
 	r.currentRound.WinReason = roundEndReasonString(e.Reason)
+	if r.currentRound.EndTick > r.maxTick {
+		r.maxTick = r.currentRound.EndTick
+	}
 	r.rounds = append(r.rounds, *r.currentRound)
 
 	// Compute KAST contributions for this round
@@ -454,17 +481,19 @@ func (r *frameRecorder) recordRoundEnd(e events.RoundEnd, p demoinfocs.Parser) {
 		r.roundStats[roundNum] = stats
 	}
 
-	// For every player who participated, check contribution
-	for _, player := range p.GameState().Participants().All() {
-		if player == nil || player.SteamID64 == 0 {
-			continue
-		}
-		steamID := player.SteamID64
-		r.playerTotalRounds[steamID]++
+	if !r.currentRound.KnifeOnly {
+		// For every player who participated, check contribution
+		for _, player := range p.GameState().Participants().All() {
+			if player == nil || player.SteamID64 == 0 {
+				continue
+			}
+			steamID := player.SteamID64
+			r.playerTotalRounds[steamID]++
 
-		contributed := stats.kills[steamID] || stats.assists[steamID] || stats.trades[steamID] || !stats.deaths[steamID]
-		if contributed {
-			r.playerRoundContributions[steamID]++
+			contributed := stats.kills[steamID] || stats.assists[steamID] || stats.trades[steamID] || !stats.deaths[steamID]
+			if contributed {
+				r.playerRoundContributions[steamID]++
+			}
 		}
 	}
 
@@ -474,6 +503,7 @@ func (r *frameRecorder) recordRoundEnd(e events.RoundEnd, p demoinfocs.Parser) {
 func (r *frameRecorder) recordRoundFreezetimeEnd(p demoinfocs.Parser) {
 	if r.currentRound != nil {
 		r.currentRound.FreezetimeEndTick = p.CurrentFrame()
+		r.observeInitialRoundInventory(p)
 	}
 }
 
@@ -481,6 +511,9 @@ func (r *frameRecorder) recordNadeDestroyed(e events.GrenadeProjectileDestroy, p
 	proj := e.Projectile
 	if proj == nil || proj.WeaponInstance == nil {
 		return
+	}
+	if r.isRecordingInitialRound() {
+		r.markInitialRoundNonKnife()
 	}
 
 	nadeType := nadeTypeString(proj.WeaponInstance.Type)
@@ -641,31 +674,98 @@ func (r *frameRecorder) recordPlayerFlashed(e events.PlayerFlashed, p demoinfocs
 	})
 }
 
+func (r *frameRecorder) recordFootstep(e events.Footstep, p demoinfocs.Parser) {
+	if e.Player == nil || !e.Player.IsAlive() {
+		return
+	}
+
+	tick := p.CurrentFrame()
+	pos := e.Player.Position()
+	r.recordNoise(tick, secondsToTicks(0.28, p), e.Player.SteamID64, pos.X, pos.Y, pos.Z, 450, "running")
+}
+
+func (r *frameRecorder) recordPlayerJump(e events.PlayerJump, p demoinfocs.Parser) {
+	if e.Player == nil || !e.Player.IsAlive() {
+		return
+	}
+
+	tick := p.CurrentFrame()
+	pos := e.Player.Position()
+	r.recordNoise(tick, secondsToTicks(0.32, p), e.Player.SteamID64, pos.X, pos.Y, pos.Z, 520, "jump")
+}
+
 func (r *frameRecorder) recordPlayerSound(e events.PlayerSound, p demoinfocs.Parser) {
 	if e.Player == nil || !e.Player.IsAlive() || e.Radius <= 0 {
 		return
 	}
 
 	tick := p.CurrentFrame()
-	if tick > r.maxTick {
-		r.maxTick = tick
-	}
-
 	durationTicks := durationToTicks(e.Duration, p)
 	if durationTicks <= 0 {
 		durationTicks = 24
 	}
 
 	pos := e.Player.Position()
+	r.recordNoise(tick, durationTicks, e.Player.SteamID64, pos.X, pos.Y, pos.Z, e.Radius, "running")
+}
+
+func (r *frameRecorder) recordWeaponFire(e events.WeaponFire, p demoinfocs.Parser) {
+	if e.Weapon != nil && e.Weapon.Type != common.EqKnife && r.isRecordingInitialRound() {
+		r.markInitialRoundNonKnife()
+	}
+	if e.Shooter == nil || !e.Shooter.IsAlive() || e.Weapon == nil || !isShootingWeapon(e.Weapon) {
+		return
+	}
+
+	tick := p.CurrentFrame()
+	pos := e.Shooter.Position()
+	r.recordNoise(tick, secondsToTicks(0.35, p), e.Shooter.SteamID64, pos.X, pos.Y, pos.Z, 900, "shooting")
+}
+
+func (r *frameRecorder) recordNoise(tick int, durationTicks int, steamID uint64, x, y, z float64, radius int, noiseType string) {
+	if steamID == 0 || radius <= 0 {
+		return
+	}
+	if durationTicks <= 0 {
+		durationTicks = 1
+	}
+	if tick > r.maxTick {
+		r.maxTick = tick
+	}
+	endTick := tick + durationTicks
+	if endTick > r.maxTick {
+		r.maxTick = endTick
+	}
+
+	for i := len(r.noises) - 1; i >= 0; i-- {
+		existing := &r.noises[i]
+		if existing.Tick != tick || existing.SteamID != steamID || existing.NoiseType != noiseType {
+			if existing.Tick < tick {
+				break
+			}
+			continue
+		}
+		if float32(radius) > existing.Radius {
+			existing.Radius = float32(radius)
+		}
+		if endTick > existing.EndTick {
+			existing.EndTick = endTick
+		}
+		existing.X = float32(x)
+		existing.Y = float32(y)
+		existing.Z = float32(z)
+		return
+	}
+
 	r.noises = append(r.noises, NoiseEvent{
 		Tick:      tick,
-		EndTick:   tick + durationTicks,
-		SteamID:   e.Player.SteamID64,
-		X:         float32(pos.X),
-		Y:         float32(pos.Y),
-		Z:         float32(pos.Z),
-		Radius:    float32(e.Radius),
-		NoiseType: "sound",
+		EndTick:   endTick,
+		SteamID:   steamID,
+		X:         float32(x),
+		Y:         float32(y),
+		Z:         float32(z),
+		Radius:    float32(radius),
+		NoiseType: noiseType,
 	})
 }
 
@@ -702,6 +802,9 @@ func (r *frameRecorder) recordBombEvent(eventType string, player *common.Player,
 	if tick > r.maxTick {
 		r.maxTick = tick
 	}
+	if r.isRecordingInitialRound() {
+		r.markInitialRoundNonKnife()
+	}
 
 	playerSteamID := uint64(0)
 	if player != nil {
@@ -717,8 +820,15 @@ func (r *frameRecorder) recordBombEvent(eventType string, player *common.Player,
 	})
 }
 
-func (r *frameRecorder) recordPlayerHurt(e events.PlayerHurt) {
+func (r *frameRecorder) recordPlayerHurt(e events.PlayerHurt, p demoinfocs.Parser) {
+	if r.isRecordingInitialRound() && e.Weapon != nil && e.Weapon.Type != common.EqKnife && e.Weapon.Type != common.EqWorld {
+		r.markInitialRoundNonKnife()
+	}
 	if e.Attacker == nil || e.Player == nil {
+		if e.Attacker == nil && e.Player != nil && e.HealthDamage > 0 && isFallDamage(e) {
+			pos := e.Player.Position()
+			r.recordNoise(p.CurrentFrame(), secondsToTicks(0.38, p), e.Player.SteamID64, pos.X, pos.Y, pos.Z, 650, "falling")
+		}
 		return
 	}
 	if r.damageMap[e.Attacker.SteamID64] == nil {
@@ -737,6 +847,7 @@ func (r *frameRecorder) recordFrameDone(p demoinfocs.Parser) {
 	if tick > r.maxTick {
 		r.maxTick = tick
 	}
+	r.observeInitialRoundInventory(p)
 
 	for _, player := range p.GameState().Participants().All() {
 		if player == nil {
@@ -788,6 +899,127 @@ func durationToTicks(duration time.Duration, p demoinfocs.Parser) int {
 	return secondsToTicks(duration.Seconds(), p)
 }
 
+func isShootingWeapon(weapon *common.Equipment) bool {
+	if weapon == nil {
+		return false
+	}
+	switch weapon.Class() {
+	case common.EqClassPistols, common.EqClassSMG, common.EqClassHeavy, common.EqClassRifle:
+		return true
+	default:
+		return false
+	}
+}
+
+func isFallDamage(e events.PlayerHurt) bool {
+	if e.Weapon != nil && e.Weapon.Type == common.EqWorld {
+		return true
+	}
+	return e.WeaponString == "world" || e.WeaponString == "fall" || e.WeaponString == "falldamage"
+}
+
+func (r *frameRecorder) isRecordingInitialRound() bool {
+	return r.currentRound != nil && r.currentRound.RoundNumber == 1
+}
+
+func (r *frameRecorder) markInitialRoundNonKnife() {
+	if !r.isRecordingInitialRound() {
+		return
+	}
+	r.firstRoundNonKnifeSeen = true
+	r.currentRound.KnifeOnly = false
+}
+
+func (r *frameRecorder) observeInitialRoundInventory(p demoinfocs.Parser) {
+	if !r.isRecordingInitialRound() || r.firstRoundNonKnifeSeen {
+		return
+	}
+
+	knifeOnly, hasNonKnife := inspectKnifeOnlyRoundInventory(p)
+	if hasNonKnife {
+		r.markInitialRoundNonKnife()
+		return
+	}
+	if knifeOnly {
+		r.firstRoundKnifeOnlySeen = true
+		r.currentRound.KnifeOnly = true
+	}
+}
+
+func isKnifeRoundIgnoredEquipment(weapon *common.Equipment) bool {
+	if weapon == nil {
+		return true
+	}
+	switch weapon.Type {
+	case common.EqBomb, common.EqKevlar, common.EqHelmet, common.EqDefuseKit:
+		return true
+	default:
+		return false
+	}
+}
+
+func inspectKnifeOnlyRoundInventory(p demoinfocs.Parser) (knifeOnly bool, hasNonKnife bool) {
+	playersChecked := 0
+	for _, player := range p.GameState().Participants().All() {
+		if player == nil || player.SteamID64 == 0 || !player.IsAlive() {
+			continue
+		}
+		if player.Team != common.TeamTerrorists && player.Team != common.TeamCounterTerrorists {
+			continue
+		}
+
+		weapons := player.Weapons()
+		if len(weapons) == 0 {
+			continue
+		}
+
+		hasKnife := false
+		for _, weapon := range weapons {
+			if isKnifeRoundIgnoredEquipment(weapon) {
+				continue
+			}
+			if weapon.Type != common.EqKnife {
+				return false, true
+			}
+			hasKnife = true
+		}
+		if hasKnife {
+			playersChecked++
+		}
+	}
+
+	return playersChecked >= 2, false
+}
+
+func isKnifeOnlyRound(p demoinfocs.Parser) bool {
+	knifeOnly, hasNonKnife := inspectKnifeOnlyRoundInventory(p)
+	return knifeOnly && !hasNonKnife
+}
+
+func removeInitialKnifeRound(rounds []RoundData) []RoundData {
+	if len(rounds) == 0 || !rounds[0].KnifeOnly {
+		return rounds
+	}
+
+	filtered := make([]RoundData, 0, len(rounds)-1)
+	for i := 1; i < len(rounds); i++ {
+		round := rounds[i]
+		round.RoundNumber = len(filtered) + 1
+		filtered = append(filtered, round)
+	}
+	return filtered
+}
+
+func clampRoundEndTicks(rounds []RoundData) []RoundData {
+	for i := 0; i < len(rounds)-1; i++ {
+		maxEndTick := rounds[i+1].StartTick - 1
+		if maxEndTick > rounds[i].StartTick && rounds[i].EndTick > maxEndTick {
+			rounds[i].EndTick = maxEndTick
+		}
+	}
+	return rounds
+}
+
 func bombsiteString(site events.Bombsite) string {
 	switch site {
 	case events.BombsiteA:
@@ -820,7 +1052,7 @@ func (r *frameRecorder) buildReplayData(p demoinfocs.Parser) *ReplayData {
 	replay.Flashes = r.flashes
 	replay.Noises = r.noises
 	replay.Bombs = r.bombs
-	replay.Rounds = r.rounds
+	replay.Rounds = clampRoundEndTicks(removeInitialKnifeRound(r.rounds))
 	replay.PlayerFrames = r.playerFrames
 
 	replay.Map = MapData{

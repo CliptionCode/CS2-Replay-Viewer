@@ -3,11 +3,13 @@ import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
 import { worldToCanvas } from '$lib/canvas/transforms';
 import { getPlaybackTick, subscribePlaybackTick } from '$lib/playback-state';
+import { getRoundDisplayEndTick } from '$lib/replay/rounds';
 import type { ReplayData, KillEvent, MapData as MapMetadata } from '$lib/types/replay/replay_pb';
 
 export let replayData: ReplayData | null = null;
 export let mapMetadata: MapMetadata;
 export let isPlaying: boolean = false;
+export let feedLeftOffset = 16;
 export let onselectkillfeed: (kill: KillEvent) => void = () => {};
 
 let markerCanvas: HTMLCanvasElement | null = null;
@@ -29,8 +31,9 @@ let killFeedHitboxes: KillFeedHitbox[] = [];
 function getCurrentRoundRange(tick: number): { startTick: number; endTick: number } | null {
     if (!replayData?.rounds || replayData.rounds.length === 0) return null;
     for (const round of replayData.rounds) {
-        if (tick >= round.startTick && tick <= round.endTick) {
-            return { startTick: round.startTick, endTick: round.endTick };
+        const displayEndTick = getRoundDisplayEndTick(replayData, round);
+        if (tick >= round.startTick && tick <= displayEndTick) {
+            return { startTick: round.startTick, endTick: displayEndTick };
         }
     }
     return null;
@@ -124,7 +127,7 @@ function drawKillFeed(
         const killerColor = getTeamColor(getPlayerTeam(kill.killerSteamId, tick));
         const victimColor = getTeamColor(getPlayerTeam(kill.victimSteamId, tick));
 
-        let x = 16;
+        let x = feedLeftOffset;
         let rowWidth = 0;
         const segments = [
             { text: killerName, color: killerColor },
@@ -141,7 +144,7 @@ function drawKillFeed(
         }
         killFeedHitboxes.push({
             kill,
-            x: 12,
+            x: feedLeftOffset - 4,
             y: y - 18,
             width: rowWidth + 8,
             height: 22,

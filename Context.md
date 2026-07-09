@@ -3,6 +3,8 @@
 > Supplementary information for an AI implementing this project. Contains background knowledge, gotchas, library deep-dives, and reference material not covered in the implementation plan.
 
 > **IMPORTANT:** Whenever writing or modifying **Svelte** code, always load the `svelte-core-bestpractices` and `svelte-code-writer` skills first. Whenever writing or modifying **Rust** code, always load the `rust-best-practices` skill first.
+>
+> **Project workflow constraints:** Do not run `pnpm tauri dev`. Do not start or host a Vite dev server automatically; the user wants to run and verify manually. Do not run the Svelte autofixer.
 
 ---
 
@@ -158,6 +160,8 @@ Overtime: MR3 (first to 4 rounds), repeated as needed.
 **Event sequence for a normal round:** RoundStart (buy time begins), RoundFreezetimeEnd (freezetime ends = round actually begins), then kills/nades/damage events, then RoundEnd with a conclusion reason.
 
 The `RoundFreezetimeEnd` event is captured by the Go parser and stored as `RoundData.FreezetimeEndTick`. The viewer auto-skips to this tick when seeking to a round or pressing play during freezetime.
+
+Round display continues for a 7-second post-round window. New parser output stores `RoundData.EndTick` as the round-end event tick plus 7 seconds for every conclusion type, including elimination, bomb detonation, defuse, and timeout. The frontend also has a compatibility helper in `src/lib/replay/rounds.ts` that computes an effective display end for older parsed data and clamps it before the next round start.
 
 ### 4.2 Win Reasons (RoundConclusionReason)
 
@@ -319,7 +323,7 @@ The ReplayData protobuf schema contains a DemoHeader, repeated PlayerInfo, repea
 
 `FlashEvent`, `NoiseEvent`, and `BombEvent` are parser-backed event streams used by the current UI:
 - `FlashEvent`: flashed player, attacker, duration, and end tick. Re-parse demos to populate it.
-- `NoiseEvent`: sound origin, radius, identity, type, and end tick for noise-radius rendering.
+- `NoiseEvent`: sound origin, radius, identity, type, and end tick for noise-radius rendering. Current parser-backed types are `running`, `jump`, `shooting`, and `falling`; older empty, `sound`, or `footstep` values are treated as `running` by the frontend.
 - `BombEvent`: plant, explosion, defuse start/abort, and defuse completion events used by bomb labels and timeline markers.
 
 Protobuf uses **varint encoding for ints and float32 for positions**. Each `PlayerFrame` is ~40-50 bytes in protobuf. 1.5M frames × 45 bytes = ~68 MB for the frames alone.
@@ -433,7 +437,7 @@ Install commands: winget for Go, Rust, and Node.js LTS; then `npm i -g pnpm`, `g
 
 ### 8.3 Build & Run Commands
 
-Development: `pnpm tauri dev`. Build protobuf: `cd proto && buf generate && cd ..`. Build Go sidecar: `cd backend && go build -o ../src-tauri/binaries/cs2-parser-x86_64-pc-windows-msvc.exe . && cd ..`. Check Rust: `cd src-tauri && cargo check`. Check frontend: `pnpm check`. Production build: `pnpm tauri build`.
+Development server commands are intentionally not run by the agent. Build protobuf: `cd proto && buf generate && cd ..`. Build Go sidecar: `cd backend && go build -o ../src-tauri/binaries/cs2-parser-x86_64-pc-windows-msvc.exe . && cd ..`. Check Rust: `cd src-tauri && cargo check`. Check frontend without auto-fixing when needed.
 
 ---
 
@@ -508,7 +512,7 @@ The UI uses 4 stacked `<canvas>` elements, each rendered by its own Svelte compo
 
 ### 11.2.1 Round-Specific Player Trails
 
-Player ghost path trails are filtered to only show frames within the **current round** (the round containing `currentTick`). Implemented in `PlayerLayer.svelte` via `getCurrentRoundRange()` and `getPlayerTrail()`. The render loop calls `getPlayerTrail()` per player (instead of using the full `trails` map directly), which applies both the round-range filter and the existing `trailLength` cap (128 frames). If `currentTick` is not inside any round (warmup, between rounds), all frames up to `currentTick` are shown (no round filter applied). If `currentTick` is not inside any round (warmup, between rounds), all frames up to `currentTick` are shown (no round filter applied).
+Player ghost path trails are filtered to only show frames within the **current round** (the round containing `currentTick`). Implemented in `PlayerLayer.svelte` via `getCurrentRoundRange()` and the local trail cache. Round detection uses `src/lib/replay/rounds.ts`, so the current round includes the 7-second post-round display window. The render loop applies both the round-range filter and the existing `trailLength` cap (128 frames). If `currentTick` is not inside any round (warmup, between rounds), all frames up to `currentTick` are shown.
 
 ### 11.2.2 Nade Size Constant
 
@@ -522,7 +526,7 @@ Nade effect zones and projectile indicators were reduced to **1/4 of original si
 
 ### 11.2.3 Kill Feed Position
 
-The kill feed text overlay in `KillLayer.svelte` starts at `canvasSize.height - 80` (was `- 20`) to prevent overflow beyond the bottom edge of the viewport.
+The kill feed text overlay in `KillLayer.svelte` starts at `canvasSize.height - 80` (was `- 20`) to prevent overflow beyond the bottom edge of the viewport. It also accepts `feedLeftOffset`; `+page.svelte` passes `312` so the kill feed text and click hitboxes start to the right of the left controls panel. This prevents the controls panel from covering the kill feed after the sight/noise sections were added.
 
 ### 11.3 Per-Tick Frame Lookup (Optimized)
 
@@ -540,7 +544,7 @@ The per-player `trails` map is built once in `initializeTrails()` (called when `
 
 The playback loop is managed via a `requestAnimationFrame` loop in `+page.svelte`. Each frame computes the target tick from elapsed time multiplied by tick rate and playback speed. During playback, the computed tick is written to the non-reactive module-level clock in `src/lib/playback-state.ts` instead of assigning a Svelte prop/state value every tick. On play, if the current tick is inside a round's freezetime, it jumps to the active start (post-freezetime) immediately.
 
-**Per-round playback cap:** The loop stops at the current round's end tick, so playback doesn't bleed into the next round. If no round is active, it falls back to the total ticks from the demo header.
+**Per-round playback cap:** The loop stops at the current round's effective display end tick from `src/lib/replay/rounds.ts`, not directly at the raw `round.endTick`. This includes the 7-second post-round tail for bomb, timeout, defuse, and elimination conclusions, while still preventing playback from bleeding into the next round. If no round is active, it falls back to the total ticks from the demo header.
 
 **Reference sync pattern:** The tick setter resets the playback reference tick and time when called during playback, so time-based calculation continues cleanly after seeks (timeline click, event marker click, kill-feed click, round navigation). This ensures seeking during playback doesn't cause jumps. Explicit seeks call `setPlaybackTickAndNotify()`, so canvas layers repaint immediately even though `currentTick` is no longer passed through the Svelte component tree every frame.
 
@@ -565,6 +569,8 @@ The old visual Map Alignment panel was removed. Player, nade, kill, and map laye
 
 `MapLayer.svelte` loads the radar image through `getRadarInfo(mapName).imagePath` and reloads it whenever the normalized map name changes. `worldToCanvas()` and `MapLayer.svelte` both use the shared `MAP_CANVAS_MARGIN` constant so the fitted radar rectangle and gameplay overlays stay aligned.
 
+For maps with lower radar variants (`de_nuke`, `de_train`, `de_vertigo`), the bottom controls bar shows `Normal` and `Lower` toggle buttons. `Normal` is selected by default. `Lower` only swaps the map background image to the lower PNG from `verticalSections.lower.imagePath`; player, nade, kill, and bomb overlays keep using the same world-to-radar transform.
+
 ### 11.7 Playback Speed Controls
 
 Four speed options are available in the controls bar: 0.5x, 1x (default), 2x, 3x. The `playbackSpeed` variable (default `1`) is read directly by the playback loop function — changing speed takes effect immediately without restarting the rAF loop. Since the target tick is computed from elapsed time, tick rate, and playback speed, any speed change naturally affects the next frame's calculation.
@@ -573,7 +579,7 @@ Four speed options are available in the controls bar: 0.5x, 1x (default), 2x, 3x
 
 The timeline is scoped to the **current round's active phase** (after freezetime ends), not the full match. This makes seeking precise within a round.
 
-**Freezetime skip:** Freezetime is automatically skipped on round start via three mechanisms:
+**Freezetime skip and replay reload:** Freezetime is automatically skipped on round start via three mechanisms:
 
 1. **Go parser** (`backend/parser/parser.go`): Registers a handler for `events.RoundFreezetimeEnd` which records the exact tick on `RoundData.FreezetimeEndTick`. Since CS2 freezetime varies (15–20 seconds), the actual game event is authoritative.
 
@@ -583,16 +589,22 @@ The timeline is scoped to the **current round's active phase** (after freezetime
 
 **Timeline behavior:**
 - 0% = `freezetimeEndTick` (round active start)
-- 100% = `round.endTick`
+- 100% = effective display end tick from `getRoundDisplayEndTick()`
 - Clicking the left edge of the timeline seeks to `freezetimeEndTick`
 - `seekToRound()` seeks to `getRoundActiveStart(round)` (not `round.startTick`)
 - Time display shows time relative to `activeStart` (`0:00` when round enters active phase)
 - Keyboard arrow seeking is intentionally disabled. The focused timeline only handles Enter/Space as activation keys.
 - When no round is active (warmup, between rounds), falls back to full-match range
 
+Knife rounds: the Go parser detects an initial knife-only round by sampling alive T/CT player inventories during the first parsed round, not only at `round_start`. A first round is considered knife-only only if enough player inventories are observed with knives and no non-knife evidence appears; non-knife inventory, non-knife kills/damage, weapon fire, nade activity, or bomb events prevent the skip. Ignored inventory equipment for this check includes C4, armor/helmet, and defuse kit so the decision is based on carried weapons rather than the currently equipped weapon. The first knife-only round is removed from serialized `ReplayData.rounds`, and visible rounds are renumbered. `+page.svelte` seeks to the active start of the first visible round immediately after replay load.
+
+The bottom controls toolbar includes a left-aligned `Load Demo` button. It opens the same `.dem` picker as the empty state. Once a new file is selected, `+page.svelte` stops playback, clears the current `ReplayData`, resets player/timeline/bomb/viewport caches, waits for Svelte to unmount old replay layers, then parses and loads the new protobuf. Cancelling the picker leaves the current replay untouched.
+
+Round navigation survivor labels: `RoundNav.svelte` counts alive T and CT players at the effective display end tick, not just the raw winner-side count at the original round end. Labels are formatted as `T + N | CT + N`, a single side when only one side has survivors, or `No Survivors`.
+
 ### 11.9 Kill Feed & Death Marker Round Filtering
 
-Both the kill feed and death markers filter kills to only show those within the current round (the round containing `currentTick`). Previously they showed kills from all rounds combined.
+Both the kill feed and death markers filter kills to only show those within the current round (the round containing `currentTick`). Round detection uses the effective display end tick, so kills in the 7-second post-round window remain visible and can affect survivor counts. Previously they showed kills from all rounds combined.
 
 The kill feed shows at most 5 kills that have already happened in the current round (`kill.tick <= currentTick`), so future kills are not visible early. Death markers still use the short recent-kill window (`currentTick - 64 <= kill.tick <= currentTick`) so the red X appears briefly at the moment of death.
 
@@ -602,9 +614,11 @@ Kill feed player names are color-coded by team at that round: CT names are blue 
 
 `PlayerLayer.svelte` only indexes and renders Steam IDs present in `ReplayData.players` whose stored team is T or CT. Observer/admin/spectator frame samples are ignored, so only real player dots are drawn.
 
-The player sight cone defaults remain `34` canvas pixels long and `0.32` radians wide. `+page.svelte` exposes a compact top-left `Sight Cone Controls` panel below the time display. It includes a width slider, a sight cone length slider with max `240`, a `Show Line of Sight` checkbox, and a separate line-of-sight length slider with range `18` to `800`. Sight cones and line-of-sight rays share the same yaw-to-canvas direction helper so they stay aligned.
+The player sight cone defaults remain `34` canvas pixels long and `0.32` radians wide. `+page.svelte` exposes a compact top-left `Sight Cone Controls` panel below the time display. It includes `Show Sight Cone` (checked by default), `Show for selected Player` (unchecked by default), a width slider, a sight cone length slider with max `240`, a `Show Line of Sight` checkbox, and a separate line-of-sight length slider with range `18` to `800`. Sight cone controls are independent from line-of-sight controls. `Line of Sight Len` defaults to `300`. The panel scrolls vertically within the viewport so it does not collide with the bottom toolbar.
 
 The `Player Selection` section below the sight controls contains `Zoom Selected Player` plus a zoom percentage slider capped at `500%`. This is a visual viewport transform centered on the selected player's current world position. The page writes `--replay-viewport-transform` directly on the replay container from the playback tick, and map/player/nade/death-marker canvases inherit that CSS transform. Layer drawing, trajectories, map calibration, and world coordinate transforms stay unchanged. If no player is selected, zoom has no effect.
+
+The `Noise` section below `Player Selection` contains `Show Noice Circle` (unchecked by default), `Noise for Selected Player` (unchecked by default), and per-source checkboxes for the distinguishable sources `Running Noise`, `Jump Noise`, `Shooting Noise`, and `Falling Noise` (checked by default). `Show Noice Circle` is the master visibility toggle for red noise circles. `Noise for Selected Player` limits noise rendering to the selected Steam ID. Unknown noise types are not exposed as a separate UI option.
 
 The top-right roster panel shows two current-round side columns, CT and T, with alive/total counts in the headers. It uses the same stored-team side-switch logic as the canvas renderers, so the columns flip after halftime and every overtime half. Player names are side-colored while alive and greyed out when dead at the current tick.
 
@@ -614,15 +628,17 @@ Selecting a player shows round event markers under the timeline for that player'
 
 Selected-player timeline markers are cached by round and selected Steam ID. This avoids rebuilding grenade/kill/death marker data on every throttled UI tick during playback. Selected-player zoom is implemented as a DOM/CSS camera update rather than layer props, so normal rendering paths are not invalidated by zoom-follow movement.
 
-Kill feed rows in `KillLayer.svelte` are clickable canvas hitboxes. Clicking a row selects the killer and seeks to 2 seconds before the kill.
+Kill feed rows in `KillLayer.svelte` are clickable canvas hitboxes. Clicking a row selects the killer and seeks to 2 seconds before the kill. The feed text and hitboxes are offset to the right of the left controls panel so the panel does not block clicks.
 
 ### 11.11 Flash, Noise, and Bomb Event Rendering
 
-The Go parser records `events.PlayerFlashed`, `events.PlayerSound`, `events.BombPlantBegin`, `events.BombPlantAborted`, `events.BombPlanted`, `events.BombExplode`, `events.BombDefuseStart`, `events.BombDefuseAborted`, and `events.BombDefused` into protobuf event arrays. Existing parsed protobuf files do not contain these arrays; load and parse the original `.dem` again to see these features.
+The Go parser records `events.PlayerFlashed`, `events.Footstep`, `events.PlayerJump`, `events.PlayerSound`, `events.WeaponFire`, fall-damage `events.PlayerHurt`, `events.BombPlantBegin`, `events.BombPlantAborted`, `events.BombPlanted`, `events.BombExplode`, `events.BombDefuseStart`, `events.BombDefuseAborted`, and `events.BombDefused` into protobuf event arrays. Existing parsed protobuf files may not contain these arrays or typed noise values; load and parse the original `.dem` again to see parser-backed behavior.
 
 `PlayerLayer.svelte` renders a grey filled circle around flashed players while the flash is active. Opacity is proportional to flash duration and fades continuously until `FlashEvent.endTick`.
 
-Noise events render as red stroked circles with transparent fill around alive players. The radius is converted through the same radar/world transform as other overlays. Expired noise events are skipped, and the red stroke fades with remaining event lifetime.
+Noise events render as red stroked circles around alive players when `Show Noice Circle` is enabled. The radius is converted through the same radar/world transform as other overlays. Jump and falling noise events render at the event origin and fade with remaining event lifetime. Shooting noise renders around the shooter's current position during its short lifetime. Running noise uses one persistent circle per running player, follows the player's current position, holds briefly while running continues, and fades quickly after running stops.
+
+`PlayerLayer.svelte` also draws a static red `Bomb` dot after a successful plant. The dot uses the planter's position at the completed plant tick, labels it `Bomb`, never moves after planting, and does not emit noise.
 
 `+page.svelte` computes bomb status labels from bomb events. While planting, a centered orange label shows `Planting Bomb Xs` until completion or abort; this requires `plant_begin` events from a rebuilt sidecar and newly parsed demo. While planted, a centered orange label shows `Bomb has been Planted XXs`, where `XX` is the remaining time before explosion. If an older parsed protobuf lacks plant events, planted countdowns fall back to bomb-objective round timing. If a defuse is active, a centered blue label shows `Defusing Bomb Xs`; it is hidden if the defuser dies, aborts, or the bomb explodes. Final states show `Bomb exploded, Terrorists Win!` or `Bomb has been defused. Counter Terrorists Win`; these final labels can fall back to round win reason even if an older parsed protobuf lacks bomb events.
 

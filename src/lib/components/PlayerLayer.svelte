@@ -3,6 +3,7 @@ import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
 import { worldToCanvas } from '$lib/canvas/transforms';
 import { getPlaybackTick, subscribePlaybackTick } from '$lib/playback-state';
+import { getRoundDisplayEndTick, getRoundForTick } from '$lib/replay/rounds';
 import type { FlashEvent, NoiseEvent, ReplayData, PlayerFrame, MapData as MapMetadata } from '$lib/types/replay/replay_pb';
 
 export let replayData: ReplayData | null = null;
@@ -10,9 +11,19 @@ export let mapMetadata: MapMetadata;
 export let isPlaying: boolean = false;
 export let sightConeLength: number = 34;
 export let sightConeHalfAngle: number = 0.32;
+export let showSightCone = true;
+export let sightConeForSelectedPlayer = false;
 export let showLineOfSight = false;
 export let lineOfSightLength = 160;
 export let selectedPlayerSteamId: bigint | null = null;
+export let showNoiseCircle = false;
+export let noiseForSelectedPlayer = false;
+export let enabledNoiseSources: Record<string, boolean> = {
+    running: true,
+    jump: true,
+    shooting: true,
+    falling: true,
+};
 
 let container: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
@@ -33,6 +44,8 @@ const MAX_INTERPOLATION_GAP_TICKS = 16;
 const TEAM_T = 2;
 const TEAM_CT = 3;
 const HIGHLIGHT_COLOR = '#22c55e';
+const RUNNING_NOISE_HOLD_TICKS = 28;
+const RUNNING_NOISE_FADE_TICKS = 14;
 
 function lerp(start: number, end: number, alpha: number): number {
     return start + (end - start) * alpha;
@@ -142,20 +155,15 @@ function updatePlayerFrames(tick: number): void {
 
 // Look up the team for a player by steamId
 function getCurrentRoundData(tick: number): any {
-    if (!replayData?.rounds) return null;
-    for (const round of replayData.rounds) {
-        if (tick >= round.startTick && tick <= round.endTick) {
-            return round;
-        }
-    }
-    return null;
+    return getRoundForTick(replayData, tick);
 }
 
 function getCurrentRoundRange(tick: number): { startTick: number; endTick: number } | null {
     if (!replayData?.rounds || replayData.rounds.length === 0) return null;
     for (const round of replayData.rounds) {
-        if (tick >= round.startTick && tick <= round.endTick) {
-            return { startTick: round.startTick, endTick: round.endTick };
+        const displayEndTick = getRoundDisplayEndTick(replayData, round);
+        if (tick >= round.startTick && tick <= displayEndTick) {
+            return { startTick: round.startTick, endTick: displayEndTick };
         }
     }
     return null;
@@ -190,6 +198,33 @@ function getPlayerName(steamId: string): string {
     const id = BigInt(steamId);
     const player = replayData.players.find(p => p.steamId === id);
     return player?.name || `Player ${steamId}`;
+}
+
+function isSelectedPlayer(steamId: string): boolean {
+    return selectedPlayerSteamId !== null && selectedPlayerSteamId.toString() === steamId;
+}
+
+function shouldDrawSightCone(steamId: string): boolean {
+    return showSightCone && (!sightConeForSelectedPlayer || isSelectedPlayer(steamId));
+}
+
+function normalizeNoiseType(noiseType: string): string {
+    if (!noiseType || noiseType === 'sound' || noiseType === 'footstep') return 'running';
+    if (noiseType === 'jump' || noiseType === 'running' || noiseType === 'shooting' || noiseType === 'falling') {
+        return noiseType;
+    }
+    return '';
+}
+
+function isNoiseEnabled(noise: NoiseEvent): boolean {
+    if (!showNoiseCircle) return false;
+
+    const steamId = noise.steamId.toString();
+    if (noiseForSelectedPlayer && !isSelectedPlayer(steamId)) return false;
+
+    const normalizedType = normalizeNoiseType(noise.noiseType);
+    if (!normalizedType) return false;
+    return enabledNoiseSources[normalizedType] ?? false;
 }
 
 function updateTrailCache(tick: number): void {
@@ -245,6 +280,26 @@ function getCachedTrail(steamId: string): PlayerFrame[] {
     if (endIdx < 0) return [];
     const startIdx = Math.max(0, endIdx - trailLength + 1);
     return trail.slice(startIdx, endIdx + 1);
+}
+
+function getPlayerFrameAtOrBefore(steamId: bigint, tick: number): PlayerFrame | null {
+    const trail = trails.get(steamId.toString());
+    if (!trail || trail.length === 0) return null;
+
+    let lo = 0;
+    let hi = trail.length - 1;
+    let best = -1;
+    while (lo <= hi) {
+        const mid = (lo + hi) >>> 1;
+        if (trail[mid].tick <= tick) {
+            best = mid;
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+
+    return best >= 0 ? trail[best] : null;
 }
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -392,17 +447,33 @@ function drawNoiseCircles(
     mapMetadata: MapMetadata,
     canvasSize: { width: number; height: number }
 ): void {
+    if (!showNoiseCircle) return;
+
+    const activeRunningNoises = new Map<string, NoiseEvent>();
+
     for (const noise of noiseEvents) {
         if (noise.tick > tick) break;
-        if (noise.endTick < tick || noise.radius <= 0) continue;
+        if (noise.radius <= 0 || !isNoiseEnabled(noise)) continue;
+
+        const normalizedType = normalizeNoiseType(noise.noiseType);
+        if (normalizedType === 'running') {
+            if (tick <= noise.endTick + RUNNING_NOISE_HOLD_TICKS + RUNNING_NOISE_FADE_TICKS) {
+                activeRunningNoises.set(noise.steamId.toString(), noise);
+            }
+            continue;
+        }
+
+        if (noise.endTick < tick) continue;
 
         const playerFrame = playerFrames.get(noise.steamId.toString());
         if (!playerFrame?.isAlive) continue;
 
         const totalTicks = Math.max(1, noise.endTick - noise.tick);
         const remainingRatio = Math.max(0.22, Math.min(1, (noise.endTick - tick) / totalTicks));
-        const pos = worldToCanvas(noise.x, noise.y, mapMetadata, canvasSize);
-        const radius = getWorldRadiusInCanvasPixels(noise.x, noise.y, noise.radius, mapMetadata, canvasSize);
+        const circleX = normalizedType === 'shooting' ? playerFrame.x : noise.x;
+        const circleY = normalizedType === 'shooting' ? playerFrame.y : noise.y;
+        const pos = worldToCanvas(circleX, circleY, mapMetadata, canvasSize);
+        const radius = getWorldRadiusInCanvasPixels(circleX, circleY, noise.radius, mapMetadata, canvasSize);
 
         ctx.save();
         ctx.strokeStyle = `rgba(239, 68, 68, ${0.75 * remainingRatio})`;
@@ -412,6 +483,77 @@ function drawNoiseCircles(
         ctx.stroke();
         ctx.restore();
     }
+
+    for (const [steamId, noise] of activeRunningNoises) {
+        const playerFrame = playerFrames.get(steamId);
+        if (!playerFrame?.isAlive) continue;
+
+        const fadeTicks = Math.max(0, tick - noise.endTick - RUNNING_NOISE_HOLD_TICKS);
+        if (fadeTicks > RUNNING_NOISE_FADE_TICKS) continue;
+
+        const fadeRatio = 1 - fadeTicks / RUNNING_NOISE_FADE_TICKS;
+        const pos = worldToCanvas(playerFrame.x, playerFrame.y, mapMetadata, canvasSize);
+        const radius = getWorldRadiusInCanvasPixels(playerFrame.x, playerFrame.y, noise.radius, mapMetadata, canvasSize);
+
+        ctx.save();
+        ctx.strokeStyle = `rgba(239, 68, 68, ${0.78 * fadeRatio})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+    }
+}
+
+function getBombEventsForRound(round: { startTick: number; endTick: number }): { tick: number; eventType: string; playerSteamId: bigint }[] {
+    return [...(replayData?.bombs ?? [])]
+        .filter(event => event.tick >= round.startTick && event.tick <= round.endTick)
+        .sort((a, b) => a.tick - b.tick);
+}
+
+function getActiveBombPlant(tick: number): { x: number; y: number } | null {
+    const round = getCurrentRoundData(tick);
+    if (!round) return null;
+
+    const planted = getBombEventsForRound(round)
+        .filter(event => event.eventType === 'planted' && event.tick <= tick)
+        .pop();
+    if (!planted || planted.playerSteamId === 0n) return null;
+
+    const planterFrame = getPlayerFrameAtOrBefore(planted.playerSteamId, planted.tick);
+    if (!planterFrame) return null;
+
+    return { x: planterFrame.x, y: planterFrame.y };
+}
+
+function drawBombDot(
+    ctx: CanvasRenderingContext2D,
+    tick: number,
+    mapMetadata: MapMetadata,
+    canvasSize: { width: number; height: number }
+): void {
+    const bombPosition = getActiveBombPlant(tick);
+    if (!bombPosition) return;
+
+    const pos = worldToCanvas(bombPosition.x, bombPosition.y, mapMetadata, canvasSize);
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.9)';
+    ctx.fillStyle = '#ef4444';
+    ctx.font = '800 12px Inter, sans-serif';
+    ctx.strokeText('Bomb', pos.x, pos.y - 10);
+    ctx.fillText('Bomb', pos.x, pos.y - 10);
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ef4444';
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
 }
 
 function drawPlayer(
@@ -429,11 +571,13 @@ function drawPlayer(
     if (team !== TEAM_T && team !== TEAM_CT) return;
 
     const teamColor = team === 2 ? '#f97316' : team === 3 ? '#3b82f6' : '#6b7280';
-    const isSelected = selectedPlayerSteamId !== null && selectedPlayerSteamId.toString() === steamId;
+    const isSelected = isSelectedPlayer(steamId);
     const playerColor = isSelected && isAlive ? HIGHLIGHT_COLOR : teamColor;
 
     if (isAlive) {
-        drawPlayerSightCone(ctx, frame, pos, mapMetadata, canvasSize, playerColor);
+        if (shouldDrawSightCone(steamId)) {
+            drawPlayerSightCone(ctx, frame, pos, mapMetadata, canvasSize, playerColor);
+        }
         if (showLineOfSight) {
             drawPlayerLineOfSight(ctx, frame, pos, mapMetadata, canvasSize, playerColor);
         }
@@ -623,6 +767,7 @@ function render() {
 
         drawKillMarkers(ctx, getCachedKillsInCurrentRound(tick), mapMetadata, canvasSize, tick);
         drawNoiseCircles(ctx, tick, mapMetadata, canvasSize);
+        drawBombDot(ctx, tick, mapMetadata, canvasSize);
 
         for (const [steamId, frame] of playerFrames) {
             drawPlayer(ctx, frame, steamId, mapMetadata, canvasSize, tick);
@@ -684,7 +829,7 @@ $: {
 }
 
 $: {
-    void sightConeLength, sightConeHalfAngle, showLineOfSight, lineOfSightLength, selectedPlayerSteamId;
+    void sightConeLength, sightConeHalfAngle, showSightCone, sightConeForSelectedPlayer, showLineOfSight, lineOfSightLength, selectedPlayerSteamId, showNoiseCircle, noiseForSelectedPlayer, enabledNoiseSources;
     if (browser && ctx) {
         scheduleRender();
     }

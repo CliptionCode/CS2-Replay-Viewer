@@ -7,6 +7,7 @@ import type { MapData as MapMetadata, ReplayData } from '$lib/types/replay/repla
 
 export let mapMetadata: MapMetadata;
 export let replayData: ReplayData | null = null;
+export let mapVariant: 'default' | 'lower' = 'default';
 
 let container: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
@@ -21,11 +22,19 @@ function getMapMetadata(): MapMetadata {
 function loadMapImage(mapName: string): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
         const image = new Image();
-        const radarInfo = getRadarInfo(mapName);
+        const imagePath = getMapImagePath(mapName, mapVariant);
         image.onload = () => resolve(image);
         image.onerror = () => reject(new Error(`Failed to load map image: ${mapName}`));
-        image.src = radarInfo?.imagePath ?? `/maps/${mapName}.png`;
+        image.src = imagePath;
     });
+}
+
+function getMapImagePath(mapName: string, variant: 'default' | 'lower'): string {
+    const radarInfo = getRadarInfo(mapName);
+    if (variant === 'lower' && radarInfo?.verticalSections?.lower) {
+        return radarInfo.verticalSections.lower.imagePath;
+    }
+    return radarInfo?.imagePath ?? `/maps/${mapName}.png`;
 }
 
 function calculateMapCanvasSize(
@@ -150,7 +159,7 @@ function loadCurrentMapImage(mapName: string): void {
     const nextMapName = radarInfo?.name ?? mapName;
     const requestId = ++mapLoadId;
 
-    loadedMapName = nextMapName;
+    loadedMapName = `${nextMapName}:${mapVariant}`;
     mapImage = null;
     render();
 
@@ -198,10 +207,11 @@ function render() {
 }
 
 $: {
-    void mapMetadata;
+    void mapMetadata, mapVariant;
     const radarInfo = getRadarInfo(mapMetadata?.name);
     const nextMapName = radarInfo?.name ?? mapMetadata?.name ?? '';
-    if (browser && nextMapName && nextMapName !== loadedMapName) {
+    const nextLoadedKey = `${nextMapName}:${mapVariant}`;
+    if (browser && nextMapName && nextLoadedKey !== loadedMapName) {
         loadCurrentMapImage(nextMapName);
     }
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-import { onMount } from 'svelte';
+import { onMount, tick as flushDom } from 'svelte';
 import { browser } from '$app/environment';
 import { invoke } from '@tauri-apps/api/core';
 import { readFile } from '@tauri-apps/plugin-fs';
@@ -24,6 +24,11 @@ import Controls from '$lib/components/Controls.svelte';
 import TimeDisplay from '$lib/components/TimeDisplay.svelte';
 import RoundNav from '$lib/components/RoundNav.svelte';
 import { DEFAULT_RADAR_MAP, getRadarInfo } from '$lib/maps/radar-info';
+import {
+    getPlaybackStartRound as getReplayPlaybackStartRound,
+    getRoundDisplayEndTick,
+    getRoundForTick as getReplayRoundForTick,
+} from '$lib/replay/rounds';
 import {
     getPlaybackTick,
     notifyPlaybackTickChanged,
@@ -86,7 +91,7 @@ const DEAD_PLAYER_COLOR = '#6b7280';
 const DEFAULT_SIGHT_CONE_LENGTH = 34;
 const DEFAULT_SIGHT_CONE_HALF_ANGLE = 0.32;
 const EVENT_SEEK_LEAD_SECONDS = 2;
-const DEFAULT_LINE_OF_SIGHT_LENGTH = 160;
+const DEFAULT_LINE_OF_SIGHT_LENGTH = 300;
 const DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT = 250;
 const TOAST_DURATION_MS = 2600;
 const DEFAULT_BOMB_TIME_SECONDS = 40;
@@ -97,15 +102,38 @@ const EVENT_STACK_WINDOW_TICKS = 128;
 const NADE_MATCH_DISTANCE_UNITS = 240;
 const NADE_MATCH_TICK_WINDOW = 768;
 const SMOKE_MATCH_TICK_WINDOW = 1536;
+const KILL_FEED_LEFT_OFFSET = 312;
+
+const NOISE_SOURCE_OPTIONS = [
+    { key: 'running', label: 'Running Noise' },
+    { key: 'jump', label: 'Jump Noise' },
+    { key: 'shooting', label: 'Shooting Noise' },
+    { key: 'falling', label: 'Falling Noise' },
+] as const;
+
+type MapVariant = 'default' | 'lower';
+type NoiseSourceKey = typeof NOISE_SOURCE_OPTIONS[number]['key'];
 
 let activeStart: number = 0;
 let sightConeLength = DEFAULT_SIGHT_CONE_LENGTH;
 let sightConeHalfAngle = DEFAULT_SIGHT_CONE_HALF_ANGLE;
+let showSightCone = true;
+let sightConeForSelectedPlayer = false;
 let showLineOfSight = false;
 let lineOfSightLength = DEFAULT_LINE_OF_SIGHT_LENGTH;
 let zoomSelectedPlayer = false;
 let selectedPlayerZoomPercent = DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT;
 let selectedPlayerSteamId: bigint | null = null;
+let showNoiseCircle = false;
+let noiseForSelectedPlayer = false;
+let enabledNoiseSources: Record<NoiseSourceKey, boolean> = {
+    running: true,
+    jump: true,
+    shooting: true,
+    falling: true,
+};
+let mapVariant: MapVariant = 'default';
+let hasLowerMapVariant = false;
 let playablePlayers: PlayerInfo[] = [];
 let ctRoster: RosterEntry[] = [];
 let tRoster: RosterEntry[] = [];
@@ -149,23 +177,63 @@ type BombStatus = {
     defuseClass: string;
 };
 
+function resetLoadedReplayState(clearReplayData = false): void {
+    setPlaying(false);
+    if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+    }
+
+    if (clearReplayData) {
+        replayData = null;
+        mapMetadata = createMapMetadataFromRadarInfo();
+    }
+
+    selectedPlayerSteamId = null;
+    mapVariant = 'default';
+    hasLowerMapVariant = false;
+    playablePlayers = [];
+    ctRoster = [];
+    tRoster = [];
+    ctAliveCount = 0;
+    tAliveCount = 0;
+    timelineEvents = [];
+    timelineEventsKey = '';
+    bombStatus = emptyBombStatus();
+    activeStart = 0;
+    roundProgressPct = 0;
+    playerFrameTrails.clear();
+    playerFrameLookupIndices.clear();
+    resetReplayViewportTransform();
+    setTick(0);
+}
+
+function applyLoadedReplay(data: ReplayData): void {
+    replayData = data;
+    mapMetadata = fillMapMetadata(data.map, data.header?.mapName);
+    selectedPlayerSteamId = null;
+    mapVariant = 'default';
+    timelineEvents = [];
+    timelineEventsKey = '';
+    bombStatus = emptyBombStatus();
+    setPlaying(false);
+    setTick(data.rounds[0] ? getRoundActiveStart(data.rounds[0]) : 0);
+}
+
 async function loadDemo() {
     if (!browser) return;
     isLoading = true;
     try {
         const demPath: string | null = await invoke('open_file_dialog');
-        if (!demPath) { isLoading = false; return; }
+        if (!demPath) return;
+
+        resetLoadedReplayState(true);
+        await flushDom();
+
         const pbPath: string = await invoke('parse_demo', { path: demPath });
         const bytes = await readFile(pbPath);
         const data = fromBinary(ReplayDataSchema, bytes);
-        replayData = data;
-        mapMetadata = fillMapMetadata(data.map, data.header?.mapName);
-        selectedPlayerSteamId = null;
-        timelineEvents = [];
-        timelineEventsKey = '';
-        bombStatus = emptyBombStatus();
-        setPlaying(false);
-        setTick(0);
+        applyLoadedReplay(data);
     } catch (e: any) {
         console.error('Failed to load demo:', e);
     } finally {
@@ -174,23 +242,11 @@ async function loadDemo() {
 }
 
 function getCurrentRoundData(tick: number = Math.floor(getPlaybackTick())): RoundData | null {
-    if (!replayData?.rounds) return null;
-    for (const round of replayData.rounds) {
-        if (tick >= round.startTick && tick <= round.endTick) {
-            return round;
-        }
-    }
-    return null;
+    return getReplayRoundForTick(replayData, tick);
 }
 
 function getPlaybackStartRound(tick: number = Math.floor(getPlaybackTick())): RoundData | null {
-    if (!replayData?.rounds) return null;
-    for (const round of replayData.rounds) {
-        if (tick <= round.endTick) {
-            return round;
-        }
-    }
-    return null;
+    return getReplayPlaybackStartRound(replayData, tick);
 }
 
 function getRoundActiveStart(round: RoundData): number {
@@ -200,13 +256,7 @@ function getRoundActiveStart(round: RoundData): number {
 }
 
 function getRoundForTick(tick: number): RoundData | null {
-    if (!replayData?.rounds) return null;
-    for (const round of replayData.rounds) {
-        if (tick >= round.startTick && tick <= round.endTick) {
-            return round;
-        }
-    }
-    return null;
+    return getReplayRoundForTick(replayData, tick);
 }
 
 function getPlayablePlayers(): PlayerInfo[] {
@@ -403,7 +453,7 @@ function formatRoundEventTime(tick: number, round: RoundData): string {
 
 function stackTimelineEvents(events: BasePlayerTimelineEvent[], round: RoundData): PlayerTimelineEvent[] {
     const activeStart = getRoundActiveStart(round);
-    const duration = Math.max(1, round.endTick - activeStart);
+    const duration = Math.max(1, getRoundDisplayEndTick(replayData, round) - activeStart);
     const laneLastTicks: number[] = [];
 
     return [...events]
@@ -430,7 +480,7 @@ function buildSelectedPlayerBaseEvents(steamId: bigint, round: RoundData): BaseP
 
     const events: BasePlayerTimelineEvent[] = [];
     const roundKills = replayData.kills?.filter(kill =>
-        kill.tick >= round.startTick && kill.tick <= round.endTick
+        kill.tick >= round.startTick && kill.tick <= getRoundDisplayEndTick(replayData, round)
     ) ?? [];
 
     for (const kill of roundKills) {
@@ -460,7 +510,7 @@ function buildSelectedPlayerBaseEvents(steamId: bigint, round: RoundData): BaseP
         if (!meta || !shouldShowNadeThrowMarker(nade, steamId)) continue;
 
         const throwTick = getNadeThrowTick(nade);
-        if (throwTick < round.startTick || throwTick > round.endTick) continue;
+        if (throwTick < round.startTick || throwTick > getRoundDisplayEndTick(replayData, round)) continue;
 
         events.push({
             tick: throwTick,
@@ -475,8 +525,9 @@ function buildSelectedPlayerBaseEvents(steamId: bigint, round: RoundData): BaseP
 }
 
 function getBombEventsForRound(round: RoundData): BombEvent[] {
+    const displayEndTick = getRoundDisplayEndTick(replayData, round);
     return [...(replayData?.bombs ?? [])]
-        .filter(event => event.tick >= round.startTick && event.tick <= round.endTick)
+        .filter(event => event.tick >= round.startTick && event.tick <= displayEndTick)
         .sort((a, b) => a.tick - b.tick);
 }
 
@@ -541,7 +592,7 @@ function buildTimelineEvents(selectedSteamId: bigint | null, round: RoundData): 
 
 function getTimelineEventsKey(round: RoundData | null, selectedSteamId: bigint | null): string {
     if (!round) return 'no-round';
-    return `${round.roundNumber}:${round.startTick}:${round.endTick}:${selectedSteamId?.toString() ?? 'none'}`;
+    return `${round.roundNumber}:${round.startTick}:${getRoundDisplayEndTick(replayData, round)}:${selectedSteamId?.toString() ?? 'none'}`;
 }
 
 function updateTimelineEvents(round: RoundData | null): void {
@@ -651,7 +702,7 @@ function getActiveDefuseStatus(events: BombEvent[], plantTick: number, tick: num
 }
 
 function getRoundEndBombStatus(round: RoundData, tick: number): BombStatus | null {
-    if (tick < round.endTick) return null;
+    if (tick < getRoundDisplayEndTick(replayData, round)) return null;
 
     if (round.winReason === 'bomb_detonated') {
         return {
@@ -737,6 +788,19 @@ function selectPlayer(steamId: bigint): void {
 
 function isSelectedPlayer(steamId: bigint): boolean {
     return selectedPlayerSteamId === steamId;
+}
+
+function setNoiseSourceEnabled(source: NoiseSourceKey, enabled: boolean): void {
+    enabledNoiseSources = {
+        ...enabledNoiseSources,
+        [source]: enabled,
+    };
+}
+
+function setMapVariant(variant: MapVariant): void {
+    if (variant === mapVariant) return;
+    if (variant === 'lower' && !hasLowerMapVariant) return;
+    mapVariant = variant;
 }
 
 function getTickRate(): number {
@@ -850,7 +914,7 @@ function playbackLoop(timestamp: number) {
     const elapsed = (timestamp - playbackRefTime) / 1000;
     const tickRate = replayData.header?.tickRate || 64;
     const round = getCurrentRoundData(Math.floor(getPlaybackTick()));
-    const maxTick = round ? round.endTick : (replayData.header?.totalTicks || 1) - 1;
+    const maxTick = round ? getRoundDisplayEndTick(replayData, round) : (replayData.header?.totalTicks || 1) - 1;
 
     const targetFloat = playbackRefTick + elapsed * tickRate * playbackSpeed;
 
@@ -874,7 +938,7 @@ $: {
     if (round) {
         const as = getRoundActiveStart(round);
         const tickInRound = displayTick - as;
-        const roundDuration = round.endTick - as;
+        const roundDuration = getRoundDisplayEndTick(replayData, round) - as;
         const progress = roundDuration > 0 ? (tickInRound / roundDuration) * 100 : 0;
         roundProgressPct = Math.max(0, Math.min(100, progress));
         activeStart = as;
@@ -915,6 +979,14 @@ $: {
 $: {
     void zoomSelectedPlayer, selectedPlayerZoomPercent, selectedPlayerSteamId, replayData, mapMetadata;
     updateReplayViewportTransform();
+}
+
+$: {
+    void mapMetadata;
+    hasLowerMapVariant = Boolean(getRadarInfo(mapMetadata?.name)?.verticalSections?.lower);
+    if (!hasLowerMapVariant && mapVariant !== 'default') {
+        mapVariant = 'default';
+    }
 }
 
 function startPlayback() {
@@ -1166,6 +1238,7 @@ onMount(() => {
 .sight-controls {
     position: absolute;
     top: 134px;
+    bottom: 80px;
     left: 20px;
     width: 252px;
     background: rgba(26, 26, 36, 0.86);
@@ -1173,6 +1246,7 @@ onMount(() => {
     border-radius: 6px;
     padding: 10px 12px;
     z-index: 100;
+    overflow-y: auto;
 }
 
 .control-section + .control-section {
@@ -1234,6 +1308,10 @@ onMount(() => {
     width: 14px;
     height: 14px;
     accent-color: #60a5fa;
+}
+
+.checkbox-control input:disabled {
+    opacity: 0.5;
 }
 
 .player-roster {
@@ -1368,7 +1446,7 @@ onMount(() => {
                 const round = getCurrentRoundData();
                 if (round) {
                     const activeStart = getRoundActiveStart(round);
-                    const roundDuration = round.endTick - activeStart;
+                    const roundDuration = getRoundDisplayEndTick(replayData, round) - activeStart;
                     setTick(Math.floor(pct * roundDuration) + activeStart);
                 } else {
                     const totalTicks = replayData?.header?.totalTicks || 1;
@@ -1422,6 +1500,7 @@ onMount(() => {
     <MapLayer 
         bind:mapMetadata={mapMetadata}
         bind:replayData={replayData}
+        {mapVariant}
     />
     <PlayerLayer 
         bind:replayData={replayData}
@@ -1429,9 +1508,14 @@ onMount(() => {
         bind:isPlaying={isPlaying}
         {sightConeLength}
         {sightConeHalfAngle}
+        {showSightCone}
+        {sightConeForSelectedPlayer}
         {showLineOfSight}
         {lineOfSightLength}
         {selectedPlayerSteamId}
+        {showNoiseCircle}
+        {noiseForSelectedPlayer}
+        {enabledNoiseSources}
     />
     <NadeLayer 
         bind:replayData={replayData}
@@ -1442,15 +1526,21 @@ onMount(() => {
         bind:replayData={replayData}
         bind:isPlaying={isPlaying}
         bind:mapMetadata={mapMetadata}
+        feedLeftOffset={KILL_FEED_LEFT_OFFSET}
         onselectkillfeed={handleKillFeedSelect}
     />
 
     <Controls
         {isPlaying}
         {playbackSpeed}
+        {isLoading}
         speedOptions={SPEED_OPTIONS}
+        {hasLowerMapVariant}
+        {mapVariant}
         ontoggleplay={togglePlay}
         onsetspeed={setSpeed}
+        onloaddemo={loadDemo}
+        onsetmapvariant={setMapVariant}
     />
 
     <TimeDisplay currentTick={displayTick} activeStart={activeStart} />
@@ -1458,6 +1548,18 @@ onMount(() => {
     <div class="sight-controls">
         <section class="control-section">
             <div class="controls-heading">Sight Cone Controls</div>
+            <label class="checkbox-control">
+                <input type="checkbox" bind:checked={showSightCone} />
+                <span>Show Sight Cone</span>
+            </label>
+            <label class="checkbox-control">
+                <input
+                    type="checkbox"
+                    bind:checked={sightConeForSelectedPlayer}
+                    disabled={!showSightCone}
+                />
+                <span>Show for selected Player</span>
+            </label>
             <label class="sight-control">
                 <span>Width</span>
                 <input
@@ -1466,6 +1568,7 @@ onMount(() => {
                     max="0.8"
                     step="0.02"
                     bind:value={sightConeHalfAngle}
+                    disabled={!showSightCone}
                 />
                 <span class="sight-control-value">{sightConeHalfAngle.toFixed(2)}</span>
             </label>
@@ -1477,6 +1580,7 @@ onMount(() => {
                     max="240"
                     step="1"
                     bind:value={sightConeLength}
+                    disabled={!showSightCone}
                 />
                 <span class="sight-control-value">{Math.round(sightConeLength)}</span>
             </label>
@@ -1514,6 +1618,32 @@ onMount(() => {
                 />
                 <span class="sight-control-value">{Math.round(selectedPlayerZoomPercent)}%</span>
             </label>
+        </section>
+        <section class="control-section">
+            <div class="controls-heading">Noise</div>
+            <label class="checkbox-control">
+                <input type="checkbox" bind:checked={showNoiseCircle} />
+                <span>Show Noice Circle</span>
+            </label>
+            <label class="checkbox-control">
+                <input
+                    type="checkbox"
+                    bind:checked={noiseForSelectedPlayer}
+                    disabled={!showNoiseCircle}
+                />
+                <span>Noise for Selected Player</span>
+            </label>
+            {#each NOISE_SOURCE_OPTIONS as source (source.key)}
+                <label class="checkbox-control">
+                    <input
+                        type="checkbox"
+                        checked={enabledNoiseSources[source.key]}
+                        disabled={!showNoiseCircle}
+                        onchange={(event) => setNoiseSourceEnabled(source.key, (event.currentTarget as HTMLInputElement).checked)}
+                    />
+                    <span>{source.label}</span>
+                </label>
+            {/each}
         </section>
     </div>
 

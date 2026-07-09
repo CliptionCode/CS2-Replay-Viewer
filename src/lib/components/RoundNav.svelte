@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { PlayerFrame, PlayerInfo, ReplayData, RoundData } from '$lib/types/replay/replay_pb';
+import { getRoundDisplayEndTick, isTickInRound } from '$lib/replay/rounds';
 
 export let replayData: ReplayData | null = null;
 export let currentTick = 0;
@@ -13,12 +14,7 @@ const TEAM_CT = 3;
 
 function getCurrentRoundData(): RoundData | null {
     if (!rounds.length) return null;
-    for (const round of rounds) {
-        if (currentTick >= round.startTick && currentTick <= round.endTick) {
-            return round;
-        }
-    }
-    return null;
+    return rounds.find(round => isTickInRound(replayData, round, currentTick)) ?? null;
 }
 
 function getCurrentRound(): number {
@@ -73,20 +69,33 @@ function getPlayerFrameAtOrBefore(steamId: bigint, tick: number): PlayerFrame | 
     return best >= 0 ? trail[best] : null;
 }
 
-function getWinnerLabel(round: RoundData): string {
-    if (round.winnerTeam === TEAM_T) return 'T';
-    if (round.winnerTeam === TEAM_CT) return 'CT';
-    return 'Draw';
+function getSurvivorCounts(round: RoundData): { t: number; ct: number } {
+    const counts = { t: 0, ct: 0 };
+    if (!replayData?.players) return counts;
+
+    for (const player of replayData.players) {
+        const side = getPlayerTeamForRound(player, round);
+        if (side !== TEAM_T && side !== TEAM_CT) continue;
+
+        const frame = getPlayerFrameAtOrBefore(player.steamId, getRoundDisplayEndTick(replayData, round));
+        if (!(frame?.isAlive ?? false)) continue;
+
+        if (side === TEAM_T) counts.t++;
+        if (side === TEAM_CT) counts.ct++;
+    }
+
+    return counts;
 }
 
-function getWinnerAliveCount(round: RoundData): number {
-    if (!replayData?.players || (round.winnerTeam !== TEAM_T && round.winnerTeam !== TEAM_CT)) return 0;
+function getSurvivorLabel(round: RoundData): string {
+    const counts = getSurvivorCounts(round);
+    const parts: string[] = [];
 
-    return replayData.players.filter(player => {
-        if (getPlayerTeamForRound(player, round) !== round.winnerTeam) return false;
-        const frame = getPlayerFrameAtOrBefore(player.steamId, round.endTick);
-        return frame?.isAlive ?? false;
-    }).length;
+    if (counts.t > 0) parts.push(`T + ${counts.t}`);
+    if (counts.ct > 0) parts.push(`CT + ${counts.ct}`);
+    if (parts.length === 0) return 'No Survivors';
+
+    return parts.join(' | ');
 }
 
 function getWinnerClass(round: RoundData): string {
@@ -173,7 +182,7 @@ $: {
             class:active={round.roundNumber === getCurrentRound()}
             onclick={() => onseekround(round)}
         >
-            Round {round.roundNumber} ({getWinnerLabel(round)} +{getWinnerAliveCount(round)})
+            Round {round.roundNumber} ({getSurvivorLabel(round)})
         </button>
     {/each}
 </div>

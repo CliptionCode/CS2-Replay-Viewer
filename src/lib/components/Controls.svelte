@@ -1,9 +1,14 @@
 <script lang="ts">
 export let isPlaying = false;
 export let playbackSpeed = 1;
+export let isLoading = false;
 export let speedOptions: number[] = [0.5, 1, 2, 3];
+export let hasLowerMapVariant = false;
+export let mapVariant: 'default' | 'lower' = 'default';
 export let ontoggleplay: () => void;
 export let onsetspeed: (speed: number) => void;
+export let onloaddemo: () => void = () => {};
+export let onsetmapvariant: (variant: 'default' | 'lower') => void = () => {};
 
 let playBtn: HTMLButtonElement | undefined;
 let speedBtnEls: HTMLButtonElement[] = [];
@@ -71,6 +76,35 @@ $: {
     cursor: not-allowed;
 }
 
+.load-demo-button {
+    position: absolute;
+    left: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 34px;
+    padding: 0 14px;
+    background: #2a2a40;
+    border: 1px solid #3a3a50;
+    border-radius: 4px;
+    color: #e2e8f0;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    transition: all 0.15s ease;
+}
+
+.load-demo-button:hover {
+    background: #3b82f6;
+    border-color: #3b82f6;
+    color: #ffffff;
+}
+
+.load-demo-button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
 .speed-group {
     display: flex;
     align-items: center;
@@ -112,6 +146,9 @@ $: {
 </style>
 
 <div class="controls">
+    <button class="load-demo-button" onclick={onloaddemo} disabled={isLoading}>
+        {isLoading ? 'Loading...' : 'Load Demo'}
+    </button>
     <button bind:this={playBtn} class="control-button" onclick={ontoggleplay}>▶</button>
     <div class="speed-group">
         <span class="speed-label">Speed</span>
@@ -119,4 +156,23 @@ $: {
             <button bind:this={speedBtnEls[i]} class="speed-button" onclick={() => onsetspeed(speed)}>{speed}x</button>
         {/each}
     </div>
+    {#if hasLowerMapVariant}
+        <div class="speed-group">
+            <span class="speed-label">Map</span>
+            <button
+                class="speed-button"
+                class:active={mapVariant === 'default'}
+                onclick={() => onsetmapvariant('default')}
+            >
+                Normal
+            </button>
+            <button
+                class="speed-button"
+                class:active={mapVariant === 'lower'}
+                onclick={() => onsetmapvariant('lower')}
+            >
+                Lower
+            </button>
+        </div>
+    {/if}
 </div>
