@@ -21,6 +21,10 @@ const MAX_TRUSTED_SMOKE_RAW_FLIGHT_TICKS = 640;
 const MATCH_DISTANCE_UNITS = 240;
 const MATCH_TICK_WINDOW = 768;
 const SMOKE_MATCH_TICK_WINDOW = 1536;
+const DECOY_COLOR = '#92400e';
+const DECOY_EFFECT_TICKS = 960;
+const DECOY_EXPIRE_INFERENCE_TICKS = 480;
+const STATIONARY_ENDPOINT_DISTANCE_SQUARED = 16;
 
 type NadePathPoint = Pick<NadeTrajectoryPoint, 'tick' | 'x' | 'y' | 'z'>;
 
@@ -31,6 +35,7 @@ function getNadeColor(nadeType: string): string {
     if (nadeType === 'hegrenade') return '#f97316';
     if (nadeType === 'flashbang') return '#fde047';
     if (nadeType === 'molotov' || nadeType === 'incendiary') return '#dc2626';
+    if (nadeType === 'decoy') return DECOY_COLOR;
     return '#60a5fa';
 }
 
@@ -39,6 +44,7 @@ function getNadeEffectFill(nadeType: string): string {
     if (nadeType === 'hegrenade') return 'rgba(249, 115, 22, 0.3)';
     if (nadeType === 'flashbang') return 'rgba(253, 224, 71, 0.2)';
     if (nadeType === 'molotov' || nadeType === 'incendiary') return 'rgba(220, 38, 38, 0.3)';
+    if (nadeType === 'decoy') return 'rgba(146, 64, 14, 0.18)';
     return 'rgba(96, 165, 250, 0.2)';
 }
 
@@ -54,16 +60,26 @@ function getDetonationTick(nade: NadeEvent): number {
     return nade.detonationTick || nade.tick;
 }
 
+function isDecoyNade(nade: NadeEvent): boolean {
+    return nade.nadeType === 'decoy';
+}
+
 function hasTrajectory(nade: NadeEvent): boolean {
     return (nade.trajectory?.length ?? 0) >= 2;
 }
 
 function getCanonicalDetonationTick(nade: NadeEvent): number {
-    return getMatchingEffectEvent(nade)?.detonationTick || getDetonationTick(nade);
+    const effect = getMatchingEffectEvent(nade);
+    if (effect) return getDetonationTick(effect);
+    if (isDecoyNade(nade)) return getDecoyLandingTick(nade);
+    return getDetonationTick(nade);
 }
 
 function getCanonicalFadeTick(nade: NadeEvent): number {
-    return getMatchingEffectEvent(nade)?.fadeTick || nade.fadeTick;
+    const effect = getMatchingEffectEvent(nade);
+    if (effect) return effect.fadeTick || nade.fadeTick;
+    if (isDecoyNade(nade)) return getDecoyExpiryTick(nade);
+    return nade.fadeTick;
 }
 
 function getCanonicalEndPoint(nade: NadeEvent): Pick<NadePathPoint, 'x' | 'y' | 'z'> {
@@ -194,6 +210,55 @@ function distanceSquared(
     return dx * dx + dy * dy;
 }
 
+function inferStationaryEndpointStartTick(nade: NadeEvent): number {
+    const trajectory = nade.trajectory ?? [];
+    if (trajectory.length < 2) return 0;
+
+    const finalPoint = trajectory[trajectory.length - 1];
+    let stationaryStartTick = finalPoint.tick;
+
+    for (let i = trajectory.length - 2; i >= 0; i--) {
+        const point = trajectory[i];
+        if (distanceSquared(point, finalPoint) > STATIONARY_ENDPOINT_DISTANCE_SQUARED) {
+            return stationaryStartTick > 0 ? stationaryStartTick : 0;
+        }
+        if (point.tick > 0) {
+            stationaryStartTick = point.tick;
+        }
+    }
+
+    return 0;
+}
+
+function getDecoyLandingTick(nade: NadeEvent): number {
+    const detonationTick = getDetonationTick(nade);
+    const trajectoryLandingTick = inferStationaryEndpointStartTick(nade);
+
+    if (
+        trajectoryLandingTick > 0 &&
+        detonationTick - trajectoryLandingTick > DECOY_EXPIRE_INFERENCE_TICKS
+    ) {
+        return trajectoryLandingTick;
+    }
+
+    return detonationTick;
+}
+
+function getDecoyExpiryTick(nade: NadeEvent): number {
+    const detonationTick = getDetonationTick(nade);
+    const landingTick = getDecoyLandingTick(nade);
+    const fadeTick = nade.fadeTick;
+
+    if (
+        detonationTick - landingTick > DECOY_EXPIRE_INFERENCE_TICKS &&
+        fadeTick - detonationTick >= DECOY_EFFECT_TICKS - TRAJECTORY_VISIBLE_TICKS
+    ) {
+        return detonationTick;
+    }
+
+    return fadeTick || Math.max(detonationTick, landingTick + DECOY_EFFECT_TICKS);
+}
+
 function samplePathAtTick(path: NadePathPoint[], tick: number): NadePathPoint | null {
     if (path.length === 0) return null;
     if (tick <= path[0].tick) return path[0];
@@ -259,10 +324,22 @@ function drawNadeEffect(
     const endPoint = getCanonicalEndPoint(nade);
     const pos = worldToCanvas(endPoint.x, endPoint.y, mapMetadata, canvasSize);
 
+    ctx.save();
     ctx.fillStyle = getNadeEffectFill(nade.nadeType);
     ctx.beginPath();
     ctx.arc(pos.x, pos.y, getNadeEffectRadius(nade.nadeType), 0, Math.PI * 2);
     ctx.fill();
+
+    if (isDecoyNade(nade)) {
+        ctx.fillStyle = getNadeColor(nade.nadeType);
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+    }
+    ctx.restore();
 }
 
 function drawNadeFlight(
@@ -446,7 +523,7 @@ function isMatchingNadeType(a: string, b: string): boolean {
 }
 
 function getMatchTickWindow(nadeType: string): number {
-    return nadeType === 'smoke' ? SMOKE_MATCH_TICK_WINDOW : MATCH_TICK_WINDOW;
+    return nadeType === 'smoke' || nadeType === 'decoy' ? SMOKE_MATCH_TICK_WINDOW : MATCH_TICK_WINDOW;
 }
 
 function getNadeTimelineStartTick(nade: NadeEvent): number {

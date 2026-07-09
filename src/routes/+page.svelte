@@ -454,7 +454,7 @@ function getNadeMeta(nadeType: string): Omit<BasePlayerTimelineEvent, 'tick' | '
         return { type: 'hegrenade', label: 'HE', color: '#f97316' };
     }
     if (nadeType === 'decoy') {
-        return { type: 'decoy', label: 'DC', color: '#60a5fa' };
+        return { type: 'decoy', label: 'DC', color: '#92400e' };
     }
     return null;
 }
@@ -501,7 +501,7 @@ function areMatchingNadeTypes(a: string, b: string): boolean {
 }
 
 function getNadeMatchTickWindow(nadeType: string): number {
-    return nadeType === 'smoke' ? SMOKE_MATCH_TICK_WINDOW : NADE_MATCH_TICK_WINDOW;
+    return nadeType === 'smoke' || nadeType === 'decoy' ? SMOKE_MATCH_TICK_WINDOW : NADE_MATCH_TICK_WINDOW;
 }
 
 function hasMatchingTrajectoryNade(eventOnlyNade: NadeEvent, steamId: bigint): boolean {

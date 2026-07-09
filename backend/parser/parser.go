@@ -191,6 +191,12 @@ func ParseFile(path string) (*ReplayData, error) {
 	p.RegisterEventHandler(func(e events.HeExplode) {
 		recorder.recordHeExplode(e, p)
 	})
+	p.RegisterEventHandler(func(e events.DecoyStart) {
+		recorder.recordDecoyStart(e, p)
+	})
+	p.RegisterEventHandler(func(e events.DecoyExpired) {
+		recorder.recordDecoyExpired(e, p)
+	})
 	p.RegisterEventHandler(func(e events.PlayerFlashed) {
 		recorder.recordPlayerFlashed(e, p)
 	})
@@ -517,47 +523,44 @@ func (r *frameRecorder) recordNadeDestroyed(e events.GrenadeProjectileDestroy, p
 	}
 
 	nadeType := nadeTypeString(proj.WeaponInstance.Type)
-	detTick := p.CurrentFrame()
-
-	nade := NadeEvent{
-		Tick:           detTick,
-		NadeType:       nadeType,
-		DetonationTick: detTick,
-		EffectRadius:   nadeRadius(nadeType),
-	}
-
-	// Set FadeTick based on nade type duration (in ticks at 64-tick)
-	switch nadeType {
-	case "smoke":
-		nade.FadeTick = detTick + 1152
-	case "hegrenade":
-		nade.FadeTick = detTick + 5
-	case "flashbang":
-		nade.FadeTick = detTick + 3
-	case "molotov", "incendiary":
-		nade.FadeTick = detTick + 448
-	case "decoy":
-		nade.FadeTick = detTick + 960
-	default:
-		nade.FadeTick = detTick
-	}
-
-	if proj.Thrower != nil {
-		nade.ThrowerSteamID = proj.Thrower.SteamID64
-	}
+	destroyTick := p.CurrentFrame()
+	detTick := destroyTick
+	fadeTick := getNadeFadeTick(nadeType, detTick)
 
 	pos := proj.Position()
-	nade.EndX = float32(pos.X)
-	nade.EndY = float32(pos.Y)
-	nade.EndZ = float32(pos.Z)
+	trajectory := make([]TrajectoryPoint, 0, len(proj.Trajectory))
 
 	for _, tp := range proj.Trajectory {
-		nade.Trajectory = append(nade.Trajectory, TrajectoryPoint{
+		trajectory = append(trajectory, TrajectoryPoint{
 			Tick: tp.Tick,
 			X:    float32(tp.Position.X),
 			Y:    float32(tp.Position.Y),
 			Z:    float32(tp.Position.Z),
 		})
+	}
+
+	if nadeType == "decoy" {
+		landingTick := inferStationaryEndpointStartTick(trajectory, destroyTick)
+		if destroyTick-landingTick > secondsToTicks(4, p) {
+			detTick = landingTick
+			fadeTick = destroyTick
+		}
+	}
+
+	nade := NadeEvent{
+		Tick:           detTick,
+		NadeType:       nadeType,
+		DetonationTick: detTick,
+		FadeTick:       fadeTick,
+		EndX:           float32(pos.X),
+		EndY:           float32(pos.Y),
+		EndZ:           float32(pos.Z),
+		Trajectory:     trajectory,
+		EffectRadius:   nadeRadius(nadeType),
+	}
+
+	if proj.Thrower != nil {
+		nade.ThrowerSteamID = proj.Thrower.SteamID64
 	}
 
 	if len(nade.Trajectory) > 0 {
@@ -638,6 +641,79 @@ func (r *frameRecorder) recordHeExplode(e events.HeExplode, p demoinfocs.Parser)
 	}
 	if e.Thrower != nil {
 		nade.ThrowerSteamID = e.Thrower.SteamID64
+	}
+	r.nades = append(r.nades, nade)
+}
+
+func (r *frameRecorder) recordDecoyStart(e events.DecoyStart, p demoinfocs.Parser) {
+	if r.isRecordingInitialRound() {
+		r.markInitialRoundNonKnife()
+	}
+
+	tick := p.CurrentFrame()
+	if tick > r.maxTick {
+		r.maxTick = tick
+	}
+	nade := NadeEvent{
+		Tick:           tick,
+		NadeType:       "decoy",
+		DetonationTick: tick,
+		FadeTick:       tick + 960,
+		EndX:           float32(e.Position.X),
+		EndY:           float32(e.Position.Y),
+		EndZ:           float32(e.Position.Z),
+		EffectRadius:   nadeRadius("decoy"),
+	}
+	if e.Thrower != nil {
+		nade.ThrowerSteamID = e.Thrower.SteamID64
+	}
+	r.nades = append(r.nades, nade)
+}
+
+func (r *frameRecorder) recordDecoyExpired(e events.DecoyExpired, p demoinfocs.Parser) {
+	tick := p.CurrentFrame()
+	if tick > r.maxTick {
+		r.maxTick = tick
+	}
+
+	throwerSteamID := uint64(0)
+	if e.Thrower != nil {
+		throwerSteamID = e.Thrower.SteamID64
+	}
+
+	for i := len(r.nades) - 1; i >= 0; i-- {
+		nade := &r.nades[i]
+		if nade.NadeType != "decoy" || len(nade.Trajectory) > 0 {
+			continue
+		}
+		if throwerSteamID != 0 && nade.ThrowerSteamID != 0 && nade.ThrowerSteamID != throwerSteamID {
+			continue
+		}
+		if tick < nade.DetonationTick || tick-nade.DetonationTick > secondsToTicks(20, p) {
+			continue
+		}
+
+		nade.FadeTick = tick
+		nade.EndX = float32(e.Position.X)
+		nade.EndY = float32(e.Position.Y)
+		nade.EndZ = float32(e.Position.Z)
+		return
+	}
+
+	startTick := tick - 960
+	if startTick < 0 {
+		startTick = 0
+	}
+	nade := NadeEvent{
+		Tick:           startTick,
+		ThrowerSteamID: throwerSteamID,
+		NadeType:       "decoy",
+		DetonationTick: startTick,
+		FadeTick:       tick,
+		EndX:           float32(e.Position.X),
+		EndY:           float32(e.Position.Y),
+		EndZ:           float32(e.Position.Z),
+		EffectRadius:   nadeRadius("decoy"),
 	}
 	r.nades = append(r.nades, nade)
 }
@@ -897,6 +973,54 @@ func durationToTicks(duration time.Duration, p demoinfocs.Parser) int {
 		return 0
 	}
 	return secondsToTicks(duration.Seconds(), p)
+}
+
+func getNadeFadeTick(nadeType string, detTick int) int {
+	switch nadeType {
+	case "smoke":
+		return detTick + 1152
+	case "hegrenade":
+		return detTick + 5
+	case "flashbang":
+		return detTick + 3
+	case "molotov", "incendiary":
+		return detTick + 448
+	case "decoy":
+		return detTick + 960
+	default:
+		return detTick
+	}
+}
+
+func inferStationaryEndpointStartTick(trajectory []TrajectoryPoint, fallbackTick int) int {
+	if len(trajectory) < 2 {
+		return fallbackTick
+	}
+
+	finalPoint := trajectory[len(trajectory)-1]
+	stationaryStartTick := finalPoint.Tick
+
+	for i := len(trajectory) - 2; i >= 0; i-- {
+		point := trajectory[i]
+		if trajectoryDistanceSquared(point, finalPoint) > 16 {
+			if stationaryStartTick > 0 {
+				return stationaryStartTick
+			}
+			return fallbackTick
+		}
+		if point.Tick > 0 {
+			stationaryStartTick = point.Tick
+		}
+	}
+
+	return fallbackTick
+}
+
+func trajectoryDistanceSquared(a, b TrajectoryPoint) float32 {
+	dx := a.X - b.X
+	dy := a.Y - b.Y
+	dz := a.Z - b.Z
+	return dx*dx + dy*dy + dz*dz
 }
 
 func isShootingWeapon(weapon *common.Equipment) bool {

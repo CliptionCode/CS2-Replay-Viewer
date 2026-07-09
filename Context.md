@@ -4,7 +4,7 @@
 
 > **IMPORTANT:** Whenever writing or modifying **Svelte** code, always load the `svelte-core-bestpractices` and `svelte-code-writer` skills first. Whenever writing or modifying **Rust** code, always load the `rust-best-practices` skill first.
 >
-> **Project workflow constraints:** Do not run `pnpm tauri dev`. Do not start or host a Vite dev server automatically; the user wants to run and verify manually. Do not run the Svelte autofixer.
+> **Project workflow constraints:** Do not run `pnpm tauri dev`. Do not start or host a Vite dev server automatically; the user wants to run and verify manually. Never run `npx @sveltejs/mcp svelte-autofixer` or any other Svelte autofixer command in this repository.
 
 ---
 
@@ -231,6 +231,7 @@ Nade trajectories are drawn progressively in `NadeLayer.svelte`. The full trajec
 - After detonation, the remaining dashed trail fades out within about 0.6 seconds while the active effect zone is drawn between `DetonationTick` and `FadeTick`.
 - Nearby no-trajectory pop/explosion events are matched against trajectory-backed nades and used as the canonical `DetonationTick`, `FadeTick`, and endpoint.
 - Smoke matching uses a wider `SMOKE_MATCH_TICK_WINDOW = 1536` because trajectory-backed smoke records can arrive when the smoke entity is removed, much later than `SmokeStart`.
+- Decoy matching uses the wider smoke-style tick window because the lifecycle event starts when the decoy begins and the projectile-destroyed trajectory can arrive when it expires. `DecoyStart`/`DecoyExpired` define the active brown endpoint dot; older parsed data can infer the landing tick from the stationary end of the trajectory.
 - Trajectory-backed duplicate effect zones are skipped when a matched pop/explosion event exists, preventing HE explosions from appearing once at the event tick and again later from the projectile-destroyed record.
 - Event-only nades without a usable start position do not draw a fake origin-to-end path.
 - Uses `ctx.save()`/`ctx.restore()` with `globalAlpha` to avoid affecting subsequent draws.
@@ -240,7 +241,7 @@ Color coding by nade type:
 - HE: `#f97316` (orange)
 - Flash: `#fde047` (yellow)
 - Molotov: `#dc2626` (red)
-- Decoy: `#60a5fa` (blue)
+- Decoy: `#92400e` (brown)
 
 Player labels in `PlayerLayer.svelte` show the player name above the current weapon label. Alive players also get a white radar-style sight cone computed from interpolated `yaw` to indicate look direction.
 
@@ -437,7 +438,7 @@ Install commands: winget for Go, Rust, and Node.js LTS; then `npm i -g pnpm`, `g
 
 ### 8.3 Build & Run Commands
 
-Development server commands are intentionally not run by the agent. Build protobuf: `cd proto && buf generate && cd ..`. Build Go sidecar: `cd backend && go build -o ../src-tauri/binaries/cs2-parser-x86_64-pc-windows-msvc.exe . && cd ..`. Check Rust: `cd src-tauri && cargo check`. Check frontend without auto-fixing when needed.
+Development server commands are intentionally not run by the agent. Build protobuf: `cd proto && buf generate && cd ..`. Build Go sidecar: `cd backend && go build -o ../src-tauri/binaries/cs2-parser-x86_64-pc-windows-msvc.exe . && cd ..`. Check Rust: `cd src-tauri && cargo check`. Check frontend without auto-fixing when needed. Never run `npx @sveltejs/mcp svelte-autofixer` or any other Svelte autofixer command.
 
 ---
 

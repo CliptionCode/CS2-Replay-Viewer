@@ -372,7 +372,7 @@ export class ReplayRenderer {
             flashbang: '#fde047',
             molotov: '#dc2626',
             incendiary: '#dc2626',
-            decoy: '#60a5fa',
+            decoy: '#92400e',
         };
         return colors[nadeType] || '#ffffff';
     }
