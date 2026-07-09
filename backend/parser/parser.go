@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 	"os"
+	"time"
 
 	demoinfocs "github.com/markus-wa/demoinfocs-golang/v5/pkg/demoinfocs"
 	"github.com/markus-wa/demoinfocs-golang/v5/pkg/demoinfocs/common"
@@ -16,16 +17,20 @@ type ReplayData struct {
 	Rounds       []RoundData
 	Kills        []KillEvent
 	Nades        []NadeEvent
+	Flashes      []FlashEvent
+	Noises       []NoiseEvent
+	Bombs        []BombEvent
 	PlayerFrames []PlayerFrame
 	Map          MapData
 }
 
 type DemoHeader struct {
-	MapName      string
-	TickRate     int
-	TotalTicks   int
-	ServerName   string
-	PlaybackTime float64
+	MapName         string
+	TickRate        int
+	TotalTicks      int
+	ServerName      string
+	PlaybackTime    float64
+	BombTimeSeconds float32
 }
 
 type PlayerInfo struct {
@@ -101,6 +106,33 @@ type PlayerFrame struct {
 	IsAlive bool
 }
 
+type FlashEvent struct {
+	Tick            int
+	PlayerSteamID   uint64
+	AttackerSteamID uint64
+	DurationSeconds float32
+	EndTick         int
+}
+
+type NoiseEvent struct {
+	Tick      int
+	EndTick   int
+	SteamID   uint64
+	X         float32
+	Y         float32
+	Z         float32
+	Radius    float32
+	NoiseType string
+}
+
+type BombEvent struct {
+	Tick          int
+	EventType     string
+	PlayerSteamID uint64
+	Site          string
+	HasKit        bool
+}
+
 type MapData struct {
 	Name   string
 	PosX   float64
@@ -158,6 +190,27 @@ func ParseFile(path string) (*ReplayData, error) {
 	p.RegisterEventHandler(func(e events.HeExplode) {
 		recorder.recordHeExplode(e, p)
 	})
+	p.RegisterEventHandler(func(e events.PlayerFlashed) {
+		recorder.recordPlayerFlashed(e, p)
+	})
+	p.RegisterEventHandler(func(e events.PlayerSound) {
+		recorder.recordPlayerSound(e, p)
+	})
+	p.RegisterEventHandler(func(e events.BombPlanted) {
+		recorder.recordBombPlanted(e, p)
+	})
+	p.RegisterEventHandler(func(e events.BombExplode) {
+		recorder.recordBombExploded(e, p)
+	})
+	p.RegisterEventHandler(func(e events.BombDefuseStart) {
+		recorder.recordBombDefuseStart(e, p)
+	})
+	p.RegisterEventHandler(func(e events.BombDefuseAborted) {
+		recorder.recordBombDefuseAborted(e, p)
+	})
+	p.RegisterEventHandler(func(e events.BombDefused) {
+		recorder.recordBombDefused(e, p)
+	})
 	p.RegisterEventHandler(func(e events.PlayerHurt) {
 		recorder.recordPlayerHurt(e)
 	})
@@ -192,6 +245,9 @@ type killRecord struct {
 type frameRecorder struct {
 	kills        []KillEvent
 	nades        []NadeEvent
+	flashes      []FlashEvent
+	noises       []NoiseEvent
+	bombs        []BombEvent
 	rounds       []RoundData
 	currentRound *RoundData
 	playerFrames []PlayerFrame
@@ -425,10 +481,10 @@ func (r *frameRecorder) recordNadeDestroyed(e events.GrenadeProjectileDestroy, p
 	detTick := p.CurrentFrame()
 
 	nade := NadeEvent{
-		Tick:            detTick,
-		NadeType:        nadeType,
-		DetonationTick:  detTick,
-		EffectRadius:    nadeRadius(nadeType),
+		Tick:           detTick,
+		NadeType:       nadeType,
+		DetonationTick: detTick,
+		EffectRadius:   nadeRadius(nadeType),
 	}
 
 	// Set FadeTick based on nade type duration (in ticks at 64-tick)
@@ -547,6 +603,106 @@ func (r *frameRecorder) recordHeExplode(e events.HeExplode, p demoinfocs.Parser)
 	r.nades = append(r.nades, nade)
 }
 
+func (r *frameRecorder) recordPlayerFlashed(e events.PlayerFlashed, p demoinfocs.Parser) {
+	if e.Player == nil {
+		return
+	}
+
+	tick := p.CurrentFrame()
+	if tick > r.maxTick {
+		r.maxTick = tick
+	}
+
+	durationSeconds := float32(e.FlashDuration().Seconds())
+	if durationSeconds <= 0 && e.Player.FlashDuration > 0 {
+		durationSeconds = e.Player.FlashDuration
+	}
+	if durationSeconds <= 0 {
+		return
+	}
+
+	attackerSteamID := uint64(0)
+	if e.Attacker != nil {
+		attackerSteamID = e.Attacker.SteamID64
+	}
+
+	r.flashes = append(r.flashes, FlashEvent{
+		Tick:            tick,
+		PlayerSteamID:   e.Player.SteamID64,
+		AttackerSteamID: attackerSteamID,
+		DurationSeconds: durationSeconds,
+		EndTick:         tick + secondsToTicks(float64(durationSeconds), p),
+	})
+}
+
+func (r *frameRecorder) recordPlayerSound(e events.PlayerSound, p demoinfocs.Parser) {
+	if e.Player == nil || !e.Player.IsAlive() || e.Radius <= 0 {
+		return
+	}
+
+	tick := p.CurrentFrame()
+	if tick > r.maxTick {
+		r.maxTick = tick
+	}
+
+	durationTicks := durationToTicks(e.Duration, p)
+	if durationTicks <= 0 {
+		durationTicks = 24
+	}
+
+	pos := e.Player.Position()
+	r.noises = append(r.noises, NoiseEvent{
+		Tick:      tick,
+		EndTick:   tick + durationTicks,
+		SteamID:   e.Player.SteamID64,
+		X:         float32(pos.X),
+		Y:         float32(pos.Y),
+		Z:         float32(pos.Z),
+		Radius:    float32(e.Radius),
+		NoiseType: "sound",
+	})
+}
+
+func (r *frameRecorder) recordBombPlanted(e events.BombPlanted, p demoinfocs.Parser) {
+	r.recordBombEvent("planted", e.Player, e.Site, false, p)
+}
+
+func (r *frameRecorder) recordBombExploded(e events.BombExplode, p demoinfocs.Parser) {
+	r.recordBombEvent("exploded", e.Player, e.Site, false, p)
+}
+
+func (r *frameRecorder) recordBombDefuseStart(e events.BombDefuseStart, p demoinfocs.Parser) {
+	r.recordBombEvent("defuse_start", e.Player, events.BomsiteUnknown, e.HasKit, p)
+}
+
+func (r *frameRecorder) recordBombDefuseAborted(e events.BombDefuseAborted, p demoinfocs.Parser) {
+	r.recordBombEvent("defuse_aborted", e.Player, events.BomsiteUnknown, false, p)
+}
+
+func (r *frameRecorder) recordBombDefused(e events.BombDefused, p demoinfocs.Parser) {
+	r.recordBombEvent("defused", e.Player, e.Site, false, p)
+}
+
+func (r *frameRecorder) recordBombEvent(eventType string, player *common.Player, site events.Bombsite, hasKit bool, p demoinfocs.Parser) {
+	tick := p.CurrentFrame()
+	if tick > r.maxTick {
+		r.maxTick = tick
+	}
+
+	playerSteamID := uint64(0)
+	if player != nil {
+		playerSteamID = player.SteamID64
+	}
+
+	r.bombs = append(r.bombs, BombEvent{
+		Tick:          tick,
+		EventType:     eventType,
+		PlayerSteamID: playerSteamID,
+		Site:          bombsiteString(site),
+		HasKit:        hasKit,
+	})
+}
+
 func (r *frameRecorder) recordPlayerHurt(e events.PlayerHurt) {
 	if e.Attacker == nil || e.Player == nil {
 		return
@@ -599,18 +755,57 @@ func (r *frameRecorder) ensureStats(steamID uint64) *playerStatTracker {
 	return r.playerStats[steamID]
 }
 
+func tickRateOrDefault(p demoinfocs.Parser) float64 {
+	tickRate := p.TickRate()
+	if tickRate <= 0 {
+		return 64
+	}
+	return tickRate
+}
+
+func secondsToTicks(seconds float64, p demoinfocs.Parser) int {
+	return int(seconds*tickRateOrDefault(p) + 0.5)
+}
+
+func durationToTicks(duration time.Duration, p demoinfocs.Parser) int {
+	if duration <= 0 {
+		return 0
+	}
+	return secondsToTicks(duration.Seconds(), p)
+}
+
+func bombsiteString(site events.Bombsite) string {
+	switch site {
+	case events.BombsiteA:
+		return "A"
+	case events.BombsiteB:
+		return "B"
+	default:
+		return ""
+	}
+}
+
 func (r *frameRecorder) buildReplayData(p demoinfocs.Parser) *ReplayData {
 	replay := &ReplayData{}
+	tickRate := int(tickRateOrDefault(p))
+	bombTimeSeconds := float32(40)
+	if bombTime, err := p.GameState().Rules().BombTime(); err == nil && bombTime > 0 {
+		bombTimeSeconds = float32(bombTime.Seconds())
+	}
 
 	replay.Header = DemoHeader{
-		MapName:    r.mapName,
-		TickRate:   64,
-		TotalTicks: r.maxTick,
-		ServerName: r.serverName,
+		MapName:         r.mapName,
+		TickRate:        tickRate,
+		TotalTicks:      r.maxTick,
+		ServerName:      r.serverName,
+		BombTimeSeconds: bombTimeSeconds,
 	}
 
 	replay.Kills = r.kills
 	replay.Nades = r.nades
+	replay.Flashes = r.flashes
+	replay.Noises = r.noises
+	replay.Bombs = r.bombs
 	replay.Rounds = r.rounds
 	replay.PlayerFrames = r.playerFrames
 

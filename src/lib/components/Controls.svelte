@@ -3,8 +3,6 @@ export let isPlaying = false;
 export let playbackSpeed = 1;
 export let speedOptions: number[] = [0.5, 1, 2, 3];
 export let ontoggleplay: () => void;
-export let onprevkill: () => void;
-export let onnextkill: () => void;
 export let onsetspeed: (speed: number) => void;
 
 let playBtn: HTMLButtonElement | undefined;
@@ -115,8 +113,6 @@ $: {
 
 <div class="controls">
     <button bind:this={playBtn} class="control-button" onclick={ontoggleplay}>▶</button>
-    <button class="control-button" onclick={onprevkill} title="Previous Kill">◀</button>
-    <button class="control-button" onclick={onnextkill} title="Next Kill">▶</button>
     <div class="speed-group">
         <span class="speed-label">Speed</span>
         {#each speedOptions as speed, i}

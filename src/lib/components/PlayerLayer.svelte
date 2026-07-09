@@ -3,15 +3,18 @@ import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
 import { worldToCanvas } from '$lib/canvas/transforms';
 import { getPlaybackTick, subscribePlaybackTick } from '$lib/playback-state';
-import type { ReplayData, PlayerFrame, MapData as MapMetadata } from '$lib/types/replay/replay_pb';
+import type { FlashEvent, NoiseEvent, ReplayData, PlayerFrame, MapData as MapMetadata } from '$lib/types/replay/replay_pb';
 
 export let replayData: ReplayData | null = null;
 export let mapMetadata: MapMetadata;
 export let isPlaying: boolean = false;
 export let sightConeLength: number = 34;
 export let sightConeHalfAngle: number = 0.32;
+export let showLineOfSight = false;
+export let lineOfSightLength = 160;
+export let selectedPlayerSteamId: bigint | null = null;
 
-let container: HTMLElement | null = null;
+let container: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
 
 let playerFrames = new Map<string, PlayerFrame>();
@@ -23,10 +26,13 @@ let trailCache = new Map<string, PlayerFrame[]>();
 let trailCursor = new Map<string, number>();
 let cachedRoundKey: string | null = null;
 let unsubscribeTick: (() => void) | null = null;
+let flashEventsBySteamId = new Map<string, FlashEvent[]>();
+let noiseEvents: NoiseEvent[] = [];
 
 const MAX_INTERPOLATION_GAP_TICKS = 16;
 const TEAM_T = 2;
 const TEAM_CT = 3;
+const HIGHLIGHT_COLOR = '#22c55e';
 
 function lerp(start: number, end: number, alpha: number): number {
     return start + (end - start) * alpha;
@@ -61,6 +67,8 @@ function initializeTrails(): void {
     playerFrameIndices.clear();
     trailCache.clear();
     trailCursor.clear();
+    flashEventsBySteamId.clear();
+    noiseEvents = [];
     cachedRoundKey = null;
     cachedKills = null;
     cachedKillsKey = null;
@@ -77,6 +85,19 @@ function initializeTrails(): void {
         }
         trails.get(steamId)?.push(frame);
     }
+
+    for (const flash of replayData.flashes ?? []) {
+        const steamId = flash.playerSteamId.toString();
+        if (!flashEventsBySteamId.has(steamId)) {
+            flashEventsBySteamId.set(steamId, []);
+        }
+        flashEventsBySteamId.get(steamId)?.push(flash);
+    }
+    for (const events of flashEventsBySteamId.values()) {
+        events.sort((a, b) => a.tick - b.tick);
+    }
+
+    noiseEvents = [...(replayData.noises ?? [])].sort((a, b) => a.tick - b.tick);
 }
 
 function getPlayableSteamIds(): Set<string> {
@@ -226,14 +247,24 @@ function getCachedTrail(steamId: string): PlayerFrame[] {
     return trail.slice(startIdx, endIdx + 1);
 }
 
-function drawPlayerSightCone(
-    ctx: CanvasRenderingContext2D,
+function hexToRgba(hex: string, alpha: number): string {
+    const normalized = hex.replace('#', '');
+    const value = Number.parseInt(normalized.length === 3
+        ? normalized.split('').map(char => char + char).join('')
+        : normalized, 16);
+    const r = (value >> 16) & 255;
+    const g = (value >> 8) & 255;
+    const b = value & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function getLookCanvasAngle(
     frame: PlayerFrame,
     pos: { x: number; y: number },
     mapMetadata: MapMetadata,
     canvasSize: { width: number; height: number }
-): void {
-    if (!Number.isFinite(frame.yaw)) return;
+): number | null {
+    if (!Number.isFinite(frame.yaw)) return null;
 
     const yawRad = frame.yaw * Math.PI / 180;
     const lookTarget = worldToCanvas(
@@ -242,7 +273,20 @@ function drawPlayerSightCone(
         mapMetadata,
         canvasSize
     );
-    const angle = Math.atan2(lookTarget.y - pos.y, lookTarget.x - pos.x);
+    return Math.atan2(lookTarget.y - pos.y, lookTarget.x - pos.x);
+}
+
+function drawPlayerSightCone(
+    ctx: CanvasRenderingContext2D,
+    frame: PlayerFrame,
+    pos: { x: number; y: number },
+    mapMetadata: MapMetadata,
+    canvasSize: { width: number; height: number },
+    color: string
+): void {
+    const angle = getLookCanvasAngle(frame, pos, mapMetadata, canvasSize);
+    if (angle === null) return;
+
     const coneLength = Math.max(8, sightConeLength);
     const coneHalfAngle = Math.max(0.05, sightConeHalfAngle);
     const leftAngle = angle - coneHalfAngle;
@@ -255,8 +299,8 @@ function drawPlayerSightCone(
     const tipY = pos.y + Math.sin(angle) * (coneLength + 4);
 
     ctx.save();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.fillStyle = hexToRgba(color, 0.16);
+    ctx.strokeStyle = hexToRgba(color, 0.88);
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(pos.x, pos.y);
@@ -266,6 +310,108 @@ function drawPlayerSightCone(
     ctx.fill();
     ctx.stroke();
     ctx.restore();
+}
+
+function drawPlayerLineOfSight(
+    ctx: CanvasRenderingContext2D,
+    frame: PlayerFrame,
+    pos: { x: number; y: number },
+    mapMetadata: MapMetadata,
+    canvasSize: { width: number; height: number },
+    color: string
+): void {
+    const angle = getLookCanvasAngle(frame, pos, mapMetadata, canvasSize);
+    if (angle === null) return;
+
+    const length = Math.max(18, lineOfSightLength);
+    const endX = pos.x + Math.cos(angle) * length;
+    const endY = pos.y + Math.sin(angle) * length;
+
+    ctx.save();
+    ctx.strokeStyle = hexToRgba(color, 0.9);
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+    ctx.restore();
+}
+
+function getActiveFlash(steamId: string, tick: number): FlashEvent | null {
+    const flashes = flashEventsBySteamId.get(steamId);
+    if (!flashes) return null;
+
+    for (let i = flashes.length - 1; i >= 0; i--) {
+        const flash = flashes[i];
+        if (flash.tick > tick) continue;
+        if (tick <= flash.endTick) return flash;
+        return null;
+    }
+
+    return null;
+}
+
+function drawFlashCircle(
+    ctx: CanvasRenderingContext2D,
+    flash: FlashEvent | null,
+    tick: number,
+    pos: { x: number; y: number }
+): void {
+    if (!flash || flash.endTick <= flash.tick) return;
+
+    const totalTicks = Math.max(1, flash.endTick - flash.tick);
+    const remainingRatio = Math.max(0, Math.min(1, (flash.endTick - tick) / totalTicks));
+    const strength = Math.max(0, Math.min(1, flash.durationSeconds / 5));
+    const alpha = (0.12 + strength * 0.58) * remainingRatio;
+    if (alpha <= 0) return;
+
+    ctx.save();
+    ctx.fillStyle = `rgba(156, 163, 175, ${alpha})`;
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, 18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+}
+
+function getWorldRadiusInCanvasPixels(
+    x: number,
+    y: number,
+    radius: number,
+    mapMetadata: MapMetadata,
+    canvasSize: { width: number; height: number }
+): number {
+    const center = worldToCanvas(x, y, mapMetadata, canvasSize);
+    const edge = worldToCanvas(x + radius, y, mapMetadata, canvasSize);
+    return Math.max(1, Math.hypot(edge.x - center.x, edge.y - center.y));
+}
+
+function drawNoiseCircles(
+    ctx: CanvasRenderingContext2D,
+    tick: number,
+    mapMetadata: MapMetadata,
+    canvasSize: { width: number; height: number }
+): void {
+    for (const noise of noiseEvents) {
+        if (noise.tick > tick) break;
+        if (noise.endTick < tick || noise.radius <= 0) continue;
+
+        const playerFrame = playerFrames.get(noise.steamId.toString());
+        if (!playerFrame?.isAlive) continue;
+
+        const totalTicks = Math.max(1, noise.endTick - noise.tick);
+        const remainingRatio = Math.max(0.22, Math.min(1, (noise.endTick - tick) / totalTicks));
+        const pos = worldToCanvas(noise.x, noise.y, mapMetadata, canvasSize);
+        const radius = getWorldRadiusInCanvasPixels(noise.x, noise.y, noise.radius, mapMetadata, canvasSize);
+
+        ctx.save();
+        ctx.strokeStyle = `rgba(239, 68, 68, ${0.75 * remainingRatio})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+    }
 }
 
 function drawPlayer(
@@ -283,18 +429,33 @@ function drawPlayer(
     if (team !== TEAM_T && team !== TEAM_CT) return;
 
     const teamColor = team === 2 ? '#f97316' : team === 3 ? '#3b82f6' : '#6b7280';
+    const isSelected = selectedPlayerSteamId !== null && selectedPlayerSteamId.toString() === steamId;
+    const playerColor = isSelected && isAlive ? HIGHLIGHT_COLOR : teamColor;
 
     if (isAlive) {
-        drawPlayerSightCone(ctx, frame, pos, mapMetadata, canvasSize);
+        drawPlayerSightCone(ctx, frame, pos, mapMetadata, canvasSize, playerColor);
+        if (showLineOfSight) {
+            drawPlayerLineOfSight(ctx, frame, pos, mapMetadata, canvasSize, playerColor);
+        }
     }
+
+    drawFlashCircle(ctx, getActiveFlash(steamId, tick), tick, pos);
     
     ctx.beginPath();
     ctx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
-    ctx.fillStyle = isAlive ? teamColor : '#6b7280';
+    ctx.fillStyle = isAlive ? playerColor : '#6b7280';
     ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = isSelected ? HIGHLIGHT_COLOR : '#ffffff';
+    ctx.lineWidth = isSelected ? 3 : 2;
     ctx.stroke();
+
+    if (isSelected) {
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 8, 0, Math.PI * 2);
+        ctx.strokeStyle = HIGHLIGHT_COLOR;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+    }
     
     if (isAlive) {
         ctx.textAlign = 'center';
@@ -307,7 +468,7 @@ function drawPlayer(
         const nameY = weapon ? pos.y - 24 : pos.y - 10;
 
         ctx.font = '600 12px Inter, sans-serif';
-        ctx.fillStyle = teamColor;
+        ctx.fillStyle = playerColor;
         ctx.strokeText(playerName, pos.x, nameY);
         ctx.fillText(playerName, pos.x, nameY);
 
@@ -421,7 +582,7 @@ function stopRenderLoop() {
     renderLoopId = null;
 }
 
-function resizeCanvas(container: HTMLElement): { width: number; height: number } {
+function resizeCanvas(container: HTMLCanvasElement): { width: number; height: number } {
     const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
 
@@ -453,16 +614,20 @@ function render() {
 
         ctx.clearRect(0, 0, canvasSize.width, canvasSize.height);
 
+        ctx.save();
+
         for (const [steamId] of trails) {
             const trail = getCachedTrail(steamId);
             drawPlayerTrail(ctx, trail, mapMetadata, canvasSize);
         }
 
         drawKillMarkers(ctx, getCachedKillsInCurrentRound(tick), mapMetadata, canvasSize, tick);
+        drawNoiseCircles(ctx, tick, mapMetadata, canvasSize);
 
         for (const [steamId, frame] of playerFrames) {
             drawPlayer(ctx, frame, steamId, mapMetadata, canvasSize, tick);
         }
+        ctx.restore();
     } catch (error) {
         console.error('Error rendering player layer:', error);
     }
@@ -519,7 +684,7 @@ $: {
 }
 
 $: {
-    void sightConeLength, sightConeHalfAngle;
+    void sightConeLength, sightConeHalfAngle, showLineOfSight, lineOfSightLength, selectedPlayerSteamId;
     if (browser && ctx) {
         scheduleRender();
     }
@@ -564,6 +729,9 @@ onDestroy(() => {
     background: transparent;
     overflow: hidden;
     border-radius: 8px;
+    transform: var(--replay-viewport-transform, none);
+    transform-origin: 0 0;
+    will-change: transform;
 }
 
 .player-layer.canvas {

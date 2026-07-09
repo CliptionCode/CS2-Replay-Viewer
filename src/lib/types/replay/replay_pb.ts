@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file replay.proto.
  */
 export const file_replay: GenFile = /*@__PURE__*/
-  fileDesc("CgxyZXBsYXkucHJvdG8SBnJlcGxheSL/AQoKUmVwbGF5RGF0YRIiCgZoZWFkZXIYASABKAsyEi5yZXBsYXkuRGVtb0hlYWRlchIjCgdwbGF5ZXJzGAIgAygLMhIucmVwbGF5LlBsYXllckluZm8SIQoGcm91bmRzGAMgAygLMhEucmVwbGF5LlJvdW5kRGF0YRIgCgVraWxscxgEIAMoCzIRLnJlcGxheS5LaWxsRXZlbnQSIAoFbmFkZXMYBSADKAsyES5yZXBsYXkuTmFkZUV2ZW50EiMKBmZyYW1lcxgGIAMoCzITLnJlcGxheS5QbGF5ZXJGcmFtZRIcCgNtYXAYByABKAsyDy5yZXBsYXkuTWFwRGF0YSJyCgpEZW1vSGVhZGVyEhAKCG1hcF9uYW1lGAEgASgJEhEKCXRpY2tfcmF0ZRgCIAEoBRITCgt0b3RhbF90aWNrcxgDIAEoBRITCgtzZXJ2ZXJfbmFtZRgEIAEoCRIVCg1wbGF5YmFja190aW1lGAUgASgCIqoBCgpQbGF5ZXJJbmZvEhAKCHN0ZWFtX2lkGAEgASgEEgwKBG5hbWUYAiABKAkSDAoEdGVhbRgDIAEoBRINCgVraWxscxgEIAEoBRIOCgZkZWF0aHMYBSABKAUSDwoHYXNzaXN0cxgGIAEoBRILCgNhZHIYByABKAISDAoEa2FzdBgIIAEoBRINCgVzY29yZRgJIAEoBRIUCgx0b3RhbF9kYW1hZ2UYCiABKAUioQEKCVJvdW5kRGF0YRIUCgxyb3VuZF9udW1iZXIYASABKAUSEgoKc3RhcnRfdGljaxgCIAEoBRIQCghlbmRfdGljaxgDIAEoBRITCgt3aW5uZXJfdGVhbRgEIAEoBRISCgp3aW5fcmVhc29uGAUgASgJEhIKCmtpbGxfY291bnQYBiABKAUSGwoTZnJlZXpldGltZV9lbmRfdGljaxgHIAEoBSLUAQoJS2lsbEV2ZW50EgwKBHRpY2sYASABKAUSFwoPa2lsbGVyX3N0ZWFtX2lkGAIgASgEEhcKD3ZpY3RpbV9zdGVhbV9pZBgDIAEoBBIOCgZ3ZWFwb24YBCABKAkSEwoLaXNfaGVhZHNob3QYBSABKAgSGgoScGVuZXRyYXRlZF9vYmplY3RzGAYgASgFEhAKCGtpbGxlcl94GAcgASgCEhAKCGtpbGxlcl95GAggASgCEhAKCHZpY3RpbV94GAkgASgCEhAKCHZpY3RpbV95GAogASgCIpoCCglOYWRlRXZlbnQSDAoEdGljaxgBIAEoBRIYChB0aHJvd2VyX3N0ZWFtX2lkGAIgASgEEhEKCW5hZGVfdHlwZRgDIAEoCRIPCgdzdGFydF94GAQgASgCEg8KB3N0YXJ0X3kYBSABKAISDwoHc3RhcnRfehgGIAEoAhINCgVlbmRfeBgHIAEoAhINCgVlbmRfeRgIIAEoAhINCgVlbmRfehgJIAEoAhIvCgp0cmFqZWN0b3J5GAogAygLMhsucmVwbGF5Lk5hZGVUcmFqZWN0b3J5UG9pbnQSFwoPZGV0b25hdGlvbl90aWNrGAsgASgFEhEKCWZhZGVfdGljaxgMIAEoBRIVCg1lZmZlY3RfcmFkaXVzGA0gASgCIkQKE05hZGVUcmFqZWN0b3J5UG9pbnQSDAoEdGljaxgBIAEoBRIJCgF4GAIgASgCEgkKAXkYAyABKAISCQoBehgEIAEoAiKrAQoLUGxheWVyRnJhbWUSDAoEdGljaxgBIAEoBRIQCghzdGVhbV9pZBgCIAEoBBIJCgF4GAMgASgCEgkKAXkYBCABKAISCQoBehgFIAEoAhILCgN5YXcYBiABKAISDQoFcGl0Y2gYByABKAISDgoGaGVhbHRoGAggASgFEg0KBWFybW9yGAkgASgFEg4KBndlYXBvbhgKIAEoCRIQCghpc19hbGl2ZRgLIAEoCCKBAQoHTWFwRGF0YRIMCgRuYW1lGAEgASgJEg0KBXBvc194GAIgASgBEg0KBXBvc195GAMgASgBEg0KBXNjYWxlGAQgASgBEg4KBnJvdGF0ZRgFIAEoARIMCgR6b29tGAYgASgBEg0KBXdpZHRoGAcgASgFEg4KBmhlaWdodBgIIAEoBUI4WjZnaXRodWIuY29tL3lvdXJuYW1lL2NzMi1yZXBsYXktdmlld2VyL2JhY2tlbmQvcHJvdG9idWZiBnByb3RvMw");
+  fileDesc("CgxyZXBsYXkucHJvdG8SBnJlcGxheSLqAgoKUmVwbGF5RGF0YRIiCgZoZWFkZXIYASABKAsyEi5yZXBsYXkuRGVtb0hlYWRlchIjCgdwbGF5ZXJzGAIgAygLMhIucmVwbGF5LlBsYXllckluZm8SIQoGcm91bmRzGAMgAygLMhEucmVwbGF5LlJvdW5kRGF0YRIgCgVraWxscxgEIAMoCzIRLnJlcGxheS5LaWxsRXZlbnQSIAoFbmFkZXMYBSADKAsyES5yZXBsYXkuTmFkZUV2ZW50EiMKBmZyYW1lcxgGIAMoCzITLnJlcGxheS5QbGF5ZXJGcmFtZRIcCgNtYXAYByABKAsyDy5yZXBsYXkuTWFwRGF0YRIjCgdmbGFzaGVzGAggAygLMhIucmVwbGF5LkZsYXNoRXZlbnQSIgoGbm9pc2VzGAkgAygLMhIucmVwbGF5Lk5vaXNlRXZlbnQSIAoFYm9tYnMYCiADKAsyES5yZXBsYXkuQm9tYkV2ZW50Io0BCgpEZW1vSGVhZGVyEhAKCG1hcF9uYW1lGAEgASgJEhEKCXRpY2tfcmF0ZRgCIAEoBRITCgt0b3RhbF90aWNrcxgDIAEoBRITCgtzZXJ2ZXJfbmFtZRgEIAEoCRIVCg1wbGF5YmFja190aW1lGAUgASgCEhkKEWJvbWJfdGltZV9zZWNvbmRzGAYgASgCIqoBCgpQbGF5ZXJJbmZvEhAKCHN0ZWFtX2lkGAEgASgEEgwKBG5hbWUYAiABKAkSDAoEdGVhbRgDIAEoBRINCgVraWxscxgEIAEoBRIOCgZkZWF0aHMYBSABKAUSDwoHYXNzaXN0cxgGIAEoBRILCgNhZHIYByABKAISDAoEa2FzdBgIIAEoBRINCgVzY29yZRgJIAEoBRIUCgx0b3RhbF9kYW1hZ2UYCiABKAUioQEKCVJvdW5kRGF0YRIUCgxyb3VuZF9udW1iZXIYASABKAUSEgoKc3RhcnRfdGljaxgCIAEoBRIQCghlbmRfdGljaxgDIAEoBRITCgt3aW5uZXJfdGVhbRgEIAEoBRISCgp3aW5fcmVhc29uGAUgASgJEhIKCmtpbGxfY291bnQYBiABKAUSGwoTZnJlZXpldGltZV9lbmRfdGljaxgHIAEoBSLUAQoJS2lsbEV2ZW50EgwKBHRpY2sYASABKAUSFwoPa2lsbGVyX3N0ZWFtX2lkGAIgASgEEhcKD3ZpY3RpbV9zdGVhbV9pZBgDIAEoBBIOCgZ3ZWFwb24YBCABKAkSEwoLaXNfaGVhZHNob3QYBSABKAgSGgoScGVuZXRyYXRlZF9vYmplY3RzGAYgASgFEhAKCGtpbGxlcl94GAcgASgCEhAKCGtpbGxlcl95GAggASgCEhAKCHZpY3RpbV94GAkgASgCEhAKCHZpY3RpbV95GAogASgCIpoCCglOYWRlRXZlbnQSDAoEdGljaxgBIAEoBRIYChB0aHJvd2VyX3N0ZWFtX2lkGAIgASgEEhEKCW5hZGVfdHlwZRgDIAEoCRIPCgdzdGFydF94GAQgASgCEg8KB3N0YXJ0X3kYBSABKAISDwoHc3RhcnRfehgGIAEoAhINCgVlbmRfeBgHIAEoAhINCgVlbmRfeRgIIAEoAhINCgVlbmRfehgJIAEoAhIvCgp0cmFqZWN0b3J5GAogAygLMhsucmVwbGF5Lk5hZGVUcmFqZWN0b3J5UG9pbnQSFwoPZGV0b25hdGlvbl90aWNrGAsgASgFEhEKCWZhZGVfdGljaxgMIAEoBRIVCg1lZmZlY3RfcmFkaXVzGA0gASgCIkQKE05hZGVUcmFqZWN0b3J5UG9pbnQSDAoEdGljaxgBIAEoBRIJCgF4GAIgASgCEgkKAXkYAyABKAISCQoBehgEIAEoAiKrAQoLUGxheWVyRnJhbWUSDAoEdGljaxgBIAEoBRIQCghzdGVhbV9pZBgCIAEoBBIJCgF4GAMgASgCEgkKAXkYBCABKAISCQoBehgFIAEoAhILCgN5YXcYBiABKAISDQoFcGl0Y2gYByABKAISDgoGaGVhbHRoGAggASgFEg0KBWFybW9yGAkgASgFEg4KBndlYXBvbhgKIAEoCRIQCghpc19hbGl2ZRgLIAEoCCJ6CgpGbGFzaEV2ZW50EgwKBHRpY2sYASABKAUSFwoPcGxheWVyX3N0ZWFtX2lkGAIgASgEEhkKEWF0dGFja2VyX3N0ZWFtX2lkGAMgASgEEhgKEGR1cmF0aW9uX3NlY29uZHMYBCABKAISEAoIZW5kX3RpY2sYBSABKAUigwEKCk5vaXNlRXZlbnQSDAoEdGljaxgBIAEoBRIQCghlbmRfdGljaxgCIAEoBRIQCghzdGVhbV9pZBgDIAEoBBIJCgF4GAQgASgCEgkKAXkYBSABKAISCQoBehgGIAEoAhIOCgZyYWRpdXMYByABKAISEgoKbm9pc2VfdHlwZRgIIAEoCSJlCglCb21iRXZlbnQSDAoEdGljaxgBIAEoBRISCgpldmVudF90eXBlGAIgASgJEhcKD3BsYXllcl9zdGVhbV9pZBgDIAEoBBIMCgRzaXRlGAQgASgJEg8KB2hhc19raXQYBSABKAgigQEKB01hcERhdGESDAoEbmFtZRgBIAEoCRINCgVwb3NfeBgCIAEoARINCgVwb3NfeRgDIAEoARINCgVzY2FsZRgEIAEoARIOCgZyb3RhdGUYBSABKAESDAoEem9vbRgGIAEoARINCgV3aWR0aBgHIAEoBRIOCgZoZWlnaHQYCCABKAVCOFo2Z2l0aHViLmNvbS95b3VybmFtZS9jczItcmVwbGF5LXZpZXdlci9iYWNrZW5kL3Byb3RvYnVmYgZwcm90bzM");
 
 /**
  * @generated from message replay.ReplayData
@@ -50,6 +50,21 @@ export type ReplayData = Message<"replay.ReplayData"> & {
    * @generated from field: replay.MapData map = 7;
    */
   map?: MapData | undefined;
+
+  /**
+   * @generated from field: repeated replay.FlashEvent flashes = 8;
+   */
+  flashes: FlashEvent[];
+
+  /**
+   * @generated from field: repeated replay.NoiseEvent noises = 9;
+   */
+  noises: NoiseEvent[];
+
+  /**
+   * @generated from field: repeated replay.BombEvent bombs = 10;
+   */
+  bombs: BombEvent[];
 };
 
 /**
@@ -87,6 +102,11 @@ export type DemoHeader = Message<"replay.DemoHeader"> & {
    * @generated from field: float playback_time = 5;
    */
   playbackTime: number;
+
+  /**
+   * @generated from field: float bomb_time_seconds = 6;
+   */
+  bombTimeSeconds: number;
 };
 
 /**
@@ -444,6 +464,132 @@ export const PlayerFrameSchema: GenMessage<PlayerFrame> = /*@__PURE__*/
   messageDesc(file_replay, 7);
 
 /**
+ * @generated from message replay.FlashEvent
+ */
+export type FlashEvent = Message<"replay.FlashEvent"> & {
+  /**
+   * @generated from field: int32 tick = 1;
+   */
+  tick: number;
+
+  /**
+   * @generated from field: uint64 player_steam_id = 2;
+   */
+  playerSteamId: bigint;
+
+  /**
+   * @generated from field: uint64 attacker_steam_id = 3;
+   */
+  attackerSteamId: bigint;
+
+  /**
+   * @generated from field: float duration_seconds = 4;
+   */
+  durationSeconds: number;
+
+  /**
+   * @generated from field: int32 end_tick = 5;
+   */
+  endTick: number;
+};
+
+/**
+ * Describes the message replay.FlashEvent.
+ * Use `create(FlashEventSchema)` to create a new message.
+ */
+export const FlashEventSchema: GenMessage<FlashEvent> = /*@__PURE__*/
+  messageDesc(file_replay, 8);
+
+/**
+ * @generated from message replay.NoiseEvent
+ */
+export type NoiseEvent = Message<"replay.NoiseEvent"> & {
+  /**
+   * @generated from field: int32 tick = 1;
+   */
+  tick: number;
+
+  /**
+   * @generated from field: int32 end_tick = 2;
+   */
+  endTick: number;
+
+  /**
+   * @generated from field: uint64 steam_id = 3;
+   */
+  steamId: bigint;
+
+  /**
+   * @generated from field: float x = 4;
+   */
+  x: number;
+
+  /**
+   * @generated from field: float y = 5;
+   */
+  y: number;
+
+  /**
+   * @generated from field: float z = 6;
+   */
+  z: number;
+
+  /**
+   * @generated from field: float radius = 7;
+   */
+  radius: number;
+
+  /**
+   * @generated from field: string noise_type = 8;
+   */
+  noiseType: string;
+};
+
+/**
+ * Describes the message replay.NoiseEvent.
+ * Use `create(NoiseEventSchema)` to create a new message.
+ */
+export const NoiseEventSchema: GenMessage<NoiseEvent> = /*@__PURE__*/
+  messageDesc(file_replay, 9);
+
+/**
+ * @generated from message replay.BombEvent
+ */
+export type BombEvent = Message<"replay.BombEvent"> & {
+  /**
+   * @generated from field: int32 tick = 1;
+   */
+  tick: number;
+
+  /**
+   * @generated from field: string event_type = 2;
+   */
+  eventType: string;
+
+  /**
+   * @generated from field: uint64 player_steam_id = 3;
+   */
+  playerSteamId: bigint;
+
+  /**
+   * @generated from field: string site = 4;
+   */
+  site: string;
+
+  /**
+   * @generated from field: bool has_kit = 5;
+   */
+  hasKit: boolean;
+};
+
+/**
+ * Describes the message replay.BombEvent.
+ * Use `create(BombEventSchema)` to create a new message.
+ */
+export const BombEventSchema: GenMessage<BombEvent> = /*@__PURE__*/
+  messageDesc(file_replay, 10);
+
+/**
  * @generated from message replay.MapData
  */
 export type MapData = Message<"replay.MapData"> & {
@@ -493,5 +639,5 @@ export type MapData = Message<"replay.MapData"> & {
  * Use `create(MapDataSchema)` to create a new message.
  */
 export const MapDataSchema: GenMessage<MapData> = /*@__PURE__*/
-  messageDesc(file_replay, 8);
+  messageDesc(file_replay, 11);
 

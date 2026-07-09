@@ -315,7 +315,12 @@ Use `@bufbuild/protobuf` (formerly protobuf-es). It's modern, tree-shakeable, pr
 
 ### 6.3 Protobuf Handling of PlayerFrames
 
-The ReplayData protobuf schema contains a DemoHeader, repeated PlayerInfo, repeated RoundData, repeated KillEvent, repeated NadeEvent, repeated PlayerFrame, and a MapData. Each PlayerFrame stores tick, steam_id, x/y/z coordinates, yaw/pitch, health, armor, weapon, and is_alive.
+The ReplayData protobuf schema contains a DemoHeader, repeated PlayerInfo, repeated RoundData, repeated KillEvent, repeated NadeEvent, repeated PlayerFrame, MapData, repeated FlashEvent, repeated NoiseEvent, and repeated BombEvent. Each PlayerFrame stores tick, steam_id, x/y/z coordinates, yaw/pitch, health, armor, weapon, and is_alive.
+
+`FlashEvent`, `NoiseEvent`, and `BombEvent` are parser-backed event streams used by the current UI:
+- `FlashEvent`: flashed player, attacker, duration, and end tick. Re-parse demos to populate it.
+- `NoiseEvent`: sound origin, radius, identity, type, and end tick for noise-radius rendering.
+- `BombEvent`: plant, explosion, defuse start/abort, and defuse completion events used by bomb labels and timeline markers.
 
 Protobuf uses **varint encoding for ints and float32 for positions**. Each `PlayerFrame` is ~40-50 bytes in protobuf. 1.5M frames × 45 bytes = ~68 MB for the frames alone.
 
@@ -354,7 +359,7 @@ Extremely rare (warmup, early disconnect), but possible. All kill-related UI ele
 - Death markers on map: none
 - Kill count in stats panel: 0
 - Timeline: no kill tick marks
-- Kill navigation buttons: disabled
+- Kill feed click targets and selected-player kill/death markers: none
 
 ### 7.6 Demos with No Nades
 
@@ -537,7 +542,7 @@ The playback loop is managed via a `requestAnimationFrame` loop in `+page.svelte
 
 **Per-round playback cap:** The loop stops at the current round's end tick, so playback doesn't bleed into the next round. If no round is active, it falls back to the total ticks from the demo header.
 
-**Reference sync pattern:** The tick setter resets the playback reference tick and time when called during playback, so time-based calculation continues cleanly after seeks (timeline click, kill navigation, round navigation). This ensures seeking during playback doesn't cause jumps. Explicit seeks call `setPlaybackTickAndNotify()`, so canvas layers repaint immediately even though `currentTick` is no longer passed through the Svelte component tree every frame.
+**Reference sync pattern:** The tick setter resets the playback reference tick and time when called during playback, so time-based calculation continues cleanly after seeks (timeline click, event marker click, kill-feed click, round navigation). This ensures seeking during playback doesn't cause jumps. Explicit seeks call `setPlaybackTickAndNotify()`, so canvas layers repaint immediately even though `currentTick` is no longer passed through the Svelte component tree every frame.
 
 **Display throttling:** The reactive UI uses `displayTick`, which is updated at a lower cadence (~100ms) during playback and immediately on explicit seeks/pause. This keeps `TimeDisplay`, the timeline, and `RoundNav` responsive without re-running Svelte effects 64-192 times/sec.
 
@@ -582,7 +587,7 @@ The timeline is scoped to the **current round's active phase** (after freezetime
 - Clicking the left edge of the timeline seeks to `freezetimeEndTick`
 - `seekToRound()` seeks to `getRoundActiveStart(round)` (not `round.startTick`)
 - Time display shows time relative to `activeStart` (`0:00` when round enters active phase)
-- Arrow key steps are 1% of `endTick - activeStart`
+- Keyboard arrow seeking is intentionally disabled. The focused timeline only handles Enter/Space as activation keys.
 - When no round is active (warmup, between rounds), falls back to full-match range
 
 ### 11.9 Kill Feed & Death Marker Round Filtering
@@ -593,15 +598,33 @@ The kill feed shows at most 5 kills that have already happened in the current ro
 
 Kill feed player names are color-coded by team at that round: CT names are blue (`#3b82f6`) and T names are orange (`#f97316`). The weapon segment remains neutral text.
 
-### 11.10 Player Roster, Sight Cone Controls, and Event Markers
+### 11.10 Player Roster, Sight Cone Controls, Selection Zoom, and Event Markers
 
 `PlayerLayer.svelte` only indexes and renders Steam IDs present in `ReplayData.players` whose stored team is T or CT. Observer/admin/spectator frame samples are ignored, so only real player dots are drawn.
 
-The white player sight cone defaults remain `34` canvas pixels long and `0.32` radians wide. `+page.svelte` exposes two top-left sliders below the time display to adjust `sightConeLength` and `sightConeHalfAngle` dynamically, then passes those values into `PlayerLayer.svelte`.
+The player sight cone defaults remain `34` canvas pixels long and `0.32` radians wide. `+page.svelte` exposes a compact top-left `Sight Cone Controls` panel below the time display. It includes a width slider, a sight cone length slider with max `240`, a `Show Line of Sight` checkbox, and a separate line-of-sight length slider with range `18` to `800`. Sight cones and line-of-sight rays share the same yaw-to-canvas direction helper so they stay aligned.
 
-The top-right roster panel shows two current-round side columns, CT and T. It uses the same stored-team side-switch logic as the canvas renderers, so the columns flip after halftime and every overtime half. Player names are side-colored while alive and greyed out when dead at the current tick.
+The `Player Selection` section below the sight controls contains `Zoom Selected Player` plus a zoom percentage slider capped at `500%`. This is a visual viewport transform centered on the selected player's current world position. The page writes `--replay-viewport-transform` directly on the replay container from the playback tick, and map/player/nade/death-marker canvases inherit that CSS transform. Layer drawing, trajectories, map calibration, and world coordinate transforms stay unchanged. If no player is selected, zoom has no effect.
 
-Clicking a player name selects that player and shows round event markers under the timeline for that player's kills, deaths, and grenade throws (smoke, flashbang, molotov/incendiary, HE, decoy). Markers use the current round's active-start timeline scale, stack vertically when events occur within `EVENT_STACK_WINDOW_TICKS = 128` (~2 seconds), and clicking a marker seeks to `EVENT_SEEK_LEAD_TICKS = 128` (~2 seconds) before the event, clamped to the round active start.
+The top-right roster panel shows two current-round side columns, CT and T, with alive/total counts in the headers. It uses the same stored-team side-switch logic as the canvas renderers, so the columns flip after halftime and every overtime half. Player names are side-colored while alive and greyed out when dead at the current tick.
+
+Clicking a player name selects that player; clicking the currently selected player again clears the selection. Selected alive players use green (`#22c55e`) for the dot, sight cone, and line-of-sight ray; selected dead players keep the dead grey fill but receive a green selection ring.
+
+Selecting a player shows round event markers under the timeline for that player's kills, deaths, and grenade throws (smoke, flashbang, molotov/incendiary, HE, decoy). Bomb explosion/defuse markers are also shown as `BE` and `BD` using bomb lifecycle events when available, falling back to round win reason. Markers use the current round's active-start timeline scale, stack vertically when events occur within `EVENT_STACK_WINDOW_TICKS = 128` (~2 seconds), and clicking a marker seeks to 2 seconds before the event, clamped to the event round. Double-clicking a marker copies `demo_goto <tick>` for the same lead-in tick and shows a short non-blocking toast.
+
+Selected-player timeline markers are cached by round and selected Steam ID. This avoids rebuilding grenade/kill/death marker data on every throttled UI tick during playback. Selected-player zoom is implemented as a DOM/CSS camera update rather than layer props, so normal rendering paths are not invalidated by zoom-follow movement.
+
+Kill feed rows in `KillLayer.svelte` are clickable canvas hitboxes. Clicking a row selects the killer and seeks to 2 seconds before the kill.
+
+### 11.11 Flash, Noise, and Bomb Event Rendering
+
+The Go parser records `events.PlayerFlashed`, `events.PlayerSound`, `events.BombPlanted`, `events.BombExplode`, `events.BombDefuseStart`, `events.BombDefuseAborted`, and `events.BombDefused` into protobuf event arrays. Existing parsed protobuf files do not contain these arrays; load and parse the original `.dem` again to see these features.
+
+`PlayerLayer.svelte` renders a grey filled circle around flashed players while the flash is active. Opacity is proportional to flash duration and fades continuously until `FlashEvent.endTick`.
+
+Noise events render as red stroked circles with transparent fill around alive players. The radius is converted through the same radar/world transform as other overlays. Expired noise events are skipped, and the red stroke fades with remaining event lifetime.
+
+`+page.svelte` computes bomb status labels from bomb events. While planted, a centered orange label shows `Bomb Planted XXs`. If a defuse is active, a centered blue label shows `Defusing XXs`; it is hidden if the defuser dies, aborts, or the bomb explodes. Final states show `Bomb exploded, Terrorists Win!` or `Bomb has been defused. Counter Terrorists Win`.
 
 ---
 
@@ -611,7 +634,7 @@ Clicking a player name selects that player and shows round event markers under t
 
 ### Symptom
 
-All bottom-bar controls (play/pause, prev/next kill, speed buttons) and the round navigation panel felt laggy/unresponsive during playback. Clicks were delayed or missed entirely when the replay was actively playing at any speed.
+All bottom-bar controls (play/pause, speed buttons; previously also prev/next kill buttons) and the round navigation panel felt laggy/unresponsive during playback. Clicks were delayed or missed entirely when the replay was actively playing at any speed.
 
 ### Root Cause
 

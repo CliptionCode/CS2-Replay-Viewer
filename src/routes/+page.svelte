@@ -6,6 +6,8 @@ import { readFile } from '@tauri-apps/plugin-fs';
 import { create, fromBinary } from '@bufbuild/protobuf';
 import { ReplayDataSchema, MapDataSchema } from '$lib/types/replay/replay_pb';
 import type {
+    BombEvent,
+    KillEvent,
     NadeEvent,
     PlayerFrame,
     PlayerInfo,
@@ -13,6 +15,7 @@ import type {
     RoundData,
     MapData as MapMetadata,
 } from '$lib/types/replay/replay_pb';
+import { worldToCanvas } from '$lib/canvas/transforms';
 import MapLayer from '$lib/components/MapLayer.svelte';
 import PlayerLayer from '$lib/components/PlayerLayer.svelte';
 import NadeLayer from '$lib/components/NadeLayer.svelte';
@@ -66,6 +69,7 @@ export let isPlaying: boolean = false;
 let displayTick: number = 0;
 let roundProgressPct: number = 0;
 let isLoading = false;
+let replayContainer: HTMLDivElement | null = null;
 let playbackSpeed: number = 1;
 let rafId: number | null = null;
 let playbackRefTick: number = 0;
@@ -81,7 +85,13 @@ const TEAM_CT_COLOR = '#3b82f6';
 const DEAD_PLAYER_COLOR = '#6b7280';
 const DEFAULT_SIGHT_CONE_LENGTH = 34;
 const DEFAULT_SIGHT_CONE_HALF_ANGLE = 0.32;
-const EVENT_SEEK_LEAD_TICKS = 128;
+const EVENT_SEEK_LEAD_SECONDS = 2;
+const DEFAULT_LINE_OF_SIGHT_LENGTH = 160;
+const DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT = 250;
+const TOAST_DURATION_MS = 2600;
+const DEFAULT_BOMB_TIME_SECONDS = 40;
+const DEFUSE_SECONDS_WITH_KIT = 5;
+const DEFUSE_SECONDS_WITHOUT_KIT = 10;
 const EVENT_STACK_WINDOW_TICKS = 128;
 const NADE_MATCH_DISTANCE_UNITS = 240;
 const NADE_MATCH_TICK_WINDOW = 768;
@@ -90,11 +100,21 @@ const SMOKE_MATCH_TICK_WINDOW = 1536;
 let activeStart: number = 0;
 let sightConeLength = DEFAULT_SIGHT_CONE_LENGTH;
 let sightConeHalfAngle = DEFAULT_SIGHT_CONE_HALF_ANGLE;
+let showLineOfSight = false;
+let lineOfSightLength = DEFAULT_LINE_OF_SIGHT_LENGTH;
+let zoomSelectedPlayer = false;
+let selectedPlayerZoomPercent = DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT;
 let selectedPlayerSteamId: bigint | null = null;
 let playablePlayers: PlayerInfo[] = [];
 let ctRoster: RosterEntry[] = [];
 let tRoster: RosterEntry[] = [];
-let selectedPlayerEvents: PlayerTimelineEvent[] = [];
+let ctAliveCount = 0;
+let tAliveCount = 0;
+let timelineEvents: PlayerTimelineEvent[] = [];
+let timelineEventsKey = '';
+let toastMessage = '';
+let toastTimeout: ReturnType<typeof setTimeout> | null = null;
+let bombStatus: BombStatus = { bombText: '', bombClass: '', defuseText: '', defuseClass: '' };
 let playerFrameTrails = new Map<string, PlayerFrame[]>();
 let playerFrameLookupIndices = new Map<string, number>();
 
@@ -105,7 +125,7 @@ type RosterEntry = {
     color: string;
 };
 
-type PlayerEventType = 'kill' | 'death' | 'smoke' | 'flashbang' | 'molotov' | 'hegrenade' | 'decoy';
+type PlayerEventType = 'kill' | 'death' | 'smoke' | 'flashbang' | 'molotov' | 'hegrenade' | 'decoy' | 'bomb_exploded' | 'bomb_defused';
 
 type BasePlayerTimelineEvent = {
     tick: number;
@@ -121,6 +141,13 @@ type PlayerTimelineEvent = BasePlayerTimelineEvent & {
     leftPct: number;
 };
 
+type BombStatus = {
+    bombText: string;
+    bombClass: string;
+    defuseText: string;
+    defuseClass: string;
+};
+
 async function loadDemo() {
     if (!browser) return;
     isLoading = true;
@@ -132,6 +159,10 @@ async function loadDemo() {
         const data = fromBinary(ReplayDataSchema, bytes);
         replayData = data;
         mapMetadata = fillMapMetadata(data.map, data.header?.mapName);
+        selectedPlayerSteamId = null;
+        timelineEvents = [];
+        timelineEventsKey = '';
+        bombStatus = emptyBombStatus();
         setPlaying(false);
         setTick(0);
     } catch (e: any) {
@@ -393,7 +424,7 @@ function stackTimelineEvents(events: BasePlayerTimelineEvent[], round: RoundData
         });
 }
 
-function buildSelectedPlayerEvents(steamId: bigint, round: RoundData): PlayerTimelineEvent[] {
+function buildSelectedPlayerBaseEvents(steamId: bigint, round: RoundData): BasePlayerTimelineEvent[] {
     if (!replayData) return [];
 
     const events: BasePlayerTimelineEvent[] = [];
@@ -439,21 +470,285 @@ function buildSelectedPlayerEvents(steamId: bigint, round: RoundData): PlayerTim
         });
     }
 
+    return events;
+}
+
+function getBombEventsForRound(round: RoundData): BombEvent[] {
+    return [...(replayData?.bombs ?? [])]
+        .filter(event => event.tick >= round.startTick && event.tick <= round.endTick)
+        .sort((a, b) => a.tick - b.tick);
+}
+
+function getBombEventForRound(round: RoundData, eventType: string): BombEvent | null {
+    return getBombEventsForRound(round).find(event => event.eventType === eventType) ?? null;
+}
+
+function buildBombRoundEvents(round: RoundData): BasePlayerTimelineEvent[] {
+    const events: BasePlayerTimelineEvent[] = [];
+    const exploded = getBombEventForRound(round, 'exploded');
+    const defused = getBombEventForRound(round, 'defused');
+
+    if (exploded || round.winReason === 'bomb_detonated') {
+        const tick = exploded?.tick ?? round.endTick;
+        events.push({
+            tick,
+            type: 'bomb_exploded',
+            label: 'BE',
+            color: TEAM_T_COLOR,
+            title: `Bomb exploded at ${formatRoundEventTime(tick, round)}`,
+        });
+    }
+
+    if (defused || round.winReason === 'bomb_defused') {
+        const tick = defused?.tick ?? round.endTick;
+        events.push({
+            tick,
+            type: 'bomb_defused',
+            label: 'BD',
+            color: TEAM_CT_COLOR,
+            title: `Bomb defused at ${formatRoundEventTime(tick, round)}`,
+        });
+    }
+
+    return events;
+}
+
+function buildTimelineEvents(selectedSteamId: bigint | null, round: RoundData): PlayerTimelineEvent[] {
+    const events = buildBombRoundEvents(round);
+    if (selectedSteamId !== null) {
+        events.push(...buildSelectedPlayerBaseEvents(selectedSteamId, round));
+    }
     return stackTimelineEvents(events, round);
 }
 
+function getTimelineEventsKey(round: RoundData | null, selectedSteamId: bigint | null): string {
+    if (!round) return 'no-round';
+    return `${round.roundNumber}:${round.startTick}:${round.endTick}:${selectedSteamId?.toString() ?? 'none'}`;
+}
+
+function updateTimelineEvents(round: RoundData | null): void {
+    const nextKey = getTimelineEventsKey(round, selectedPlayerSteamId);
+    if (nextKey === timelineEventsKey) return;
+
+    timelineEventsKey = nextKey;
+    timelineEvents = round ? buildTimelineEvents(selectedPlayerSteamId, round) : [];
+}
+
+function emptyBombStatus(): BombStatus {
+    return { bombText: '', bombClass: '', defuseText: '', defuseClass: '' };
+}
+
+function getBombTimeSeconds(): number {
+    return replayData?.header?.bombTimeSeconds || DEFAULT_BOMB_TIME_SECONDS;
+}
+
+function getBombCountdownEndTick(plant: BombEvent, round: RoundData): number {
+    const exploded = getBombEventForRound(round, 'exploded');
+    if (exploded && exploded.tick >= plant.tick) return exploded.tick;
+    return plant.tick + Math.round(getBombTimeSeconds() * getTickRate());
+}
+
+function getLastBombEventBefore(events: BombEvent[], eventType: string, tick: number): BombEvent | null {
+    for (let i = events.length - 1; i >= 0; i--) {
+        const event = events[i];
+        if (event.tick <= tick && event.eventType === eventType) return event;
+    }
+    return null;
+}
+
+function getFirstBombEventAfter(events: BombEvent[], eventType: string, tick: number): BombEvent | null {
+    return events.find(event => event.tick >= tick && event.eventType === eventType) ?? null;
+}
+
+function hasBombEventBetween(events: BombEvent[], eventTypes: string[], startTick: number, endTick: number): boolean {
+    return events.some(event =>
+        event.tick >= startTick &&
+        event.tick <= endTick &&
+        eventTypes.includes(event.eventType)
+    );
+}
+
+function isPlayerAliveAtTick(steamId: bigint, tick: number): boolean {
+    const frame = getPlayerFrameAtTick(steamId, tick);
+    return frame?.isAlive ?? false;
+}
+
+function getActiveDefuseStatus(events: BombEvent[], plant: BombEvent, tick: number): string {
+    const defuseStart = getLastBombEventBefore(events, 'defuse_start', tick);
+    if (!defuseStart || defuseStart.tick < plant.tick) return '';
+    if (hasBombEventBetween(events, ['defuse_aborted', 'defused', 'exploded'], defuseStart.tick, tick)) return '';
+    if (defuseStart.playerSteamId !== 0n && !isPlayerAliveAtTick(defuseStart.playerSteamId, tick)) return '';
+
+    const defuseSeconds = defuseStart.hasKit ? DEFUSE_SECONDS_WITH_KIT : DEFUSE_SECONDS_WITHOUT_KIT;
+    const defuseEndTick = defuseStart.tick + Math.round(defuseSeconds * getTickRate());
+    if (tick >= defuseEndTick) return '';
+
+    const secondsLeft = Math.max(0, Math.ceil((defuseEndTick - tick) / getTickRate()));
+    return `Defusing ${secondsLeft}s`;
+}
+
+function getBombStatus(tick: number): BombStatus {
+    const round = getCurrentRoundData(tick) ?? getPlaybackStartRound(tick);
+    if (!round) return emptyBombStatus();
+
+    const events = getBombEventsForRound(round);
+    const plant = getLastBombEventBefore(events, 'planted', tick);
+    if (!plant) return emptyBombStatus();
+
+    const exploded = getLastBombEventBefore(events, 'exploded', tick);
+    if (exploded && exploded.tick >= plant.tick) {
+        return {
+            bombText: 'Bomb exploded, Terrorists Win!',
+            bombClass: 'bomb-label-t',
+            defuseText: '',
+            defuseClass: '',
+        };
+    }
+    if (round.winReason === 'bomb_detonated' && tick >= round.endTick) {
+        return {
+            bombText: 'Bomb exploded, Terrorists Win!',
+            bombClass: 'bomb-label-t',
+            defuseText: '',
+            defuseClass: '',
+        };
+    }
+
+    const defused = getLastBombEventBefore(events, 'defused', tick);
+    if (defused && defused.tick >= plant.tick) {
+        return {
+            bombText: '',
+            bombClass: '',
+            defuseText: 'Bomb has been defused. Counter Terrorists Win',
+            defuseClass: 'bomb-label-ct',
+        };
+    }
+    if (round.winReason === 'bomb_defused' && tick >= round.endTick) {
+        return {
+            bombText: '',
+            bombClass: '',
+            defuseText: 'Bomb has been defused. Counter Terrorists Win',
+            defuseClass: 'bomb-label-ct',
+        };
+    }
+
+    const countdownEndTick = getBombCountdownEndTick(plant, round);
+    const secondsLeft = Math.max(0, Math.ceil((countdownEndTick - tick) / getTickRate()));
+    const upcomingDefuse = getFirstBombEventAfter(events, 'defused', tick);
+    const defuseText = upcomingDefuse && upcomingDefuse.tick < countdownEndTick
+        ? getActiveDefuseStatus(events, plant, tick)
+        : getActiveDefuseStatus(events, plant, tick);
+
+    return {
+        bombText: `Bomb Planted ${secondsLeft}s`,
+        bombClass: 'bomb-label-t',
+        defuseText,
+        defuseClass: defuseText ? 'bomb-label-ct' : '',
+    };
+}
+
 function selectPlayer(steamId: bigint): void {
-    selectedPlayerSteamId = steamId;
+    selectedPlayerSteamId = selectedPlayerSteamId === steamId ? null : steamId;
+    timelineEventsKey = '';
+    updateReplayViewportTransform();
 }
 
 function isSelectedPlayer(steamId: bigint): boolean {
     return selectedPlayerSteamId === steamId;
 }
 
+function getTickRate(): number {
+    return replayData?.header?.tickRate || 64;
+}
+
+function getEventSeekLeadTicks(): number {
+    return Math.round(getTickRate() * EVENT_SEEK_LEAD_SECONDS);
+}
+
+function getEventLeadTick(eventTick: number): number {
+    const round = getRoundForTick(eventTick);
+    const minTick = round?.startTick ?? 0;
+    return Math.max(minTick, eventTick - getEventSeekLeadTicks());
+}
+
 function seekToPlayerEvent(eventTick: number): void {
-    const round = getRoundForTick(eventTick) ?? getCurrentRoundData(displayTick);
-    const roundStart = round ? getRoundActiveStart(round) : 0;
-    setTick(Math.max(roundStart, eventTick - EVENT_SEEK_LEAD_TICKS));
+    setTick(getEventLeadTick(eventTick));
+}
+
+function handleKillFeedSelect(kill: KillEvent): void {
+    if (kill.killerSteamId !== 0n) {
+        selectedPlayerSteamId = kill.killerSteamId;
+        timelineEventsKey = '';
+    }
+    seekToPlayerEvent(kill.tick);
+}
+
+function showToast(message: string): void {
+    toastMessage = message;
+    if (toastTimeout) clearTimeout(toastTimeout);
+    toastTimeout = setTimeout(() => {
+        toastMessage = '';
+        toastTimeout = null;
+    }, TOAST_DURATION_MS);
+}
+
+async function copyTickCommand(eventTick: number): Promise<void> {
+    const targetTick = getEventLeadTick(eventTick);
+    const command = `demo_goto ${targetTick}`;
+
+    try {
+        await navigator.clipboard.writeText(command);
+        showToast(`Copied ${command}`);
+    } catch (error) {
+        console.error('Failed to copy tick command:', error);
+        showToast('Could not copy tick command');
+    }
+}
+
+function getSelectedPlayerZoomScale(): number {
+    return Math.max(1, Math.min(5, selectedPlayerZoomPercent / 100));
+}
+
+function resetReplayViewportTransform(): void {
+    replayContainer?.style.setProperty('--replay-viewport-transform', 'none');
+}
+
+function updateReplayViewportTransform(tick = getPlaybackTick()): void {
+    if (!browser || !replayContainer) return;
+
+    if (!zoomSelectedPlayer || selectedPlayerSteamId === null || !replayData) {
+        resetReplayViewportTransform();
+        return;
+    }
+
+    const zoom = getSelectedPlayerZoomScale();
+    if (zoom <= 1) {
+        resetReplayViewportTransform();
+        return;
+    }
+
+    const selectedFrame = getPlayerFrameAtTick(selectedPlayerSteamId, tick);
+    if (!selectedFrame) {
+        resetReplayViewportTransform();
+        return;
+    }
+
+    const rect = replayContainer.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+        resetReplayViewportTransform();
+        return;
+    }
+
+    const focus = worldToCanvas(selectedFrame.x, selectedFrame.y, mapMetadata, {
+        width: rect.width,
+        height: rect.height,
+    });
+    const translateX = rect.width / 2 - focus.x * zoom;
+    const translateY = rect.height / 2 - focus.y * zoom;
+
+    replayContainer.style.setProperty(
+        '--replay-viewport-transform',
+        `translate(${translateX.toFixed(2)}px, ${translateY.toFixed(2)}px) scale(${zoom.toFixed(3)})`
+    );
 }
 
 function syncDisplayTick(force = false, timestamp = performance.now()) {
@@ -483,6 +778,7 @@ function playbackLoop(timestamp: number) {
     }
 
     setPlaybackTick(targetFloat);
+    updateReplayViewportTransform(targetFloat);
     syncDisplayTick(false, timestamp);
 
     rafId = requestAnimationFrame(playbackLoop);
@@ -516,6 +812,8 @@ $: {
         !nextPlayablePlayers.some(player => player.steamId === selectedPlayerSteamId)
     ) {
         selectedPlayerSteamId = null;
+        timelineEventsKey = '';
+        updateReplayViewportTransform();
     }
 }
 
@@ -525,9 +823,15 @@ $: {
     const rosterEntries = buildRosterEntries(round, displayTick);
     ctRoster = rosterEntries.filter(entry => entry.side === TEAM_CT);
     tRoster = rosterEntries.filter(entry => entry.side === TEAM_T);
-    selectedPlayerEvents = selectedPlayerSteamId !== null && round
-        ? buildSelectedPlayerEvents(selectedPlayerSteamId, round)
-        : [];
+    ctAliveCount = ctRoster.filter(entry => entry.isAlive).length;
+    tAliveCount = tRoster.filter(entry => entry.isAlive).length;
+    updateTimelineEvents(round);
+    bombStatus = getBombStatus(displayTick);
+}
+
+$: {
+    void zoomSelectedPlayer, selectedPlayerZoomPercent, selectedPlayerSteamId, replayData, mapMetadata;
+    updateReplayViewportTransform();
 }
 
 function startPlayback() {
@@ -569,6 +873,7 @@ function setTick(tick: number) {
 
     setPlaybackTickAndNotify(nextTick);
     syncDisplayTick(true);
+    updateReplayViewportTransform(nextTick);
     if (isPlaying) {
         playbackRefTick = nextTick;
         playbackRefTime = performance.now();
@@ -607,53 +912,34 @@ function seekToRound(round: RoundData) {
     }
 }
 
-function nextKill() {
-    if (!replayData?.kills) return;
-    const tick = Math.floor(getPlaybackTick());
-    const currentKills = replayData.kills.filter(k => k.tick >= tick);
-    if (currentKills.length > 0) {
-        setTick(currentKills[0].tick);
-    }
-}
-
-function prevKill() {
-    if (!replayData?.kills) return;
-    const tick = Math.floor(getPlaybackTick());
-    const currentKills = replayData.kills.filter(k => k.tick <= tick);
-    if (currentKills.length > 0) {
-        setTick(currentKills[currentKills.length - 1].tick);
-    }
-}
-
 function handleKeydown(e: KeyboardEvent) {
     if (e.key === ' ') {
         e.preventDefault();
         setPlaying(!isPlaying);
-    } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        const totalTicks = replayData?.header?.totalTicks || 1;
-        const step = Math.floor(totalTicks / 100);
-        setTick(Math.min(Math.floor(getPlaybackTick()) + step, totalTicks));
-    } else if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        const totalTicks = replayData?.header?.totalTicks || 1;
-        const step = Math.floor(totalTicks / 100);
-        setTick(Math.max(Math.floor(getPlaybackTick()) - step, 0));
     }
+}
+
+function handleViewportResize() {
+    updateReplayViewportTransform();
 }
 
 onMount(() => {
     if (!browser) return;
     window.addEventListener('keydown', handleKeydown);
+    window.addEventListener('resize', handleViewportResize);
+    updateReplayViewportTransform();
     return () => {
         window.removeEventListener('keydown', handleKeydown);
+        window.removeEventListener('resize', handleViewportResize);
         if (rafId) cancelAnimationFrame(rafId);
+        if (toastTimeout) clearTimeout(toastTimeout);
     };
 });
 </script>
 
 <style>
 .replay-container {
+    --replay-viewport-transform: none;
     position: fixed;
     inset: 0;
     background: linear-gradient(135deg, #0f0f13, #1a1a24);
@@ -744,11 +1030,61 @@ onMount(() => {
     z-index: 3;
 }
 
+.bomb-status {
+    position: absolute;
+    top: 96px;
+    left: 50%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    transform: translateX(-50%);
+    z-index: 112;
+    pointer-events: none;
+}
+
+.bomb-label {
+    padding: 5px 12px;
+    border-radius: 4px;
+    background: rgba(15, 23, 42, 0.86);
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+}
+
+.bomb-label-t {
+    border: 1px solid rgba(249, 115, 22, 0.65);
+    color: #fdba74;
+}
+
+.bomb-label-ct {
+    border: 1px solid rgba(59, 130, 246, 0.68);
+    color: #93c5fd;
+}
+
+.copy-toast {
+    position: absolute;
+    left: 50%;
+    bottom: 74px;
+    z-index: 130;
+    padding: 8px 12px;
+    transform: translateX(-50%);
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    border-radius: 5px;
+    background: rgba(15, 23, 42, 0.92);
+    color: #e2e8f0;
+    font-size: 13px;
+    font-weight: 700;
+    pointer-events: none;
+}
+
 .sight-controls {
     position: absolute;
     top: 134px;
     left: 20px;
-    width: 220px;
+    width: 252px;
     background: rgba(26, 26, 36, 0.86);
     border: 1px solid #2a2a40;
     border-radius: 6px;
@@ -756,9 +1092,25 @@ onMount(() => {
     z-index: 100;
 }
 
+.control-section + .control-section {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.controls-heading {
+    margin-bottom: 8px;
+    color: #e2e8f0;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    line-height: 1.2;
+    text-transform: uppercase;
+}
+
 .sight-control {
     display: grid;
-    grid-template-columns: 56px 1fr 34px;
+    grid-template-columns: 66px 1fr 42px;
     align-items: center;
     gap: 8px;
     color: #cbd5e1;
@@ -775,10 +1127,30 @@ onMount(() => {
     accent-color: #60a5fa;
 }
 
+.sight-control input:disabled {
+    opacity: 0.5;
+}
+
 .sight-control-value {
     color: #94a3b8;
     font-family: 'JetBrains Mono', monospace;
     text-align: right;
+}
+
+.checkbox-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    color: #cbd5e1;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.checkbox-control input {
+    width: 14px;
+    height: 14px;
+    accent-color: #60a5fa;
 }
 
 .player-roster {
@@ -900,7 +1272,7 @@ onMount(() => {
 </style>
 
 {#if replayData}
-<div class="replay-container">
+<div class="replay-container" bind:this={replayContainer}>
     <!-- Timeline at top -->
     <div class="timeline">
         <div class="timeline-track"
@@ -921,36 +1293,47 @@ onMount(() => {
                 }
             }}
             onkeydown={(e) => {
-                if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-                    const round = getCurrentRoundData();
-                    if (round) {
-                        const activeStart = getRoundActiveStart(round);
-                        const roundDuration = round.endTick - activeStart;
-                        const step = Math.floor(roundDuration / 100);
-                        setTick(Math.floor(getPlaybackTick()) + (e.key === 'ArrowRight' ? step : -step));
-                    } else {
-                        const totalTicks = replayData?.header?.totalTicks || 1;
-                        const step = Math.floor(totalTicks / 100);
-                        setTick(Math.floor(getPlaybackTick()) + (e.key === 'ArrowRight' ? step : -step));
-                    }
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    e.currentTarget.click();
                 }
             }}>
             <div class="timeline-fill" style="width: {roundProgressPct}%;"></div>
             <div class="timeline-knob" style="left: {roundProgressPct}%;"></div>
         </div>
         <div class="event-marker-track">
-            {#each selectedPlayerEvents as playerEvent (playerEvent.id)}
+            {#each timelineEvents as playerEvent (playerEvent.id)}
                 <button
                     class="event-marker"
                     style="left: {playerEvent.leftPct}%; top: {playerEvent.lane * 18}px; --marker-color: {playerEvent.color}; color: {playerEvent.type === 'death' ? '#ffffff' : '#0f172a'};"
                     title={playerEvent.title}
                     onclick={() => seekToPlayerEvent(playerEvent.tick)}
+                    ondblclick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void copyTickCommand(playerEvent.tick);
+                    }}
                 >
                     {playerEvent.label}
                 </button>
             {/each}
         </div>
     </div>
+
+    {#if bombStatus.bombText || bombStatus.defuseText}
+        <div class="bomb-status">
+            {#if bombStatus.bombText}
+                <div class="bomb-label {bombStatus.bombClass}">{bombStatus.bombText}</div>
+            {/if}
+            {#if bombStatus.defuseText}
+                <div class="bomb-label {bombStatus.defuseClass}">{bombStatus.defuseText}</div>
+            {/if}
+        </div>
+    {/if}
+
+    {#if toastMessage}
+        <div class="copy-toast">{toastMessage}</div>
+    {/if}
 
     <!-- Main canvas layers -->
     <MapLayer 
@@ -963,6 +1346,9 @@ onMount(() => {
         bind:isPlaying={isPlaying}
         {sightConeLength}
         {sightConeHalfAngle}
+        {showLineOfSight}
+        {lineOfSightLength}
+        {selectedPlayerSteamId}
     />
     <NadeLayer 
         bind:replayData={replayData}
@@ -973,6 +1359,7 @@ onMount(() => {
         bind:replayData={replayData}
         bind:isPlaying={isPlaying}
         bind:mapMetadata={mapMetadata}
+        onselectkillfeed={handleKillFeedSelect}
     />
 
     <Controls
@@ -980,42 +1367,77 @@ onMount(() => {
         {playbackSpeed}
         speedOptions={SPEED_OPTIONS}
         ontoggleplay={togglePlay}
-        onprevkill={prevKill}
-        onnextkill={nextKill}
         onsetspeed={setSpeed}
     />
 
     <TimeDisplay currentTick={displayTick} activeStart={activeStart} />
 
     <div class="sight-controls">
-        <label class="sight-control">
-            <span>Width</span>
-            <input
-                type="range"
-                min="0.16"
-                max="0.8"
-                step="0.02"
-                bind:value={sightConeHalfAngle}
-            />
-            <span class="sight-control-value">{sightConeHalfAngle.toFixed(2)}</span>
-        </label>
-        <label class="sight-control">
-            <span>Length</span>
-            <input
-                type="range"
-                min="18"
-                max="80"
-                step="1"
-                bind:value={sightConeLength}
-            />
-            <span class="sight-control-value">{Math.round(sightConeLength)}</span>
-        </label>
+        <section class="control-section">
+            <div class="controls-heading">Sight Cone Controls</div>
+            <label class="sight-control">
+                <span>Width</span>
+                <input
+                    type="range"
+                    min="0.16"
+                    max="0.8"
+                    step="0.02"
+                    bind:value={sightConeHalfAngle}
+                />
+                <span class="sight-control-value">{sightConeHalfAngle.toFixed(2)}</span>
+            </label>
+            <label class="sight-control">
+                <span>Length</span>
+                <input
+                    type="range"
+                    min="18"
+                    max="240"
+                    step="1"
+                    bind:value={sightConeLength}
+                />
+                <span class="sight-control-value">{Math.round(sightConeLength)}</span>
+            </label>
+            <label class="checkbox-control">
+                <input type="checkbox" bind:checked={showLineOfSight} />
+                <span>Show Line of Sight</span>
+            </label>
+            <label class="sight-control">
+                <span>LOS Len</span>
+                <input
+                    type="range"
+                    min="18"
+                    max="800"
+                    step="1"
+                    bind:value={lineOfSightLength}
+                />
+                <span class="sight-control-value">{Math.round(lineOfSightLength)}</span>
+            </label>
+        </section>
+        <section class="control-section">
+            <div class="controls-heading">Player Selection</div>
+            <label class="checkbox-control">
+                <input type="checkbox" bind:checked={zoomSelectedPlayer} />
+                <span>Zoom Selected Player</span>
+            </label>
+            <label class="sight-control">
+                <span>Zoom</span>
+                <input
+                    type="range"
+                    min="100"
+                    max="500"
+                    step="25"
+                    bind:value={selectedPlayerZoomPercent}
+                    disabled={!zoomSelectedPlayer}
+                />
+                <span class="sight-control-value">{Math.round(selectedPlayerZoomPercent)}%</span>
+            </label>
+        </section>
     </div>
 
     <div class="player-roster">
         <div class="roster-columns">
             <div class="roster-column">
-                <div class="roster-title">CT</div>
+                <div class="roster-title">CT ({ctAliveCount}/{ctRoster.length})</div>
                 {#each ctRoster as entry (entry.player.steamId.toString())}
                     <button
                         class="roster-player"
@@ -1030,7 +1452,7 @@ onMount(() => {
                 {/each}
             </div>
             <div class="roster-column">
-                <div class="roster-title">T</div>
+                <div class="roster-title">T ({tAliveCount}/{tRoster.length})</div>
                 {#each tRoster as entry (entry.player.steamId.toString())}
                     <button
                         class="roster-player"

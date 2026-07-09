@@ -9,7 +9,7 @@ export let replayData: ReplayData | null = null;
 export let mapMetadata: MapMetadata;
 export let isPlaying: boolean = false;
 
-let container: HTMLElement | null = null;
+let container: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
 let unsubscribeTick: (() => void) | null = null;
 
@@ -342,7 +342,7 @@ function stopRenderLoop() {
     renderLoopId = null;
 }
 
-function resizeCanvas(container: HTMLElement): { width: number; height: number } {
+function resizeCanvas(container: HTMLCanvasElement): { width: number; height: number } {
     const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
 
@@ -473,6 +473,7 @@ function render() {
     };
 
     ctx.clearRect(0, 0, canvasSize.width, canvasSize.height);
+    ctx.save();
 
     const roundRange = getCurrentRoundRange(tick);
     const activeNades = getActiveNades(tick);
@@ -488,6 +489,7 @@ function render() {
         if (!isNadeInRoundRange(nade, roundRange)) continue;
         drawNadeEffect(ctx, nade, mapMetadata, canvasSize);
     }
+    ctx.restore();
 }
 
 onMount(() => {
@@ -557,6 +559,9 @@ onDestroy(() => {
     background: transparent;
     overflow: hidden;
     border-radius: 8px;
+    transform: var(--replay-viewport-transform, none);
+    transform-origin: 0 0;
+    will-change: transform;
 }
 
 .nade-layer.canvas {

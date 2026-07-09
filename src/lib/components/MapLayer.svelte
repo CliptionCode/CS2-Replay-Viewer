@@ -8,7 +8,7 @@ import type { MapData as MapMetadata, ReplayData } from '$lib/types/replay/repla
 export let mapMetadata: MapMetadata;
 export let replayData: ReplayData | null = null;
 
-let container: HTMLElement | null = null;
+let container: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
 let mapImage: HTMLImageElement | null = null;
 let loadedMapName = '';
@@ -115,7 +115,7 @@ function drawMapImage(
     ctx.drawImage(image, originX, originY, mapWidth, mapHeight);
 }
 
-function resizeCanvas(container: HTMLElement): { width: number; height: number } {
+function resizeCanvas(container: HTMLCanvasElement): { width: number; height: number } {
     const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
 
@@ -242,6 +242,9 @@ onDestroy(() => {
     background: linear-gradient(135deg, #0f0f13, #1a1a24);
     overflow: hidden;
     border-radius: 8px;
+    transform: var(--replay-viewport-transform, none);
+    transform-origin: 0 0;
+    will-change: transform;
 }
 
 .map-layer.canvas {

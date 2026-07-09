@@ -30,6 +30,9 @@ type ReplayData struct {
 	Nades         []*NadeEvent           `protobuf:"bytes,5,rep,name=nades,proto3" json:"nades,omitempty"`
 	Frames        []*PlayerFrame         `protobuf:"bytes,6,rep,name=frames,proto3" json:"frames,omitempty"`
 	Map           *MapData               `protobuf:"bytes,7,opt,name=map,proto3" json:"map,omitempty"`
+	Flashes       []*FlashEvent          `protobuf:"bytes,8,rep,name=flashes,proto3" json:"flashes,omitempty"`
+	Noises        []*NoiseEvent          `protobuf:"bytes,9,rep,name=noises,proto3" json:"noises,omitempty"`
+	Bombs         []*BombEvent           `protobuf:"bytes,10,rep,name=bombs,proto3" json:"bombs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -113,15 +116,37 @@ func (x *ReplayData) GetMap() *MapData {
 	return nil
 }
 
+func (x *ReplayData) GetFlashes() []*FlashEvent {
+	if x != nil {
+		return x.Flashes
+	}
+	return nil
+}
+
+func (x *ReplayData) GetNoises() []*NoiseEvent {
+	if x != nil {
+		return x.Noises
+	}
+	return nil
+}
+
+func (x *ReplayData) GetBombs() []*BombEvent {
+	if x != nil {
+		return x.Bombs
+	}
+	return nil
+}
+
 type DemoHeader struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	MapName       string                 `protobuf:"bytes,1,opt,name=map_name,json=mapName,proto3" json:"map_name,omitempty"`
-	TickRate      int32                  `protobuf:"varint,2,opt,name=tick_rate,json=tickRate,proto3" json:"tick_rate,omitempty"`
-	TotalTicks    int32                  `protobuf:"varint,3,opt,name=total_ticks,json=totalTicks,proto3" json:"total_ticks,omitempty"`
-	ServerName    string                 `protobuf:"bytes,4,opt,name=server_name,json=serverName,proto3" json:"server_name,omitempty"`
-	PlaybackTime  float32                `protobuf:"fixed32,5,opt,name=playback_time,json=playbackTime,proto3" json:"playback_time,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	MapName         string                 `protobuf:"bytes,1,opt,name=map_name,json=mapName,proto3" json:"map_name,omitempty"`
+	TickRate        int32                  `protobuf:"varint,2,opt,name=tick_rate,json=tickRate,proto3" json:"tick_rate,omitempty"`
+	TotalTicks      int32                  `protobuf:"varint,3,opt,name=total_ticks,json=totalTicks,proto3" json:"total_ticks,omitempty"`
+	ServerName      string                 `protobuf:"bytes,4,opt,name=server_name,json=serverName,proto3" json:"server_name,omitempty"`
+	PlaybackTime    float32                `protobuf:"fixed32,5,opt,name=playback_time,json=playbackTime,proto3" json:"playback_time,omitempty"`
+	BombTimeSeconds float32                `protobuf:"fixed32,6,opt,name=bomb_time_seconds,json=bombTimeSeconds,proto3" json:"bomb_time_seconds,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *DemoHeader) Reset() {
@@ -185,6 +210,13 @@ func (x *DemoHeader) GetServerName() string {
 func (x *DemoHeader) GetPlaybackTime() float32 {
 	if x != nil {
 		return x.PlaybackTime
+	}
+	return 0
+}
+
+func (x *DemoHeader) GetBombTimeSeconds() float32 {
+	if x != nil {
+		return x.BombTimeSeconds
 	}
 	return 0
 }
@@ -845,6 +877,258 @@ func (x *PlayerFrame) GetIsAlive() bool {
 	return false
 }
 
+type FlashEvent struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Tick            int32                  `protobuf:"varint,1,opt,name=tick,proto3" json:"tick,omitempty"`
+	PlayerSteamId   uint64                 `protobuf:"varint,2,opt,name=player_steam_id,json=playerSteamId,proto3" json:"player_steam_id,omitempty"`
+	AttackerSteamId uint64                 `protobuf:"varint,3,opt,name=attacker_steam_id,json=attackerSteamId,proto3" json:"attacker_steam_id,omitempty"`
+	DurationSeconds float32                `protobuf:"fixed32,4,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`
+	EndTick         int32                  `protobuf:"varint,5,opt,name=end_tick,json=endTick,proto3" json:"end_tick,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *FlashEvent) Reset() {
+	*x = FlashEvent{}
+	mi := &file_replay_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FlashEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FlashEvent) ProtoMessage() {}
+
+func (x *FlashEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_replay_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FlashEvent.ProtoReflect.Descriptor instead.
+func (*FlashEvent) Descriptor() ([]byte, []int) {
+	return file_replay_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *FlashEvent) GetTick() int32 {
+	if x != nil {
+		return x.Tick
+	}
+	return 0
+}
+
+func (x *FlashEvent) GetPlayerSteamId() uint64 {
+	if x != nil {
+		return x.PlayerSteamId
+	}
+	return 0
+}
+
+func (x *FlashEvent) GetAttackerSteamId() uint64 {
+	if x != nil {
+		return x.AttackerSteamId
+	}
+	return 0
+}
+
+func (x *FlashEvent) GetDurationSeconds() float32 {
+	if x != nil {
+		return x.DurationSeconds
+	}
+	return 0
+}
+
+func (x *FlashEvent) GetEndTick() int32 {
+	if x != nil {
+		return x.EndTick
+	}
+	return 0
+}
+
+type NoiseEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tick          int32                  `protobuf:"varint,1,opt,name=tick,proto3" json:"tick,omitempty"`
+	EndTick       int32                  `protobuf:"varint,2,opt,name=end_tick,json=endTick,proto3" json:"end_tick,omitempty"`
+	SteamId       uint64                 `protobuf:"varint,3,opt,name=steam_id,json=steamId,proto3" json:"steam_id,omitempty"`
+	X             float32                `protobuf:"fixed32,4,opt,name=x,proto3" json:"x,omitempty"`
+	Y             float32                `protobuf:"fixed32,5,opt,name=y,proto3" json:"y,omitempty"`
+	Z             float32                `protobuf:"fixed32,6,opt,name=z,proto3" json:"z,omitempty"`
+	Radius        float32                `protobuf:"fixed32,7,opt,name=radius,proto3" json:"radius,omitempty"`
+	NoiseType     string                 `protobuf:"bytes,8,opt,name=noise_type,json=noiseType,proto3" json:"noise_type,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NoiseEvent) Reset() {
+	*x = NoiseEvent{}
+	mi := &file_replay_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NoiseEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NoiseEvent) ProtoMessage() {}
+
+func (x *NoiseEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_replay_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NoiseEvent.ProtoReflect.Descriptor instead.
+func (*NoiseEvent) Descriptor() ([]byte, []int) {
+	return file_replay_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *NoiseEvent) GetTick() int32 {
+	if x != nil {
+		return x.Tick
+	}
+	return 0
+}
+
+func (x *NoiseEvent) GetEndTick() int32 {
+	if x != nil {
+		return x.EndTick
+	}
+	return 0
+}
+
+func (x *NoiseEvent) GetSteamId() uint64 {
+	if x != nil {
+		return x.SteamId
+	}
+	return 0
+}
+
+func (x *NoiseEvent) GetX() float32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *NoiseEvent) GetY() float32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *NoiseEvent) GetZ() float32 {
+	if x != nil {
+		return x.Z
+	}
+	return 0
+}
+
+func (x *NoiseEvent) GetRadius() float32 {
+	if x != nil {
+		return x.Radius
+	}
+	return 0
+}
+
+func (x *NoiseEvent) GetNoiseType() string {
+	if x != nil {
+		return x.NoiseType
+	}
+	return ""
+}
+
+type BombEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tick          int32                  `protobuf:"varint,1,opt,name=tick,proto3" json:"tick,omitempty"`
+	EventType     string                 `protobuf:"bytes,2,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
+	PlayerSteamId uint64                 `protobuf:"varint,3,opt,name=player_steam_id,json=playerSteamId,proto3" json:"player_steam_id,omitempty"`
+	Site          string                 `protobuf:"bytes,4,opt,name=site,proto3" json:"site,omitempty"`
+	HasKit        bool                   `protobuf:"varint,5,opt,name=has_kit,json=hasKit,proto3" json:"has_kit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BombEvent) Reset() {
+	*x = BombEvent{}
+	mi := &file_replay_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BombEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BombEvent) ProtoMessage() {}
+
+func (x *BombEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_replay_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BombEvent.ProtoReflect.Descriptor instead.
+func (*BombEvent) Descriptor() ([]byte, []int) {
+	return file_replay_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *BombEvent) GetTick() int32 {
+	if x != nil {
+		return x.Tick
+	}
+	return 0
+}
+
+func (x *BombEvent) GetEventType() string {
+	if x != nil {
+		return x.EventType
+	}
+	return ""
+}
+
+func (x *BombEvent) GetPlayerSteamId() uint64 {
+	if x != nil {
+		return x.PlayerSteamId
+	}
+	return 0
+}
+
+func (x *BombEvent) GetSite() string {
+	if x != nil {
+		return x.Site
+	}
+	return ""
+}
+
+func (x *BombEvent) GetHasKit() bool {
+	if x != nil {
+		return x.HasKit
+	}
+	return false
+}
+
 type MapData struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -861,7 +1145,7 @@ type MapData struct {
 
 func (x *MapData) Reset() {
 	*x = MapData{}
-	mi := &file_replay_proto_msgTypes[8]
+	mi := &file_replay_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -873,7 +1157,7 @@ func (x *MapData) String() string {
 func (*MapData) ProtoMessage() {}
 
 func (x *MapData) ProtoReflect() protoreflect.Message {
-	mi := &file_replay_proto_msgTypes[8]
+	mi := &file_replay_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -886,7 +1170,7 @@ func (x *MapData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MapData.ProtoReflect.Descriptor instead.
 func (*MapData) Descriptor() ([]byte, []int) {
-	return file_replay_proto_rawDescGZIP(), []int{8}
+	return file_replay_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *MapData) GetName() string {
@@ -949,7 +1233,7 @@ var File_replay_proto protoreflect.FileDescriptor
 
 const file_replay_proto_rawDesc = "" +
 	"\n" +
-	"\freplay.proto\x12\x06replay\"\xb3\x02\n" +
+	"\freplay.proto\x12\x06replay\"\xb6\x03\n" +
 	"\n" +
 	"ReplayData\x12*\n" +
 	"\x06header\x18\x01 \x01(\v2\x12.replay.DemoHeaderR\x06header\x12,\n" +
@@ -958,7 +1242,11 @@ const file_replay_proto_rawDesc = "" +
 	"\x05kills\x18\x04 \x03(\v2\x11.replay.KillEventR\x05kills\x12'\n" +
 	"\x05nades\x18\x05 \x03(\v2\x11.replay.NadeEventR\x05nades\x12+\n" +
 	"\x06frames\x18\x06 \x03(\v2\x13.replay.PlayerFrameR\x06frames\x12!\n" +
-	"\x03map\x18\a \x01(\v2\x0f.replay.MapDataR\x03map\"\xab\x01\n" +
+	"\x03map\x18\a \x01(\v2\x0f.replay.MapDataR\x03map\x12,\n" +
+	"\aflashes\x18\b \x03(\v2\x12.replay.FlashEventR\aflashes\x12*\n" +
+	"\x06noises\x18\t \x03(\v2\x12.replay.NoiseEventR\x06noises\x12'\n" +
+	"\x05bombs\x18\n" +
+	" \x03(\v2\x11.replay.BombEventR\x05bombs\"\xd7\x01\n" +
 	"\n" +
 	"DemoHeader\x12\x19\n" +
 	"\bmap_name\x18\x01 \x01(\tR\amapName\x12\x1b\n" +
@@ -967,7 +1255,8 @@ const file_replay_proto_rawDesc = "" +
 	"totalTicks\x12\x1f\n" +
 	"\vserver_name\x18\x04 \x01(\tR\n" +
 	"serverName\x12#\n" +
-	"\rplayback_time\x18\x05 \x01(\x02R\fplaybackTime\"\xf6\x01\n" +
+	"\rplayback_time\x18\x05 \x01(\x02R\fplaybackTime\x12*\n" +
+	"\x11bomb_time_seconds\x18\x06 \x01(\x02R\x0fbombTimeSeconds\"\xf6\x01\n" +
 	"\n" +
 	"PlayerInfo\x12\x19\n" +
 	"\bsteam_id\x18\x01 \x01(\x04R\asteamId\x12\x12\n" +
@@ -1040,7 +1329,32 @@ const file_replay_proto_rawDesc = "" +
 	"\x05armor\x18\t \x01(\x05R\x05armor\x12\x16\n" +
 	"\x06weapon\x18\n" +
 	" \x01(\tR\x06weapon\x12\x19\n" +
-	"\bis_alive\x18\v \x01(\bR\aisAlive\"\xb7\x01\n" +
+	"\bis_alive\x18\v \x01(\bR\aisAlive\"\xba\x01\n" +
+	"\n" +
+	"FlashEvent\x12\x12\n" +
+	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12&\n" +
+	"\x0fplayer_steam_id\x18\x02 \x01(\x04R\rplayerSteamId\x12*\n" +
+	"\x11attacker_steam_id\x18\x03 \x01(\x04R\x0fattackerSteamId\x12)\n" +
+	"\x10duration_seconds\x18\x04 \x01(\x02R\x0fdurationSeconds\x12\x19\n" +
+	"\bend_tick\x18\x05 \x01(\x05R\aendTick\"\xb7\x01\n" +
+	"\n" +
+	"NoiseEvent\x12\x12\n" +
+	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12\x19\n" +
+	"\bend_tick\x18\x02 \x01(\x05R\aendTick\x12\x19\n" +
+	"\bsteam_id\x18\x03 \x01(\x04R\asteamId\x12\f\n" +
+	"\x01x\x18\x04 \x01(\x02R\x01x\x12\f\n" +
+	"\x01y\x18\x05 \x01(\x02R\x01y\x12\f\n" +
+	"\x01z\x18\x06 \x01(\x02R\x01z\x12\x16\n" +
+	"\x06radius\x18\a \x01(\x02R\x06radius\x12\x1d\n" +
+	"\n" +
+	"noise_type\x18\b \x01(\tR\tnoiseType\"\x93\x01\n" +
+	"\tBombEvent\x12\x12\n" +
+	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12\x1d\n" +
+	"\n" +
+	"event_type\x18\x02 \x01(\tR\teventType\x12&\n" +
+	"\x0fplayer_steam_id\x18\x03 \x01(\x04R\rplayerSteamId\x12\x12\n" +
+	"\x04site\x18\x04 \x01(\tR\x04site\x12\x17\n" +
+	"\ahas_kit\x18\x05 \x01(\bR\x06hasKit\"\xb7\x01\n" +
 	"\aMapData\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x13\n" +
 	"\x05pos_x\x18\x02 \x01(\x01R\x04posX\x12\x13\n" +
@@ -1063,7 +1377,7 @@ func file_replay_proto_rawDescGZIP() []byte {
 	return file_replay_proto_rawDescData
 }
 
-var file_replay_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_replay_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_replay_proto_goTypes = []any{
 	(*ReplayData)(nil),          // 0: replay.ReplayData
 	(*DemoHeader)(nil),          // 1: replay.DemoHeader
@@ -1073,22 +1387,28 @@ var file_replay_proto_goTypes = []any{
 	(*NadeEvent)(nil),           // 5: replay.NadeEvent
 	(*NadeTrajectoryPoint)(nil), // 6: replay.NadeTrajectoryPoint
 	(*PlayerFrame)(nil),         // 7: replay.PlayerFrame
-	(*MapData)(nil),             // 8: replay.MapData
+	(*FlashEvent)(nil),          // 8: replay.FlashEvent
+	(*NoiseEvent)(nil),          // 9: replay.NoiseEvent
+	(*BombEvent)(nil),           // 10: replay.BombEvent
+	(*MapData)(nil),             // 11: replay.MapData
 }
 var file_replay_proto_depIdxs = []int32{
-	1, // 0: replay.ReplayData.header:type_name -> replay.DemoHeader
-	2, // 1: replay.ReplayData.players:type_name -> replay.PlayerInfo
-	3, // 2: replay.ReplayData.rounds:type_name -> replay.RoundData
-	4, // 3: replay.ReplayData.kills:type_name -> replay.KillEvent
-	5, // 4: replay.ReplayData.nades:type_name -> replay.NadeEvent
-	7, // 5: replay.ReplayData.frames:type_name -> replay.PlayerFrame
-	8, // 6: replay.ReplayData.map:type_name -> replay.MapData
-	6, // 7: replay.NadeEvent.trajectory:type_name -> replay.NadeTrajectoryPoint
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	1,  // 0: replay.ReplayData.header:type_name -> replay.DemoHeader
+	2,  // 1: replay.ReplayData.players:type_name -> replay.PlayerInfo
+	3,  // 2: replay.ReplayData.rounds:type_name -> replay.RoundData
+	4,  // 3: replay.ReplayData.kills:type_name -> replay.KillEvent
+	5,  // 4: replay.ReplayData.nades:type_name -> replay.NadeEvent
+	7,  // 5: replay.ReplayData.frames:type_name -> replay.PlayerFrame
+	11, // 6: replay.ReplayData.map:type_name -> replay.MapData
+	8,  // 7: replay.ReplayData.flashes:type_name -> replay.FlashEvent
+	9,  // 8: replay.ReplayData.noises:type_name -> replay.NoiseEvent
+	10, // 9: replay.ReplayData.bombs:type_name -> replay.BombEvent
+	6,  // 10: replay.NadeEvent.trajectory:type_name -> replay.NadeTrajectoryPoint
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_replay_proto_init() }
@@ -1102,7 +1422,7 @@ func file_replay_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_replay_proto_rawDesc), len(file_replay_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
