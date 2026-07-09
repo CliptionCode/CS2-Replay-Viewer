@@ -610,7 +610,7 @@ The top-right roster panel shows two current-round side columns, CT and T, with 
 
 Clicking a player name selects that player; clicking the currently selected player again clears the selection. Selected alive players use green (`#22c55e`) for the dot, sight cone, and line-of-sight ray; selected dead players keep the dead grey fill but receive a green selection ring.
 
-Selecting a player shows round event markers under the timeline for that player's kills, deaths, and grenade throws (smoke, flashbang, molotov/incendiary, HE, decoy). Bomb explosion/defuse markers are also shown as `BE` and `BD` using bomb lifecycle events when available, falling back to round win reason. Markers use the current round's active-start timeline scale, stack vertically when events occur within `EVENT_STACK_WINDOW_TICKS = 128` (~2 seconds), and clicking a marker seeks to 2 seconds before the event, clamped to the event round. Double-clicking a marker copies `demo_goto <tick>` for the same lead-in tick and shows a short non-blocking toast.
+Selecting a player shows round event markers under the timeline for that player's kills, deaths, and grenade throws (smoke, flashbang, molotov/incendiary, HE, decoy). Bomb plant/explosion/defuse markers are also shown as `BP`, `BE`, and `BD`. `BP` uses parsed bomb lifecycle events. `BE` and `BD` use parsed events when available and fall back to round win reason. Markers use the current round's active-start timeline scale, stack vertically when events occur within `EVENT_STACK_WINDOW_TICKS = 128` (~2 seconds), and clicking a marker seeks to 2 seconds before the event, clamped to the event round. Double-clicking a marker copies `demo_goto <tick>` for the same lead-in tick and shows a short non-blocking toast.
 
 Selected-player timeline markers are cached by round and selected Steam ID. This avoids rebuilding grenade/kill/death marker data on every throttled UI tick during playback. Selected-player zoom is implemented as a DOM/CSS camera update rather than layer props, so normal rendering paths are not invalidated by zoom-follow movement.
 
@@ -624,7 +624,7 @@ The Go parser records `events.PlayerFlashed`, `events.PlayerSound`, `events.Bomb
 
 Noise events render as red stroked circles with transparent fill around alive players. The radius is converted through the same radar/world transform as other overlays. Expired noise events are skipped, and the red stroke fades with remaining event lifetime.
 
-`+page.svelte` computes bomb status labels from bomb events. While planted, a centered orange label shows `Bomb Planted XXs`. If a defuse is active, a centered blue label shows `Defusing XXs`; it is hidden if the defuser dies, aborts, or the bomb explodes. Final states show `Bomb exploded, Terrorists Win!` or `Bomb has been defused. Counter Terrorists Win`.
+`+page.svelte` computes bomb status labels from bomb events. While planted, a centered orange label shows `Bomb Planted XXs`. If a defuse is active, a centered blue label shows `Defusing XXs`; it is hidden if the defuser dies, aborts, or the bomb explodes. Final states show `Bomb exploded, Terrorists Win!` or `Bomb has been defused. Counter Terrorists Win`; these final labels can fall back to round win reason even if an older parsed protobuf lacks bomb events.
 
 ---
 

@@ -125,7 +125,7 @@ type RosterEntry = {
     color: string;
 };
 
-type PlayerEventType = 'kill' | 'death' | 'smoke' | 'flashbang' | 'molotov' | 'hegrenade' | 'decoy' | 'bomb_exploded' | 'bomb_defused';
+type PlayerEventType = 'kill' | 'death' | 'smoke' | 'flashbang' | 'molotov' | 'hegrenade' | 'decoy' | 'bomb_planted' | 'bomb_exploded' | 'bomb_defused';
 
 type BasePlayerTimelineEvent = {
     tick: number;
@@ -485,8 +485,20 @@ function getBombEventForRound(round: RoundData, eventType: string): BombEvent | 
 
 function buildBombRoundEvents(round: RoundData): BasePlayerTimelineEvent[] {
     const events: BasePlayerTimelineEvent[] = [];
+    const planted = getBombEventForRound(round, 'planted');
     const exploded = getBombEventForRound(round, 'exploded');
     const defused = getBombEventForRound(round, 'defused');
+
+    if (planted) {
+        const site = planted.site ? ` ${planted.site}` : '';
+        events.push({
+            tick: planted.tick,
+            type: 'bomb_planted',
+            label: 'BP',
+            color: TEAM_T_COLOR,
+            title: `Bomb planted${site} at ${formatRoundEventTime(planted.tick, round)}`,
+        });
+    }
 
     if (exploded || round.winReason === 'bomb_detonated') {
         const tick = exploded?.tick ?? round.endTick;
@@ -587,13 +599,38 @@ function getActiveDefuseStatus(events: BombEvent[], plant: BombEvent, tick: numb
     return `Defusing ${secondsLeft}s`;
 }
 
+function getRoundEndBombStatus(round: RoundData, tick: number): BombStatus | null {
+    if (tick < round.endTick) return null;
+
+    if (round.winReason === 'bomb_detonated') {
+        return {
+            bombText: 'Bomb exploded, Terrorists Win!',
+            bombClass: 'bomb-label-t',
+            defuseText: '',
+            defuseClass: '',
+        };
+    }
+
+    if (round.winReason === 'bomb_defused') {
+        return {
+            bombText: '',
+            bombClass: '',
+            defuseText: 'Bomb has been defused. Counter Terrorists Win',
+            defuseClass: 'bomb-label-ct',
+        };
+    }
+
+    return null;
+}
+
 function getBombStatus(tick: number): BombStatus {
     const round = getCurrentRoundData(tick) ?? getPlaybackStartRound(tick);
     if (!round) return emptyBombStatus();
 
     const events = getBombEventsForRound(round);
+    const roundEndStatus = getRoundEndBombStatus(round, tick);
     const plant = getLastBombEventBefore(events, 'planted', tick);
-    if (!plant) return emptyBombStatus();
+    if (!plant) return roundEndStatus ?? emptyBombStatus();
 
     const exploded = getLastBombEventBefore(events, 'exploded', tick);
     if (exploded && exploded.tick >= plant.tick) {
@@ -604,14 +641,7 @@ function getBombStatus(tick: number): BombStatus {
             defuseClass: '',
         };
     }
-    if (round.winReason === 'bomb_detonated' && tick >= round.endTick) {
-        return {
-            bombText: 'Bomb exploded, Terrorists Win!',
-            bombClass: 'bomb-label-t',
-            defuseText: '',
-            defuseClass: '',
-        };
-    }
+    if (roundEndStatus?.bombText) return roundEndStatus;
 
     const defused = getLastBombEventBefore(events, 'defused', tick);
     if (defused && defused.tick >= plant.tick) {
@@ -622,14 +652,7 @@ function getBombStatus(tick: number): BombStatus {
             defuseClass: 'bomb-label-ct',
         };
     }
-    if (round.winReason === 'bomb_defused' && tick >= round.endTick) {
-        return {
-            bombText: '',
-            bombClass: '',
-            defuseText: 'Bomb has been defused. Counter Terrorists Win',
-            defuseClass: 'bomb-label-ct',
-        };
-    }
+    if (roundEndStatus?.defuseText) return roundEndStatus;
 
     const countdownEndTick = getBombCountdownEndTick(plant, round);
     const secondsLeft = Math.max(0, Math.ceil((countdownEndTick - tick) / getTickRate()));
