@@ -15,7 +15,7 @@ import type {
     RoundData,
     MapData as MapMetadata,
 } from '$lib/types/replay/replay_pb';
-import { worldToCanvas } from '$lib/canvas/transforms';
+import { MAP_CANVAS_MARGIN, worldToCanvas } from '$lib/canvas/transforms';
 import MapLayer from '$lib/components/MapLayer.svelte';
 import PlayerLayer from '$lib/components/PlayerLayer.svelte';
 import NadeLayer from '$lib/components/NadeLayer.svelte';
@@ -98,6 +98,7 @@ const DEFAULT_LINE_OF_SIGHT_LENGTH = 300;
 const DEFAULT_LINE_OF_SIGHT_WIDTH = 2;
 const DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT = 250;
 const MAX_MOUSE_VIEWPORT_ZOOM_SCALE = 5;
+const MAP_PAN_BOUNDARY_PADDING = 0.1;
 const PLAYER_DOT_CLICK_RADIUS = 12;
 const DEFAULT_DRAWING_COLOR = '#22c55e';
 const DEFAULT_DRAWING_STROKE_WIDTH = 4;
@@ -150,6 +151,15 @@ let selectedPlayerZoomPercent = DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT;
 let mouseViewportZoomScale = 1;
 let mouseViewportTranslateX = 0;
 let mouseViewportTranslateY = 0;
+let mouseViewportDrag: {
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startTranslateX: number;
+    startTranslateY: number;
+    hasMoved: boolean;
+} | null = null;
+let ignoreNextCanvasClick = false;
 let drawingColor = DEFAULT_DRAWING_COLOR;
 let drawingStrokeWidth = DEFAULT_DRAWING_STROKE_WIDTH;
 let isDrawingEnabled = false;
@@ -1115,11 +1125,69 @@ function getSelectedPlayerViewportTransform(tick = getPlaybackTick()): ViewportT
 
 function getReplayViewportTransform(tick = getPlaybackTick()): ViewportTransform {
     const selectedTransform = getSelectedPlayerViewportTransform(tick);
-    return {
+    const transform = {
         scale: mouseViewportZoomScale * selectedTransform.scale,
         translateX: mouseViewportTranslateX + mouseViewportZoomScale * selectedTransform.translateX,
         translateY: mouseViewportTranslateY + mouseViewportZoomScale * selectedTransform.translateY,
     };
+
+    if (mouseViewportZoomScale <= 1 || !replayContainer) return transform;
+
+    const rect = replayContainer.getBoundingClientRect();
+    return constrainViewportTransformToMap(transform, rect);
+}
+
+function constrainViewportTransformToMap(
+    transform: ViewportTransform,
+    viewport: { width: number; height: number }
+): ViewportTransform {
+    const mapWidth = mapMetadata.width || 1024;
+    const mapHeight = mapMetadata.height || 1024;
+    if (viewport.width <= 0 || viewport.height <= 0 || mapWidth <= 0 || mapHeight <= 0) {
+        return transform;
+    }
+
+    const displayScale = Math.min(viewport.width / mapWidth, viewport.height / mapHeight) * MAP_CANVAS_MARGIN;
+    const displayedMapWidth = mapWidth * displayScale;
+    const displayedMapHeight = mapHeight * displayScale;
+    const mapLeft = (viewport.width - displayedMapWidth) / 2;
+    const mapTop = (viewport.height - displayedMapHeight) / 2;
+    const scaledMapWidth = displayedMapWidth * transform.scale;
+    const scaledMapHeight = displayedMapHeight * transform.scale;
+    const horizontalPadding = scaledMapWidth * MAP_PAN_BOUNDARY_PADDING;
+    const verticalPadding = scaledMapHeight * MAP_PAN_BOUNDARY_PADDING;
+
+    const translateX = scaledMapWidth <= viewport.width
+        ? viewport.width / 2 - (mapLeft + displayedMapWidth / 2) * transform.scale
+        : Math.max(
+            viewport.width - (mapLeft + displayedMapWidth) * transform.scale - horizontalPadding,
+            Math.min(-mapLeft * transform.scale + horizontalPadding, transform.translateX)
+        );
+    const translateY = scaledMapHeight <= viewport.height
+        ? viewport.height / 2 - (mapTop + displayedMapHeight / 2) * transform.scale
+        : Math.max(
+            viewport.height - (mapTop + displayedMapHeight) * transform.scale - verticalPadding,
+            Math.min(-mapTop * transform.scale + verticalPadding, transform.translateY)
+        );
+
+    return { ...transform, translateX, translateY };
+}
+
+function constrainMouseViewportTranslation(): void {
+    if (!replayContainer || mouseViewportZoomScale <= 1) return;
+
+    const selectedTransform = getSelectedPlayerViewportTransform();
+    const clampedTransform = constrainViewportTransformToMap(
+        {
+            scale: mouseViewportZoomScale * selectedTransform.scale,
+            translateX: mouseViewportTranslateX + mouseViewportZoomScale * selectedTransform.translateX,
+            translateY: mouseViewportTranslateY + mouseViewportZoomScale * selectedTransform.translateY,
+        },
+        replayContainer.getBoundingClientRect()
+    );
+
+    mouseViewportTranslateX = clampedTransform.translateX - mouseViewportZoomScale * selectedTransform.translateX;
+    mouseViewportTranslateY = clampedTransform.translateY - mouseViewportZoomScale * selectedTransform.translateY;
 }
 
 function resetReplayViewportTransform(): void {
@@ -1149,6 +1217,8 @@ function resetMouseViewportZoom(): void {
     mouseViewportZoomScale = 1;
     mouseViewportTranslateX = 0;
     mouseViewportTranslateY = 0;
+    mouseViewportDrag = null;
+    ignoreNextCanvasClick = false;
 }
 
 function handleViewportWheel(event: WheelEvent): void {
@@ -1185,10 +1255,64 @@ function handleViewportWheel(event: WheelEvent): void {
     mouseViewportTranslateY = pointerY
         - sourceY * nextZoomScale * selectedTransform.scale
         - nextZoomScale * selectedTransform.translateY;
+    constrainMouseViewportTranslation();
     updateReplayViewportTransform();
 }
 
+function handleViewportPointerDown(event: PointerEvent): void {
+    if (event.button === 0) {
+        ignoreNextCanvasClick = false;
+    }
+
+    if (
+        isDrawingEnabled ||
+        event.button !== 0 ||
+        mouseViewportZoomScale <= 1 ||
+        !(event.target instanceof HTMLCanvasElement)
+    ) {
+        return;
+    }
+
+    mouseViewportDrag = {
+        pointerId: event.pointerId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startTranslateX: mouseViewportTranslateX,
+        startTranslateY: mouseViewportTranslateY,
+        hasMoved: false,
+    };
+    event.target.setPointerCapture(event.pointerId);
+}
+
+function handleViewportPointerMove(event: PointerEvent): void {
+    if (!mouseViewportDrag || event.pointerId !== mouseViewportDrag.pointerId) return;
+
+    const deltaX = event.clientX - mouseViewportDrag.startClientX;
+    const deltaY = event.clientY - mouseViewportDrag.startClientY;
+    if (!mouseViewportDrag.hasMoved && Math.hypot(deltaX, deltaY) < 2) return;
+
+    mouseViewportDrag.hasMoved = true;
+    mouseViewportTranslateX = mouseViewportDrag.startTranslateX + deltaX;
+    mouseViewportTranslateY = mouseViewportDrag.startTranslateY + deltaY;
+    constrainMouseViewportTranslation();
+    updateReplayViewportTransform();
+}
+
+function finishViewportPointerDrag(event: PointerEvent): void {
+    if (!mouseViewportDrag || event.pointerId !== mouseViewportDrag.pointerId) return;
+
+    ignoreNextCanvasClick = mouseViewportDrag.hasMoved;
+    if (event.target instanceof HTMLCanvasElement && event.target.hasPointerCapture(event.pointerId)) {
+        event.target.releasePointerCapture(event.pointerId);
+    }
+    mouseViewportDrag = null;
+}
+
 function handleReplayCanvasClick(event: MouseEvent): void {
+    if (ignoreNextCanvasClick) {
+        ignoreNextCanvasClick = false;
+        return;
+    }
     if (isDrawingEnabled || !(event.target instanceof HTMLCanvasElement) || !replayContainer) return;
 
     const rect = replayContainer.getBoundingClientRect();
@@ -1402,6 +1526,7 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 function handleViewportResize() {
+    constrainMouseViewportTranslation();
     updateReplayViewportTransform();
 }
 
@@ -2213,4 +2338,11 @@ onMount(() => {
 </div>
 {/if}
 
-<svelte:window onclick={handleReplayCanvasClick} onwheel={handleViewportWheel} />
+<svelte:window
+    onclick={handleReplayCanvasClick}
+    onwheel={handleViewportWheel}
+    onpointerdown={handleViewportPointerDown}
+    onpointermove={handleViewportPointerMove}
+    onpointerup={finishViewportPointerDrag}
+    onpointercancel={finishViewportPointerDrag}
+/>
