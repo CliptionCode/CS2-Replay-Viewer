@@ -2,6 +2,40 @@
 
 An open-source, simple 2D viewer for Counter-Strike 2 replay demos. Load a `.dem` file to replay rounds on an interactive radar map, inspect player movement and utility, and quickly jump to the moments that matter.
 
+## Screenshots
+
+### Welcome screen
+
+Start by selecting a CS2 `.dem` replay file.
+
+![CS2 Replay Viewer welcome screen](docs/images/welcome-screen.png)
+
+### Replay workspace
+
+The loaded-demo view combines the interactive radar, sight and noise controls, timeline filters, drawing controls, team lists, round navigation, and playback controls.
+
+![Loaded CS2 replay workspace](docs/images/loaded-replay.png)
+
+### Player focus and utility timing
+
+Select and zoom in on a player while following utility effects and their remaining duration.
+
+![Selected player with utility effects and replay controls](docs/images/player-highlight.png)
+
+### Team and round tracking
+
+Team colors remain consistent across the player lists and round navigator, making the winning side and surviving players easy to scan.
+
+![Color-coded teams and round results](docs/images/color-coded-teams-and-rounds.png)
+
+![Round-winner summary](docs/images/round-winners.png)
+
+### Tactical drawing
+
+Draw routes, callouts, and tactical plans directly on the map.
+
+![Tactical drawing on the replay radar](docs/images/tactical-drawing.png)
+
 ## Features
 
 ### Replay navigation
