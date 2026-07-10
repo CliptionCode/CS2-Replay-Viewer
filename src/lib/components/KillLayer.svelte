@@ -2,6 +2,11 @@
 import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
 import { worldToCanvas } from '$lib/canvas/transforms';
+import {
+    KILL_FEED_ICON_FILES,
+    equipmentIconPath,
+    getWeaponIconPath,
+} from '$lib/equipment-icons';
 import { getPlaybackTick, subscribePlaybackTick } from '$lib/playback-state';
 import { getRoundDisplayEndTick } from '$lib/replay/rounds';
 import type { ReplayData, KillEvent, MapData as MapMetadata } from '$lib/types/replay/replay_pb';
@@ -27,6 +32,43 @@ type KillFeedHitbox = {
 };
 
 let killFeedHitboxes: KillFeedHitbox[] = [];
+const killFeedIconCache = new Map<string, HTMLImageElement>();
+const MAX_KILL_FEED_LINES = 10;
+
+function getKillFeedIcon(path: string): HTMLImageElement | null {
+    const cached = killFeedIconCache.get(path);
+    if (cached) return cached;
+    if (!browser) return null;
+
+    const image = new Image();
+    image.decoding = 'async';
+    image.onload = scheduleRender;
+    image.onerror = scheduleRender;
+    image.src = path;
+    killFeedIconCache.set(path, image);
+    return image;
+}
+
+function drawKillFeedIcon(
+    ctx: CanvasRenderingContext2D,
+    path: string,
+    x: number,
+    baselineY: number,
+    maxWidth: number,
+    maxHeight: number,
+    reservedWidth: number
+): number {
+    const image = getKillFeedIcon(path);
+    if (!image?.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+        return reservedWidth;
+    }
+
+    const scale = Math.min(maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
+    const width = image.naturalWidth * scale;
+    const height = image.naturalHeight * scale;
+    ctx.drawImage(image, x, baselineY - height - 1, width, height);
+    return width;
+}
 
 function getCurrentRoundRange(tick: number): { startTick: number; endTick: number } | null {
     if (!replayData?.rounds || replayData.rounds.length === 0) return null;
@@ -109,8 +151,7 @@ function drawKillFeed(
     canvasSize: { width: number; height: number },
     tick: number
 ): void {
-    const maxLines = 5;
-    const recentKills = kills.slice(-maxLines);
+    const recentKills = kills.slice(-MAX_KILL_FEED_LINES);
 
     ctx.font = 'bold 14px Inter, sans-serif';
     ctx.textAlign = 'left';
@@ -123,25 +164,45 @@ function drawKillFeed(
         const victim = replayData?.players?.find(p => p.steamId === kill.victimSteamId);
         const killerName = killer?.name || 'BOT';
         const victimName = victim?.name || 'BOT';
-        const hs = kill.isHeadshot ? ' (HS)' : '';
         const killerColor = getTeamColor(getPlayerTeam(kill.killerSteamId, tick));
         const victimColor = getTeamColor(getPlayerTeam(kill.victimSteamId, tick));
 
         let x = feedLeftOffset;
-        let rowWidth = 0;
-        const segments = [
-            { text: killerName, color: killerColor },
-            { text: ` [${kill.weapon}${hs}] `, color: '#e2e8f0' },
-            { text: victimName, color: victimColor },
-        ];
+        ctx.fillStyle = killerColor;
+        ctx.fillText(killerName, x, y);
+        x += ctx.measureText(killerName).width + 8;
 
-        for (const segment of segments) {
-            ctx.fillStyle = segment.color;
-            ctx.fillText(segment.text, x, y);
-            const segmentWidth = ctx.measureText(segment.text).width;
-            x += segmentWidth;
-            rowWidth += segmentWidth;
+        x += drawKillFeedIcon(ctx, getWeaponIconPath(kill.weapon), x, y, 48, 16, 32) + 6;
+
+        if (kill.isHeadshot) {
+            x += drawKillFeedIcon(
+                ctx,
+                equipmentIconPath(KILL_FEED_ICON_FILES.headshot),
+                x,
+                y,
+                17,
+                17,
+                17
+            ) + 5;
         }
+
+        if (kill.assistedByFlash) {
+            x += drawKillFeedIcon(
+                ctx,
+                equipmentIconPath(KILL_FEED_ICON_FILES.flashAssist),
+                x,
+                y,
+                18,
+                17,
+                18
+            ) + 5;
+        }
+
+        ctx.fillStyle = victimColor;
+        ctx.fillText(victimName, x, y);
+        x += ctx.measureText(victimName).width;
+
+        const rowWidth = x - feedLeftOffset;
         killFeedHitboxes.push({
             kill,
             x: feedLeftOffset - 4,

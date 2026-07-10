@@ -441,6 +441,7 @@ type KillEvent struct {
 	KillerY           float32                `protobuf:"fixed32,8,opt,name=killer_y,json=killerY,proto3" json:"killer_y,omitempty"`
 	VictimX           float32                `protobuf:"fixed32,9,opt,name=victim_x,json=victimX,proto3" json:"victim_x,omitempty"`
 	VictimY           float32                `protobuf:"fixed32,10,opt,name=victim_y,json=victimY,proto3" json:"victim_y,omitempty"`
+	AssistedByFlash   bool                   `protobuf:"varint,11,opt,name=assisted_by_flash,json=assistedByFlash,proto3" json:"assisted_by_flash,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -543,6 +544,13 @@ func (x *KillEvent) GetVictimY() float32 {
 		return x.VictimY
 	}
 	return 0
+}
+
+func (x *KillEvent) GetAssistedByFlash() bool {
+	if x != nil {
+		return x.AssistedByFlash
+	}
+	return false
 }
 
 type NadeEvent struct {
@@ -1281,7 +1289,7 @@ const file_replay_proto_rawDesc = "" +
 	"win_reason\x18\x05 \x01(\tR\twinReason\x12\x1d\n" +
 	"\n" +
 	"kill_count\x18\x06 \x01(\x05R\tkillCount\x12.\n" +
-	"\x13freezetime_end_tick\x18\a \x01(\x05R\x11freezetimeEndTick\"\xc3\x02\n" +
+	"\x13freezetime_end_tick\x18\a \x01(\x05R\x11freezetimeEndTick\"\xef\x02\n" +
 	"\tKillEvent\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12&\n" +
 	"\x0fkiller_steam_id\x18\x02 \x01(\x04R\rkillerSteamId\x12&\n" +
@@ -1294,7 +1302,8 @@ const file_replay_proto_rawDesc = "" +
 	"\bkiller_y\x18\b \x01(\x02R\akillerY\x12\x19\n" +
 	"\bvictim_x\x18\t \x01(\x02R\avictimX\x12\x19\n" +
 	"\bvictim_y\x18\n" +
-	" \x01(\x02R\avictimY\"\x98\x03\n" +
+	" \x01(\x02R\avictimY\x12*\n" +
+	"\x11assisted_by_flash\x18\v \x01(\bR\x0fassistedByFlash\"\x98\x03\n" +
 	"\tNadeEvent\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12(\n" +
 	"\x10thrower_steam_id\x18\x02 \x01(\x04R\x0ethrowerSteamId\x12\x1b\n" +

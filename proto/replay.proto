@@ -58,6 +58,7 @@ message KillEvent {
   float killer_y = 8;
   float victim_x = 9;
   float victim_y = 10;
+  bool assisted_by_flash = 11;
 }
 
 message NadeEvent {

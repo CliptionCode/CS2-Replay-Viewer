@@ -16,6 +16,7 @@ import type {
     MapData as MapMetadata,
 } from '$lib/types/replay/replay_pb';
 import { MAP_CANVAS_MARGIN, worldToCanvas } from '$lib/canvas/transforms';
+import { TIMELINE_ICON_FILES, equipmentIconPath } from '$lib/equipment-icons';
 import MapLayer from '$lib/components/MapLayer.svelte';
 import PlayerLayer from '$lib/components/PlayerLayer.svelte';
 import NadeLayer from '$lib/components/NadeLayer.svelte';
@@ -107,7 +108,15 @@ const DEFAULT_BOMB_TIME_SECONDS = 40;
 const DEFAULT_PLANT_SECONDS = 3.2;
 const DEFUSE_SECONDS_WITH_KIT = 5;
 const DEFUSE_SECONDS_WITHOUT_KIT = 10;
-const EVENT_STACK_WINDOW_TICKS = 128;
+const TIMELINE_MIN_HEIGHT = 86;
+const TIMELINE_FIXED_CONTENT_HEIGHT = 38;
+const TIMELINE_MARKER_ICON_SIZE = 24;
+const TIMELINE_MARKER_BUTTON_SIZE = 28;
+const TIMELINE_MARKER_LANE_GAP = 6;
+const TIMELINE_MARKER_BOTTOM_PADDING = 4;
+const TIMELINE_MARKER_LANE_PITCH = TIMELINE_MARKER_BUTTON_SIZE + TIMELINE_MARKER_LANE_GAP;
+const TIMELINE_MARKER_HORIZONTAL_GAP = 4;
+const TIMELINE_HORIZONTAL_PADDING = 40;
 const NADE_MATCH_DISTANCE_UNITS = 240;
 const NADE_MATCH_TICK_WINDOW = 768;
 const SMOKE_MATCH_TICK_WINDOW = 1536;
@@ -194,6 +203,7 @@ let ctAliveCount = 0;
 let tAliveCount = 0;
 let timelineEvents: PlayerTimelineEvent[] = [];
 let timelineEventsKey = '';
+let timelineHeight = TIMELINE_MIN_HEIGHT;
 let matchScore: MatchScore | null = null;
 let toastMessage = '';
 let toastTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -208,13 +218,14 @@ type RosterEntry = {
     color: string;
 };
 
-type PlayerEventType = 'kill' | 'death' | 'smoke' | 'flashbang' | 'molotov' | 'hegrenade' | 'decoy' | 'bomb_planted' | 'bomb_exploded' | 'bomb_defused';
+type PlayerEventType = 'kill' | 'death' | 'smoke' | 'flashbang' | 'molotov' | 'hegrenade' | 'decoy' | 'bomb_planted' | 'bomb_exploded' | 'bomb_defused' | 'round_time_expired';
 
 type BasePlayerTimelineEvent = {
     tick: number;
     type: PlayerEventType;
     label: string;
     color: string;
+    iconPath?: string;
     title: string;
     playerSteamId?: bigint;
 };
@@ -271,6 +282,7 @@ function resetLoadedReplayState(clearReplayData = false): void {
     tAliveCount = 0;
     timelineEvents = [];
     timelineEventsKey = '';
+    timelineHeight = TIMELINE_MIN_HEIGHT;
     matchScore = null;
     bombStatus = emptyBombStatus();
     activeStart = 0;
@@ -289,6 +301,7 @@ function applyLoadedReplay(data: ReplayData): void {
     mapVariant = 'default';
     timelineEvents = [];
     timelineEventsKey = '';
+    timelineHeight = TIMELINE_MIN_HEIGHT;
     matchScore = null;
     bombStatus = emptyBombStatus();
     setPlaying(false);
@@ -501,19 +514,22 @@ function getPlayerName(steamId: bigint): string {
 
 function getNadeMeta(nadeType: string): Omit<BasePlayerTimelineEvent, 'tick' | 'title'> | null {
     if (nadeType === 'smoke') {
-        return { type: 'smoke', label: 'S', color: '#9ca3af' };
+        return { type: 'smoke', label: '', color: '#9ca3af', iconPath: equipmentIconPath(TIMELINE_ICON_FILES.smoke) };
     }
     if (nadeType === 'flashbang') {
-        return { type: 'flashbang', label: 'F', color: '#fde047' };
+        return { type: 'flashbang', label: '', color: '#fde047', iconPath: equipmentIconPath(TIMELINE_ICON_FILES.flashbang) };
     }
-    if (nadeType === 'molotov' || nadeType === 'incendiary') {
-        return { type: 'molotov', label: 'M', color: '#dc2626' };
+    if (nadeType === 'molotov') {
+        return { type: 'molotov', label: '', color: '#dc2626', iconPath: equipmentIconPath(TIMELINE_ICON_FILES.molotov) };
+    }
+    if (nadeType === 'incendiary') {
+        return { type: 'molotov', label: '', color: '#dc2626', iconPath: equipmentIconPath(TIMELINE_ICON_FILES.incendiary) };
     }
     if (nadeType === 'hegrenade') {
-        return { type: 'hegrenade', label: 'HE', color: '#f97316' };
+        return { type: 'hegrenade', label: '', color: '#f97316', iconPath: equipmentIconPath(TIMELINE_ICON_FILES.hegrenade) };
     }
     if (nadeType === 'decoy') {
-        return { type: 'decoy', label: 'DC', color: '#92400e' };
+        return { type: 'decoy', label: '', color: '#92400e', iconPath: equipmentIconPath(TIMELINE_ICON_FILES.decoy) };
     }
     return null;
 }
@@ -521,7 +537,8 @@ function getNadeMeta(nadeType: string): Omit<BasePlayerTimelineEvent, 'tick' | '
 function getNadeTypeName(nadeType: string): string {
     if (nadeType === 'smoke') return 'Smoke';
     if (nadeType === 'flashbang') return 'Flashbang';
-    if (nadeType === 'molotov' || nadeType === 'incendiary') return 'Molotov';
+    if (nadeType === 'molotov') return 'Molotov';
+    if (nadeType === 'incendiary') return 'Incendiary Grenade';
     if (nadeType === 'hegrenade') return 'HE Grenade';
     if (nadeType === 'decoy') return 'Decoy';
     return 'Nade';
@@ -608,18 +625,22 @@ function formatRoundEventTime(tick: number, round: RoundData): string {
 function stackTimelineEvents(events: BasePlayerTimelineEvent[], round: RoundData): PlayerTimelineEvent[] {
     const activeStart = getRoundActiveStart(round);
     const duration = Math.max(1, getRoundDisplayEndTick(replayData, round) - activeStart);
-    const laneLastTicks: number[] = [];
+    const trackWidth = browser ? Math.max(1, window.innerWidth - TIMELINE_HORIZONTAL_PADDING) : 1024;
+    const minimumCenterDistance = TIMELINE_MARKER_ICON_SIZE + TIMELINE_MARKER_HORIZONTAL_GAP;
+    const laneLastCenterPositions: number[] = [];
 
     return [...events]
         .sort((a, b) => a.tick - b.tick)
         .map((event, index) => {
-            let lane = laneLastTicks.findIndex(lastTick => event.tick - lastTick > EVENT_STACK_WINDOW_TICKS);
-            if (lane === -1) {
-                lane = laneLastTicks.length;
-            }
-            laneLastTicks[lane] = event.tick;
-
             const leftPct = Math.max(0, Math.min(100, ((event.tick - activeStart) / duration) * 100));
+            const centerPosition = (leftPct / 100) * trackWidth;
+            let lane = laneLastCenterPositions.findIndex(
+                lastCenterPosition => centerPosition - lastCenterPosition >= minimumCenterDistance
+            );
+            if (lane === -1) {
+                lane = laneLastCenterPositions.length;
+            }
+            laneLastCenterPositions[lane] = centerPosition;
             return {
                 ...event,
                 id: `${event.type}-${event.tick}-${index}`,
@@ -627,6 +648,17 @@ function stackTimelineEvents(events: BasePlayerTimelineEvent[], round: RoundData
                 leftPct,
             };
         });
+}
+
+function getTimelineHeight(events: PlayerTimelineEvent[]): number {
+    const laneCount = events.reduce((highestLane, event) => Math.max(highestLane, event.lane + 1), 0);
+    if (laneCount === 0) return TIMELINE_MIN_HEIGHT;
+
+    const markerTrackHeight =
+        laneCount * TIMELINE_MARKER_BUTTON_SIZE +
+        Math.max(0, laneCount - 1) * TIMELINE_MARKER_LANE_GAP +
+        TIMELINE_MARKER_BOTTOM_PADDING;
+    return Math.max(TIMELINE_MIN_HEIGHT, TIMELINE_FIXED_CONTENT_HEIGHT + markerTrackHeight);
 }
 
 function buildNadeTimelineEvent(nade: NadeEvent, round: RoundData): BasePlayerTimelineEvent | null {
@@ -639,11 +671,14 @@ function buildNadeTimelineEvent(nade: NadeEvent, round: RoundData): BasePlayerTi
     if (throwTick < round.startTick || throwTick > getRoundDisplayEndTick(replayData, round)) return null;
 
     const playerName = nade.throwerSteamId !== 0n ? `${getPlayerName(nade.throwerSteamId)} threw ` : 'Threw ';
+    const thrower = replayData?.players?.find(player => player.steamId === nade.throwerSteamId);
+    const color = thrower ? getTeamColor(getPlayerTeamForRound(thrower, round)) : meta.color;
     return {
         tick: throwTick,
         type: meta.type,
         label: meta.label,
-        color: meta.color,
+        color,
+        iconPath: meta.iconPath,
         title: `${playerName}${getNadeTypeName(nade.nadeType)} at ${formatRoundEventTime(throwTick, round)}`,
         playerSteamId: nade.throwerSteamId || undefined,
     };
@@ -659,21 +694,27 @@ function buildKillDeathTimelineEvents(round: RoundData, steamId: bigint | null =
 
     for (const kill of roundKills) {
         if (enabledTimelineCombatEvents.kill && (steamId === null || kill.killerSteamId === steamId)) {
+            const killer = replayData.players?.find(player => player.steamId === kill.killerSteamId);
             events.push({
                 tick: kill.tick,
                 type: 'kill',
-                label: 'K',
-                color: '#22c55e',
+                label: '',
+                color: killer ? getTeamColor(getPlayerTeamForRound(killer, round)) : '#e2e8f0',
+                iconPath: equipmentIconPath(TIMELINE_ICON_FILES.kill),
                 title: `${getPlayerName(kill.killerSteamId)} killed ${getPlayerName(kill.victimSteamId)} with ${kill.weapon} at ${formatRoundEventTime(kill.tick, round)}`,
                 playerSteamId: kill.killerSteamId || undefined,
             });
         }
         if (enabledTimelineCombatEvents.death && (steamId === null || kill.victimSteamId === steamId)) {
+            const victim = replayData.players?.find(player => player.steamId === kill.victimSteamId);
             events.push({
                 tick: kill.tick,
                 type: 'death',
-                label: 'X',
-                color: '#ef4444',
+                label: '',
+                color: victim ? getTeamColor(getPlayerTeamForRound(victim, round)) : '#e2e8f0',
+                iconPath: equipmentIconPath(
+                    kill.isHeadshot ? TIMELINE_ICON_FILES.headshotDeath : TIMELINE_ICON_FILES.death
+                ),
                 title: `${getPlayerName(kill.victimSteamId)} died to ${getPlayerName(kill.killerSteamId)} at ${formatRoundEventTime(kill.tick, round)}`,
                 playerSteamId: kill.victimSteamId || undefined,
             });
@@ -737,8 +778,9 @@ function buildBombRoundEvents(round: RoundData): BasePlayerTimelineEvent[] {
         events.push({
             tick: plantTick,
             type: 'bomb_planted',
-            label: 'BP',
+            label: '',
             color: TEAM_T_COLOR,
+            iconPath: equipmentIconPath(TIMELINE_ICON_FILES.bombPlanted),
             title: `Bomb planted${site} at ${formatRoundEventTime(plantTick, round)}`,
             playerSteamId: planted?.playerSteamId || plantBegin?.playerSteamId || undefined,
         });
@@ -749,8 +791,9 @@ function buildBombRoundEvents(round: RoundData): BasePlayerTimelineEvent[] {
         events.push({
             tick,
             type: 'bomb_exploded',
-            label: 'BE',
+            label: '',
             color: TEAM_T_COLOR,
+            iconPath: equipmentIconPath(TIMELINE_ICON_FILES.bombExploded),
             title: `Bomb exploded at ${formatRoundEventTime(tick, round)}`,
         });
     }
@@ -760,8 +803,9 @@ function buildBombRoundEvents(round: RoundData): BasePlayerTimelineEvent[] {
         events.push({
             tick,
             type: 'bomb_defused',
-            label: 'BD',
+            label: '',
             color: TEAM_CT_COLOR,
+            iconPath: equipmentIconPath(TIMELINE_ICON_FILES.bombDefused),
             title: `Bomb defused at ${formatRoundEventTime(tick, round)}`,
             playerSteamId: defused?.playerSteamId || undefined,
         });
@@ -770,8 +814,29 @@ function buildBombRoundEvents(round: RoundData): BasePlayerTimelineEvent[] {
     return events;
 }
 
+function buildRoundOutcomeEvents(round: RoundData): BasePlayerTimelineEvent[] {
+    if (round.winReason !== 'target_saved' && round.winReason !== 'time_ran_out') return [];
+
+    const tick = getRoundScoreTick(round);
+    const winnerName = round.winnerTeam === TEAM_T
+        ? 'Terrorists'
+        : round.winnerTeam === TEAM_CT
+            ? 'Counter-Terrorists'
+            : 'Team';
+
+    return [{
+        tick,
+        type: 'round_time_expired',
+        label: '',
+        color: getTeamColor(round.winnerTeam),
+        iconPath: equipmentIconPath(TIMELINE_ICON_FILES.timeExpired),
+        title: `${winnerName} won when time expired at ${formatRoundEventTime(tick, round)}`,
+    }];
+}
+
 function buildTimelineEvents(selectedSteamId: bigint | null, round: RoundData): PlayerTimelineEvent[] {
     const events = buildBombRoundEvents(round);
+    events.push(...buildRoundOutcomeEvents(round));
     if (showAllTimelineUtilities) {
         events.push(...buildKillDeathTimelineEvents(round));
         events.push(...buildAllUtilityRoundEvents(round));
@@ -798,6 +863,7 @@ function updateTimelineEvents(round: RoundData | null): void {
 
     timelineEventsKey = nextKey;
     timelineEvents = round ? buildTimelineEvents(selectedPlayerSteamId, round) : [];
+    timelineHeight = getTimelineHeight(timelineEvents);
 }
 
 function emptyBombStatus(): BombStatus {
@@ -1528,6 +1594,9 @@ function handleKeydown(e: KeyboardEvent) {
 function handleViewportResize() {
     constrainMouseViewportTranslation();
     updateReplayViewportTransform();
+    timelineEventsKey = '';
+    const round = getCurrentRoundData(displayTick) ?? getPlaybackStartRound(displayTick);
+    updateTimelineEvents(round);
 }
 
 onMount(() => {
@@ -1560,13 +1629,14 @@ onMount(() => {
     top: 0;
     left: 0;
     right: 0;
-    height: 86px;
+    height: var(--timeline-height, 86px);
     background: #1a1a24;
     border-bottom: 1px solid #2a2a40;
     padding: 0 20px;
     z-index: 100;
     box-sizing: border-box;
     padding-top: 10px;
+    transition: height 0.16s ease;
 }
 
 .timeline-track {
@@ -1609,12 +1679,13 @@ onMount(() => {
 
 .event-marker-track {
     position: relative;
-    height: 48px;
+    height: calc(var(--timeline-height, 86px) - 38px);
     margin-top: 8px;
 }
 
 .event-marker {
     position: absolute;
+    box-sizing: border-box;
     min-width: 20px;
     height: 16px;
     padding: 0 4px;
@@ -1629,17 +1700,46 @@ onMount(() => {
     cursor: pointer;
     transform: translateX(-50%);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+    transition: filter 0.12s ease, outline-color 0.12s ease, transform 0.12s ease;
     z-index: 1;
 }
 
-.event-marker:hover {
-    filter: brightness(1.14);
-    z-index: 3;
+.event-marker.has-icon {
+    width: 28px;
+    height: 28px;
+    padding: 1px;
+    border-color: var(--marker-color);
+    background: rgba(15, 23, 42, 0.92);
+}
+
+.event-marker-icon {
+    display: block;
+    width: 24px;
+    height: 24px;
+    margin: auto;
+    background: var(--marker-color);
+    -webkit-mask-image: var(--marker-icon-url);
+    mask-image: var(--marker-icon-url);
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+}
+
+.event-marker:hover,
+.event-marker:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+    filter: brightness(1.3) drop-shadow(0 0 6px var(--marker-color));
+    transform: translateX(-50%) scale(1.18);
+    z-index: 4;
 }
 
 .bomb-status {
     position: absolute;
-    top: 132px;
+    top: calc(var(--timeline-height, 86px) + 46px);
     left: 50%;
     display: flex;
     flex-direction: column;
@@ -1652,7 +1752,7 @@ onMount(() => {
 
 .match-score-label {
     position: absolute;
-    top: 96px;
+    top: calc(var(--timeline-height, 86px) + 10px);
     left: 50%;
     z-index: 112;
     max-width: min(560px, calc(100vw - 40px));
@@ -1727,7 +1827,7 @@ onMount(() => {
 
 .sight-controls {
     position: absolute;
-    top: 134px;
+    top: calc(var(--timeline-height, 86px) + 48px);
     bottom: 80px;
     left: 20px;
     width: 252px;
@@ -1870,7 +1970,7 @@ onMount(() => {
 
 .player-roster {
     position: absolute;
-    top: 96px;
+    top: calc(var(--timeline-height, 86px) + 10px);
     right: 20px;
     width: 316px;
     background: rgba(26, 26, 36, 0.9);
@@ -1913,11 +2013,19 @@ onMount(() => {
     text-align: left;
     text-overflow: ellipsis;
     white-space: nowrap;
+    transition: background 0.12s ease, border-color 0.12s ease, filter 0.12s ease, outline-color 0.12s ease, transform 0.12s ease;
 }
 
-.roster-player:hover {
+.roster-player:hover,
+.roster-player:focus-visible {
+    position: relative;
     background: rgba(59, 130, 246, 0.18);
-    border-color: rgba(96, 165, 250, 0.45);
+    border-color: var(--player-color);
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+    filter: brightness(1.3) drop-shadow(0 0 6px var(--player-color));
+    transform: scale(1.06);
+    z-index: 2;
 }
 
 .roster-player.selected {
@@ -1987,7 +2095,11 @@ onMount(() => {
 </style>
 
 {#if replayData}
-<div class="replay-container" bind:this={replayContainer}>
+<div
+    class="replay-container"
+    bind:this={replayContainer}
+    style:--timeline-height={`${timelineHeight}px`}
+>
     <!-- Timeline at top -->
     <div class="timeline">
         <div class="timeline-track"
@@ -2019,9 +2131,13 @@ onMount(() => {
         <div class="event-marker-track">
             {#each timelineEvents as playerEvent (playerEvent.id)}
                 <button
-                    class="event-marker"
-                    style="left: {playerEvent.leftPct}%; top: {playerEvent.lane * 18}px; --marker-color: {playerEvent.color}; color: {playerEvent.type === 'death' ? '#ffffff' : '#0f172a'};"
+                    class={`event-marker${playerEvent.iconPath ? ' has-icon' : ''}`}
+                    style:left={`${playerEvent.leftPct}%`}
+                    style:top={`${playerEvent.lane * TIMELINE_MARKER_LANE_PITCH}px`}
+                    style:--marker-color={playerEvent.color}
+                    style:--marker-icon-url={playerEvent.iconPath ? `url("${playerEvent.iconPath}")` : 'none'}
                     title={playerEvent.title}
+                    aria-label={playerEvent.title}
                     onclick={() => handleTimelineEventClick(playerEvent)}
                     ondblclick={(e) => {
                         e.preventDefault();
@@ -2029,7 +2145,11 @@ onMount(() => {
                         void copyTickCommand(playerEvent.tick);
                     }}
                 >
-                    {playerEvent.label}
+                    {#if playerEvent.iconPath}
+                        <span class="event-marker-icon" aria-hidden="true"></span>
+                    {:else}
+                        {playerEvent.label}
+                    {/if}
                 </button>
             {/each}
         </div>

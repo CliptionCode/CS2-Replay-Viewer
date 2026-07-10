@@ -2,7 +2,7 @@
 
 > Supplementary information for an AI implementing this project. Contains background knowledge, gotchas, library deep-dives, and reference material not covered in the implementation plan.
 
-> **Application version:** `0.1.2`. This version was applied after the player-dot selection, utility-visual, sight-control, and mouse-viewport zoom changes. Keep `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` on the same version when releasing later changes.
+> **Application version:** `0.1.3`. This version includes the icon-based kill feed and timeline markers, improved marker packing and highlighting, and dynamic timeline sizing. Keep `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` on the same version when releasing later changes.
 
 > **IMPORTANT:** Whenever writing or modifying **Svelte** code, always load the `svelte-core-bestpractices` and `svelte-code-writer` skills first. Whenever writing or modifying **Rust** code, always load the `rust-best-practices` skill first.
 >
@@ -258,15 +258,9 @@ Player labels in `PlayerLayer.svelte` show the player name above the current wea
 
 Team colors are resolved via `getPlayerTeam(steamId)` in `PlayerLayer.svelte`, which looks up `replayData.players` by SteamID for the `.team` field (not the weapon prefix heuristic used in earlier versions). T=2 → orange, CT=3 → blue.
 
-### 4.6 Kill Feed Text Format
+### 4.6 Kill Feed Icon Format
 
-`{KillerName} [{WeaponName}{HS?}{WB?}] {VictimName}`
-
-Where:
-- HS = Headshot (add ` (HS)` suffix after weapon)
-- WB = Wallbang (add ` (WB)` suffix after weapon if PenetratedObjects > 0)
-
-Example: `s1mple [AWP (HS)] ZywOo`
+The kill feed renders `{KillerName} {WeaponIcon} {HeadshotIcon?} {FlashAssistIcon?} {VictimName}`. Weapon names are mapped to SVGs in `static/equipment-icons` through `src/lib/equipment-icons.ts`; for example, `AK-47` uses `ak47.svg`. Headshots use `icon_headshot.svg`, and kills whose parsed `AssistedFlash` flag is true use `flashbang_assist.svg`. Unknown/world weapons use the generic `icon-death.svg` fallback so the feed remains icon-only.
 
 ---
 
@@ -324,7 +318,7 @@ Use `@bufbuild/protobuf` (formerly protobuf-es). It's modern, tree-shakeable, pr
 
 The ReplayData protobuf schema contains a DemoHeader, repeated PlayerInfo, repeated RoundData, repeated KillEvent, repeated NadeEvent, repeated PlayerFrame, MapData, repeated FlashEvent, repeated NoiseEvent, and repeated BombEvent. Each PlayerFrame stores tick, steam_id, x/y/z coordinates, yaw/pitch, health, armor, weapon, and is_alive.
 
-`FlashEvent`, `NoiseEvent`, and `BombEvent` are parser-backed event streams used by the current UI:
+`KillEvent` includes the parser's `assisted_by_flash` flag so the kill feed can distinguish flash-assisted kills. Older protobuf files decode this new field as `false`; re-parse the original `.dem` to populate it. `FlashEvent`, `NoiseEvent`, and `BombEvent` are parser-backed event streams used by the current UI:
 - `FlashEvent`: flashed player, attacker, duration, and end tick. Re-parse demos to populate it.
 - `NoiseEvent`: sound origin, radius, identity, type, and end tick for noise-radius rendering. Current parser-backed types are `running`, `jump`, `shooting`, and `falling`; older empty, `sound`, or `footstep` values are treated as `running` by the frontend.
 - `BombEvent`: plant, explosion, defuse start/abort, and defuse completion events used by bomb labels and timeline markers.
@@ -504,7 +498,7 @@ The UI uses 4 stacked `<canvas>` elements, each rendered by its own Svelte compo
 | Map | `MapLayer.svelte` | Loads radar PNG, draws background/grid, applies `worldToCanvas()` transform |
 | Player | `PlayerLayer.svelte` | Draws player dots + direction indicators, weapon labels, health bars, trails |
 | Nade | `NadeLayer.svelte` | Draws nade trajectories (arcs), active effect zones for damaging/vision-blocking nades, and labeled active decoy endpoint dots, color-coded by type |
-| Kill | `KillLayer.svelte` | Draws death markers (X on victim position), kill feed text overlay |
+| Kill | `KillLayer.svelte` | Draws death markers (X on victim position) and the clickable, icon-based kill feed overlay |
 
 *Note: `ReplayCanvas.svelte` and `renderer.ts` are legacy from an earlier single-canvas approach. The active rendering is done by the 4 individual layer components.*
 
@@ -575,7 +569,7 @@ For maps with lower radar variants (`de_nuke`, `de_train`, `de_vertigo`), the bo
 
 ### 11.6.1 Equipment Icon Assets
 
-CS2 equipment SVGs for potential future UI use are stored in `static/equipment-icons`. They come from the `cs2/panorama/images/icons/equipment` directory of [Juknum/counter-strike-icons](https://github.com/Juknum/counter-strike-icons/tree/main/cs2/panorama/images/icons/equipment). The empty source files `world.svg` and `worldent.svg` are intentionally not bundled.
+CS2 equipment SVGs are stored in `static/equipment-icons` and are used by the kill feed and timeline markers. They come from the `cs2/panorama/images/icons/equipment` directory of [Juknum/counter-strike-icons](https://github.com/Juknum/counter-strike-icons/tree/main/cs2/panorama/images/icons/equipment). The empty source files `world.svg` and `worldent.svg` are intentionally not bundled. Shared asset paths and the demoinfocs weapon-name mapping live in `src/lib/equipment-icons.ts`.
 
 ### 11.7 Playback Speed Controls
 
@@ -606,15 +600,15 @@ Knife rounds: the Go parser detects an initial knife-only round by sampling aliv
 
 The bottom controls toolbar includes a left-aligned `Load Demo` button. It opens the same `.dem` picker as the empty state. Once a new file is selected, `+page.svelte` stops playback, clears the current `ReplayData`, resets player/timeline/bomb/viewport caches, waits for Svelte to unmount old replay layers, then parses and loads the new protobuf. Cancelling the picker leaves the current replay untouched.
 
-Round navigation survivor labels: `RoundNav.svelte` counts alive T and CT players at the effective display end tick, not just the raw winner-side count at the original round end. Labels are formatted as `T + N | CT + N`, a single side when only one side has survivors, or `No Survivors`.
+Round navigation survivor labels: `RoundNav.svelte` counts alive T and CT players at the effective display end tick, not just the raw winner-side count at the original round end. Labels are formatted as `T + N | CT + N`, a single side when only one side has survivors, or `No Survivors`. Hovered or keyboard-focused round buttons use the same white outline, brightness increase, side-colored glow, and scale treatment as timeline markers.
 
 ### 11.9 Kill Feed & Death Marker Round Filtering
 
 Both the kill feed and death markers filter kills to only show those within the current round (the round containing `currentTick`). Round detection uses the effective display end tick, so kills in the 7-second post-round window remain visible and can affect survivor counts. Previously they showed kills from all rounds combined.
 
-The kill feed shows at most 5 kills that have already happened in the current round (`kill.tick <= currentTick`), so future kills are not visible early. Death markers still use the short recent-kill window (`currentTick - 64 <= kill.tick <= currentTick`) so the red X appears briefly at the moment of death.
+The kill feed shows at most 10 kills that have already happened in the current round (`kill.tick <= currentTick`), so future kills are not visible early. Death markers still use the short recent-kill window (`currentTick - 64 <= kill.tick <= currentTick`) so the red X appears briefly at the moment of death.
 
-Kill feed player names are color-coded by team at that round: CT names are blue (`#3b82f6`) and T names are orange (`#f97316`). The weapon segment remains neutral text.
+Kill feed player names are color-coded by team at that round: CT names are blue (`#3b82f6`) and T names are orange (`#f97316`). The former weapon-name/`HS` text segment is now an icon sequence drawn from `static/equipment-icons`: the weapon SVG, optional `icon_headshot.svg`, and optional `flashbang_assist.svg`. `KillLayer.svelte` caches the browser-decoded SVG images and redraws after each asset loads while preserving the existing row hitboxes and click-to-seek behavior.
 
 ### 11.10 Player Roster, Sight Controls, Selection Zoom, and Event Markers
 
@@ -628,17 +622,19 @@ The replay viewport also supports independent mouse-wheel zoom over the canvas. 
 
 The `Noise` section below `Player Selection` contains `Show Noice Circle` (unchecked by default), `Noise for Selected Player` (unchecked by default), and per-source checkboxes for the distinguishable sources `Running Noise`, `Jump Noise`, `Shooting Noise`, and `Falling Noise` (checked by default). `Show Noice Circle` is the master visibility toggle for red noise circles. `Noise for Selected Player` limits noise rendering to the selected Steam ID. Unknown noise types are not exposed as a separate UI option.
 
-The `Timeline` section below `Noise` controls timeline marker visibility only; it does not change utility rendering on the map. `Show Kills` and `Show Deaths` are checked by default and control `K`/`X` markers. `Show all Utilities` is unchecked by default. `Show Smokes`, `Show Flashes`, `Show HE Nades`, `Show Molotovs`, and `Show Decoys` are checked by default. When `Show all Utilities` is off, kill/death and utility markers are limited to the selected player and respect their filters. When `Show all Utilities` is on, the timeline shows all checked utility types plus all checked kill/death markers that happened during the current round. Bomb plant, explosion, and defuse markers remain visible regardless of filter settings.
+The `Timeline` section below `Noise` controls timeline marker visibility only; it does not change utility rendering on the map. `Show Kills` and `Show Deaths` are checked by default and control the domination/death icon markers. `Show all Utilities` is unchecked by default. `Show Smokes`, `Show Flashes`, `Show HE Nades`, `Show Molotovs`, and `Show Decoys` are checked by default. When `Show all Utilities` is off, kill/death and utility markers are limited to the selected player and respect their filters. When `Show all Utilities` is on, the timeline shows all checked utility types plus all checked kill/death markers that happened during the current round. Bomb plant, explosion, defuse, and time-expiry markers remain visible regardless of filter settings.
 
 The `Drawing` section below `Timeline` controls a separate freehand drawing overlay. It has a color picker, a `Stroke Width` slider from 1 to 10, a `Clear all Drawings` button, and a `Start Drawing` / `Stop Drawing` toggle. `DrawingLayer.svelte` owns the drawing canvas and stroke storage, sits above replay canvas overlays but below the UI panels, and only captures pointer input while drawing mode is active. It inherits the replay viewport transform so drawings stay aligned with the radar when selected-player zoom is active. Clearing drawings only clears this layer and does not affect map, player, nade, kill feed, or timeline rendering.
 
-The top-right roster panel shows two current-round side columns, CT and T, with alive/total counts in the headers. It uses the same stored-team side-switch logic as the canvas renderers, so the columns flip after halftime and every overtime half. Player names are side-colored while alive and greyed out when dead at the current tick.
+The top-right roster panel shows two current-round side columns, CT and T, with alive/total counts in the headers. It uses the same stored-team side-switch logic as the canvas renderers, so the columns flip after halftime and every overtime half. Player names are side-colored while alive and greyed out when dead at the current tick. Hovered or keyboard-focused roster buttons use the same white outline, brightness increase, player-color glow, and scale treatment as timeline markers.
 
-The top-center match score label is formatted as `Team <playerName> (XX) vs Team <playerName> (XX)`. The representative names are selected from the two sides in the first visible round and remain stable after side switches. Round wins are counted by mapping each completed round winner back to that first-round team identity, so users do not have to manually add T-side wins before halftime and CT-side wins after halftime. Each `Team <playerName> (XX)` segment is colored by that team's current side in the shown round: blue for CT and orange for T.
+The top-center match score label is formatted as `Team <playerName> (XX) vs Team <playerName> (XX)`. The representative names are selected from the two sides in the first visible round and remain stable after side switches. Round wins are counted by mapping each completed round winner back to that first-round team identity, so users do not have to manually add T-side wins before halftime and CT-side wins after halftime. Each `Team <playerName> (XX)` segment is colored by that team's current side in the shown round: blue for CT and orange for T. Its top position follows the computed timeline height, preventing vertically stacked event markers from overlapping the score.
 
 Clicking a player name or a player dot selects that player; clicking the currently selected player again clears the selection. Player-dot hit testing uses the current playback tick and the inverse viewport transform, so it remains available while playback is running and while either viewport zoom is active. Kill-feed hitboxes continue to take precedence over dot selection. Selected alive players use green (`#22c55e`) for the dot, sight cone, and line-of-sight ray; selected dead players keep the dead grey fill but receive a green selection ring.
 
-Selecting a player shows round event markers under the timeline for that player's enabled kills, deaths, and grenade throws (smoke, flashbang, molotov/incendiary, HE, decoy). Bomb plant/explosion/defuse markers are also shown as `BP`, `BE`, and `BD`. `BP` prefers the parsed completed-plant event, falls back to `plant_begin + plant duration` when available, and finally falls back to `objective end - bomb timer` for bomb-objective rounds. `BE` and `BD` use parsed events when available and fall back to round win reason. Markers use the current round's active-start timeline scale, stack vertically when events occur within `EVENT_STACK_WINDOW_TICKS = 128` (~2 seconds), and clicking a marker seeks to 2 seconds before the event, clamped to the event round. Clicking a `K` marker selects the killer, clicking an `X` marker selects the victim, clicking a utility marker selects the thrower, and clicking `BP` or `BD` selects the planter or defuser when the parsed event includes a player Steam ID. Double-clicking a marker copies `demo_goto <tick>` for the same lead-in tick and shows a short non-blocking toast.
+Selecting a player shows round event markers under the timeline for that player's enabled kills, deaths, and grenade throws. Markers use CSS-masked SVGs from `static/equipment-icons`, allowing exact side coloring: T events are orange (`#f97316`) and CT events are blue (`#3b82f6`). Kill markers use the general `domination.svg` icon. Normal deaths use `icon-death.svg`; headshot deaths use `kill_headshot.svg`; both are colored for the victim's side. Utility markers use `smokegrenade.svg`, `flashbang.svg`, `decoy.svg`, `hegrenade.svg`, or `inferno.svg` and are colored for the thrower's side. Both Molotov and incendiary markers use `inferno.svg` for better legibility. Bomb plant, explosion, and defuse markers use orange `c4.svg`, orange `exploded_c4.svg`, and blue `defuser.svg`, respectively. A round won because time expired (`target_saved`, with `time_ran_out` accepted for compatibility) always adds `time_exp.svg` at the actual round-ending tick; it is orange for a T win and blue for a CT win. Plant timing prefers the parsed completed-plant event, falls back to `plant_begin + plant duration` when available, and finally falls back to `objective end - bomb timer`; explosion and defuse use parsed events when available and otherwise fall back to round win reason.
+
+Markers use the current round's active-start timeline scale and are packed by their actual horizontal screen position. Each marker is placed into the first lane where its 24px icon plus a 4px gap does not collide with the previous marker; a lower lane is created only when horizontal space is genuinely unavailable. The 24px icon sits inside a 28px button, and vertical lanes use a 34px pitch. Marker packing is recalculated on window resize. The timeline height is recalculated from the highest occupied lane for the current round and active filters, and top-anchored UI panels move down by the same amount. Hovered or keyboard-focused markers receive a white outline, brightness increase, colored glow, and slight scale-up. Single-click behavior is unchanged: it seeks to two seconds before the event, clamped to the event round, and selects the killer, victim, thrower, planter, or defuser when applicable. Double-clicking any icon copies `demo_goto <tick>` for the same lead-in tick and shows a short non-blocking toast.
 
 Timeline markers are cached by round, selected Steam ID, `Show all Utilities`, utility type filters, and kill/death filters. This avoids rebuilding grenade/kill/death marker data on every throttled UI tick during playback. Selected-player zoom is implemented as a DOM/CSS camera update rather than layer props, so normal rendering paths are not invalidated by zoom-follow movement.
 

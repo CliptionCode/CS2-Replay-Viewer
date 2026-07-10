@@ -113,6 +113,7 @@ func convertKill(k *parser.KillEvent) *pb.KillEvent {
 		VictimSteamId:     k.VictimSteamID,
 		Weapon:            k.Weapon,
 		IsHeadshot:        k.IsHeadshot,
+		AssistedByFlash:   k.AssistedByFlash,
 		PenetratedObjects: int32(k.PenetratedObjects),
 		KillerX:           k.KillerX,
 		KillerY:           k.KillerY,

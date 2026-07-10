@@ -49,10 +49,11 @@ Draw routes, callouts, and tactical plans directly on the map.
 ### Timeline and event review
 
 - Configure timeline visibility with timeline controls.
-- Show utility markers underneath the timeline.
+- Show highlighted, color-coded kill, death/headshot, utility, bomb-plant, bomb-explosion, defuse, and time-expiry SVG icons underneath a timeline that packs non-overlapping events into shared lanes and grows only when stacking is necessary.
 - Click an event marker to seek to two seconds before the event.
 - Double-click an event marker to copy a CS2 `demo_goto` command for two seconds before that event, ready to paste into the CS2 demo viewer.
-- Use the clickable kill feed to jump to kills quickly.
+- Use the clickable kill feed—with weapon, headshot, and flash-assist SVG icons and up to ten recent entries—to jump to kills quickly.
+- Clearly highlight player-roster and round-navigation buttons when hovering or using keyboard focus.
 
 ### Tactical information
 
@@ -75,7 +76,7 @@ Draw routes, callouts, and tactical plans directly on the map.
 - [Svelte](https://github.com/sveltejs/svelte) and [SvelteKit](https://github.com/sveltejs/kit) — power the interactive TypeScript user interface.
 - [Vite](https://github.com/vitejs/vite) — builds and bundles the frontend.
 - [cs2-map-icons](https://github.com/MurkyYT/cs2-map-icons) — supplies the radar images and overview metadata used to place replay data accurately on each supported map.
-- [counter-strike-icons](https://github.com/Juknum/counter-strike-icons/tree/main/cs2/panorama/images/icons/equipment) — supplies the CS2 equipment SVGs stored in `static/equipment-icons` for future UI use. The empty `world.svg` and `worldent.svg` source files are intentionally excluded.
+- [counter-strike-icons](https://github.com/Juknum/counter-strike-icons/tree/main/cs2/panorama/images/icons/equipment) — supplies the CS2 equipment SVGs used by the kill feed and timeline markers from `static/equipment-icons`. The empty `world.svg` and `worldent.svg` source files are intentionally excluded.
 
 ## Supported maps
 

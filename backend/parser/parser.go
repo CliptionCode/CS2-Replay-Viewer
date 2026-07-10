@@ -63,6 +63,7 @@ type KillEvent struct {
 	VictimSteamID     uint64
 	Weapon            string
 	IsHeadshot        bool
+	AssistedByFlash   bool
 	PenetratedObjects int
 	KillerX           float32
 	KillerY           float32
@@ -315,6 +316,7 @@ func (r *frameRecorder) recordKill(e events.Kill, p demoinfocs.Parser) {
 	kill := KillEvent{
 		Tick:              tick,
 		IsHeadshot:        e.IsHeadshot,
+		AssistedByFlash:   e.AssistedFlash,
 		PenetratedObjects: e.PenetratedObjects,
 	}
 

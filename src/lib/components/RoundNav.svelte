@@ -137,6 +137,7 @@ $: {
 }
 
 .round-button {
+    --round-highlight-color: #94a3b8;
     display: block;
     width: 100%;
     padding: 6px 10px;
@@ -152,19 +153,28 @@ $: {
     transition: all 0.1s ease;
 }
 
-.round-button:hover {
-    filter: brightness(1.12);
+.round-button:hover,
+.round-button:focus-visible {
+    position: relative;
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+    filter: brightness(1.3) drop-shadow(0 0 6px var(--round-highlight-color));
+    transform: scale(1.04);
+    z-index: 2;
 }
 
 .round-button.winner-ct {
+    --round-highlight-color: #3b82f6;
     background: rgba(37, 99, 235, 0.72);
 }
 
 .round-button.winner-t {
+    --round-highlight-color: #f97316;
     background: rgba(234, 88, 12, 0.78);
 }
 
 .round-button.winner-neutral {
+    --round-highlight-color: #94a3b8;
     background: #374151;
 }
 
