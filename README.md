@@ -38,6 +38,10 @@ Draw routes, callouts, and tactical plans directly on the map.
 
 ## Features
 
+### Welcome and project support
+
+- Open the PayPal donation page directly from the Welcome screen to support continued development.
+
 ### Replay navigation
 
 - Load Counter-Strike 2 `.dem` replay demos.
@@ -65,7 +69,7 @@ Draw routes, callouts, and tactical plans directly on the map.
 ### Map interaction and drawing
 
 - Zoom toward the current mouse position with the mouse wheel.
-- Hold the left mouse button and drag to move around the zoomed map.
+- Hold the left mouse button and drag to move around the zoomed map, including after deselecting a focused player.
 - Select a player dot or roster name to automatically zoom and center the player at the configured zoom level; deselecting keeps the current zoom and viewport position while stopping camera follow.
 - Create simple drawings by holding <kbd>Shift</kbd> and dragging with the left mouse button; choose the color and stroke width or clear all drawings from the controls.
 

@@ -121,6 +121,7 @@ const NADE_MATCH_DISTANCE_UNITS = 240;
 const NADE_MATCH_TICK_WINDOW = 768;
 const SMOKE_MATCH_TICK_WINDOW = 1536;
 const KILL_FEED_LEFT_OFFSET = 312;
+const DONATION_URL = 'https://paypal.me/cliption';
 
 const NOISE_SOURCE_OPTIONS = [
     { key: 'running', label: 'Running Noise' },
@@ -573,6 +574,14 @@ function getNadeDetonationTick(nade: NadeEvent): number {
 
 function isTimelineProjectileRecord(nade: NadeEvent): boolean {
     return (nade.trajectory?.length ?? 0) > 0 || nade.startX !== 0 || nade.startY !== 0 || nade.startZ !== 0;
+}
+
+async function openDonationPage(): Promise<void> {
+    try {
+        await invoke('plugin:shell|open', { path: DONATION_URL });
+    } catch (error) {
+        console.error('Failed to open donation page:', error);
+    }
 }
 
 function getNadeTrajectoryEndPoint(nade: NadeEvent): { x: number; y: number } | null {
@@ -1471,6 +1480,24 @@ function finishViewportPointerDrag(event: PointerEvent): void {
     mouseViewportDrag = null;
 }
 
+function attachViewportInteractions(element: HTMLDivElement): () => void {
+    element.addEventListener('click', handleReplayCanvasClick);
+    element.addEventListener('wheel', handleViewportWheel, { passive: false });
+    element.addEventListener('pointerdown', handleViewportPointerDown);
+    element.addEventListener('pointermove', handleViewportPointerMove);
+    element.addEventListener('pointerup', finishViewportPointerDrag);
+    element.addEventListener('pointercancel', finishViewportPointerDrag);
+
+    return () => {
+        element.removeEventListener('click', handleReplayCanvasClick);
+        element.removeEventListener('wheel', handleViewportWheel);
+        element.removeEventListener('pointerdown', handleViewportPointerDown);
+        element.removeEventListener('pointermove', handleViewportPointerMove);
+        element.removeEventListener('pointerup', finishViewportPointerDrag);
+        element.removeEventListener('pointercancel', finishViewportPointerDrag);
+    };
+}
+
 function handleReplayCanvasClick(event: MouseEvent): void {
     if (ignoreNextCanvasClick) {
         ignoreNextCanvasClick = false;
@@ -2188,6 +2215,14 @@ onMount(() => {
     margin-bottom: 32px;
 }
 
+.empty-state-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+}
+
 .load-button {
     padding: 14px 32px;
     font-size: 16px;
@@ -2215,6 +2250,52 @@ onMount(() => {
     transform: none;
 }
 
+.donation-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    padding: 13px 24px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 8px;
+    background: linear-gradient(135deg, #003087, #0070ba);
+    color: #ffffff;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 700;
+    box-shadow: 0 8px 22px rgba(0, 48, 135, 0.24);
+    transition: filter 0.15s ease, transform 0.1s ease;
+}
+
+.donation-button:hover {
+    filter: brightness(1.12);
+    transform: scale(1.02);
+}
+
+.donation-button:active {
+    transform: scale(0.98);
+}
+
+.donation-button:focus-visible {
+    outline: 2px solid #60a5fa;
+    outline-offset: 3px;
+}
+
+.donation-button-icon {
+    display: inline-grid;
+    place-items: center;
+    width: 23px;
+    height: 23px;
+    border-radius: 50%;
+    background: #ffffff;
+    color: #003087;
+    font-family: Arial, sans-serif;
+    font-size: 15px;
+    font-style: italic;
+    font-weight: 900;
+}
+
 </style>
 
 {#if replayData}
@@ -2222,6 +2303,7 @@ onMount(() => {
     class="replay-container"
     bind:this={replayContainer}
     style:--timeline-height={`${timelineHeight}px`}
+    {@attach attachViewportInteractions}
 >
     <!-- Timeline at top -->
     <div class="timeline">
@@ -2562,18 +2644,20 @@ onMount(() => {
     <div class="empty-state-content">
         <h2 class="empty-state-title">CS2 Replay Viewer</h2>
         <p class="empty-state-text">No replay loaded. Select a .dem file to begin.</p>
-        <button class="load-button" onclick={loadDemo} disabled={isLoading}>
-            {isLoading ? 'Loading...' : 'Load Demo File'}
-        </button>
+        <div class="empty-state-actions">
+            <button class="load-button" onclick={loadDemo} disabled={isLoading}>
+                {isLoading ? 'Loading...' : 'Load Demo File'}
+            </button>
+            <button
+                type="button"
+                class="donation-button"
+                aria-label="Donate to CS2 Replay Viewer with PayPal"
+                onclick={openDonationPage}
+            >
+                <span class="donation-button-icon" aria-hidden="true">P</span>
+                <span>Donate with PayPal</span>
+            </button>
+        </div>
     </div>
 </div>
 {/if}
-
-<svelte:window
-    onclick={handleReplayCanvasClick}
-    onwheel={handleViewportWheel}
-    onpointerdown={handleViewportPointerDown}
-    onpointermove={handleViewportPointerMove}
-    onpointerup={finishViewportPointerDrag}
-    onpointercancel={finishViewportPointerDrag}
-/>
