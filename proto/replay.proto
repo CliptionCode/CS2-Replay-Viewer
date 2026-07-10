@@ -13,6 +13,7 @@ message ReplayData {
   repeated FlashEvent flashes = 8;
   repeated NoiseEvent noises = 9;
   repeated BombEvent bombs = 10;
+  repeated DroppedEquipment dropped_equipment = 11;
 }
 
 message DemoHeader {
@@ -128,6 +129,16 @@ message BombEvent {
   uint64 player_steam_id = 3;
   string site = 4;
   bool has_kit = 5;
+}
+
+message DroppedEquipment {
+  int32 start_tick = 1;
+  int32 end_tick = 2;
+  string equipment_name = 3;
+  string category = 4;
+  float x = 5;
+  float y = 6;
+  float z = 7;
 }
 
 message MapData {

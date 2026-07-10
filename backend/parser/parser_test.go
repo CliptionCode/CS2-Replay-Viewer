@@ -1,6 +1,10 @@
 package parser
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/markus-wa/demoinfocs-golang/v5/pkg/demoinfocs/common"
+)
 
 func TestSmokeFadeTickAlwaysUsesFullIndependentDuration(t *testing.T) {
 	const firstDetonationTick = 848
@@ -48,5 +52,38 @@ func TestDestroyedFireProjectileDoesNotStartAnotherEffectLifetime(t *testing.T) 
 		if got := getDestroyedProjectileFadeTick(nadeType, destroyTick); got != destroyTick {
 			t.Fatalf("%s projectile fade tick = %d, want destroy tick %d", nadeType, got, destroyTick)
 		}
+	}
+}
+
+func TestDroppedEquipmentCategory(t *testing.T) {
+	tests := []struct {
+		equipmentType common.EquipmentType
+		category      string
+		visible       bool
+	}{
+		{common.EqAK47, "weapon", true},
+		{common.EqKnife, "weapon", true},
+		{common.EqZeus, "weapon", true},
+		{common.EqSmoke, "utility", true},
+		{common.EqFlash, "utility", true},
+		{common.EqBomb, "", false},
+		{common.EqDefuseKit, "", false},
+	}
+
+	for _, test := range tests {
+		category, visible := droppedEquipmentCategory(common.NewEquipment(test.equipmentType))
+		if category != test.category || visible != test.visible {
+			t.Fatalf("%s category = %q, %v; want %q, %v", test.equipmentType, category, visible, test.category, test.visible)
+		}
+	}
+}
+
+func TestDroppedEquipmentPositionChangedUsesMovementThreshold(t *testing.T) {
+	item := DroppedEquipment{X: 100, Y: 200, Z: 10}
+	if droppedEquipmentPositionChanged(item, 102, 200, 10) {
+		t.Fatal("two-unit movement should stay in the current position segment")
+	}
+	if !droppedEquipmentPositionChanged(item, 105, 200, 10) {
+		t.Fatal("five-unit movement should start a new position segment")
 	}
 }

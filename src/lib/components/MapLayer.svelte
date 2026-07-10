@@ -125,11 +125,10 @@ function drawMapImage(
 }
 
 function resizeCanvas(container: HTMLCanvasElement): { width: number; height: number } {
-    const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
 
-    const width = Math.floor(rect.width * dpr);
-    const height = Math.floor(rect.height * dpr);
+    const width = Math.floor(container.clientWidth * dpr);
+    const height = Math.floor(container.clientHeight * dpr);
 
     if (ctx) {
         ctx.canvas.width = width;

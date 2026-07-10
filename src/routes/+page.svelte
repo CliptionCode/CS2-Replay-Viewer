@@ -20,6 +20,7 @@ import { TIMELINE_ICON_FILES, equipmentIconPath } from '$lib/equipment-icons';
 import MapLayer from '$lib/components/MapLayer.svelte';
 import PlayerLayer from '$lib/components/PlayerLayer.svelte';
 import NadeLayer from '$lib/components/NadeLayer.svelte';
+import DroppedEquipmentLayer from '$lib/components/DroppedEquipmentLayer.svelte';
 import KillLayer from '$lib/components/KillLayer.svelte';
 import DrawingLayer from '$lib/components/DrawingLayer.svelte';
 import Controls from '$lib/components/Controls.svelte';
@@ -99,10 +100,11 @@ const DEFAULT_LINE_OF_SIGHT_LENGTH = 300;
 const DEFAULT_LINE_OF_SIGHT_WIDTH = 1.6;
 const DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT = 250;
 const MAX_MOUSE_VIEWPORT_ZOOM_SCALE = 5;
-const MAP_PAN_BOUNDARY_PADDING = 0.1;
+const MAP_PAN_VIEWPORT_PADDING = 0.5;
+const MAP_PAN_MAP_PADDING = 0.25;
 const PLAYER_DOT_CLICK_RADIUS = 12;
-const DEFAULT_DRAWING_COLOR = '#22c55e';
 const DEFAULT_DRAWING_STROKE_WIDTH = 4;
+const DEFAULT_DRAWING_FADE_SECONDS = 3;
 const TOAST_DURATION_MS = 2600;
 const DEFAULT_BOMB_TIME_SECONDS = 40;
 const DEFAULT_PLANT_SECONDS = 3.2;
@@ -122,6 +124,9 @@ const NADE_MATCH_TICK_WINDOW = 768;
 const SMOKE_MATCH_TICK_WINDOW = 1536;
 const KILL_FEED_LEFT_OFFSET = 312;
 const DONATION_URL = 'https://paypal.me/cliption';
+const NADE_SINGLE_CLICK_DELAY_MS = 500;
+const DEAD_ICON_SINGLE_CLICK_DELAY_MS = 500;
+const DEAD_PLAYER_SEEK_LEAD_SECONDS = 3;
 
 const NOISE_SOURCE_OPTIONS = [
     { key: 'running', label: 'Running Noise' },
@@ -167,11 +172,15 @@ let mouseViewportDrag: {
     startClientY: number;
     startTranslateX: number;
     startTranslateY: number;
+    deselectPlayerOnMove: boolean;
     hasMoved: boolean;
 } | null = null;
 let ignoreNextCanvasClick = false;
-let drawingColor = DEFAULT_DRAWING_COLOR;
+let leftDrawingColor = TEAM_CT_COLOR;
+let rightDrawingColor = TEAM_T_COLOR;
 let drawingStrokeWidth = DEFAULT_DRAWING_STROKE_WIDTH;
+let drawingMode: 'permanent' | 'fade' = 'permanent';
+let drawingFadeSeconds = DEFAULT_DRAWING_FADE_SECONDS;
 let isShiftDrawingActive = false;
 let drawingClearSignal = 0;
 let selectedPlayerSteamId: bigint | null = null;
@@ -216,6 +225,15 @@ let timelineNadesByThrower = new Map<string, NadeEvent[]>();
 let timelineTrajectoryNadesByThrower = new Map<string, NadeEvent[]>();
 let timelineTrajectoryNades: NadeEvent[] = [];
 let timelineNadeMatchCache = new WeakMap<NadeEvent, boolean>();
+let nadeClickTimeout: ReturnType<typeof setTimeout> | null = null;
+let deadIconClickTimeout: ReturnType<typeof setTimeout> | null = null;
+let nadeLayer: {
+    getNadeInteractionAtCanvasPoint: (
+        x: number,
+        y: number,
+        tick: number
+    ) => { throwTick: number; throwerSteamId: bigint } | null;
+} | null = null;
 
 type RosterEntry = {
     player: PlayerInfo;
@@ -1132,22 +1150,29 @@ function getBombStatus(tick: number): BombStatus {
     };
 }
 
+function deselectPlayerPreservingViewport(keepDrag = false): void {
+    if (selectedPlayerSteamId === null) return;
+    const retainedTransform = getReplayViewportTransform();
+    selectedPlayerSteamId = null;
+    mouseViewportZoomScale = Math.max(1, retainedTransform.scale);
+    mouseViewportTranslateX = retainedTransform.translateX;
+    mouseViewportTranslateY = retainedTransform.translateY;
+    if (!keepDrag) mouseViewportDrag = null;
+    if (!keepDrag) ignoreNextCanvasClick = false;
+    preserveUnconstrainedViewport = true;
+    timelineEventsKey = '';
+    updateReplayViewportTransform();
+}
+
 function selectPlayer(steamId: bigint): void {
     if (selectedPlayerSteamId === steamId) {
-        const retainedTransform = getReplayViewportTransform();
-        selectedPlayerSteamId = null;
-        mouseViewportZoomScale = Math.max(1, retainedTransform.scale);
-        mouseViewportTranslateX = retainedTransform.translateX;
-        mouseViewportTranslateY = retainedTransform.translateY;
-        mouseViewportDrag = null;
-        ignoreNextCanvasClick = false;
-        preserveUnconstrainedViewport = true;
+        deselectPlayerPreservingViewport();
     } else {
         selectedPlayerSteamId = steamId;
         resetMouseViewportZoom();
+        timelineEventsKey = '';
+        updateReplayViewportTransform();
     }
-    timelineEventsKey = '';
-    updateReplayViewportTransform();
 }
 
 function focusPlayer(steamId: bigint): void {
@@ -1221,6 +1246,12 @@ function getEventLeadTick(eventTick: number): number {
     return Math.max(minTick, eventTick - getEventSeekLeadTicks());
 }
 
+function getDeadPlayerLeadTick(deathTick: number): number {
+    const round = getRoundForTick(deathTick);
+    const minTick = round?.startTick ?? 0;
+    return Math.max(minTick, deathTick - Math.round(getTickRate() * DEAD_PLAYER_SEEK_LEAD_SECONDS));
+}
+
 function seekToPlayerEvent(eventTick: number): void {
     setTick(getEventLeadTick(eventTick));
 }
@@ -1243,6 +1274,10 @@ function showToast(message: string): void {
 
 async function copyTickCommand(eventTick: number): Promise<void> {
     const targetTick = getEventLeadTick(eventTick);
+    await copyExactTickCommand(targetTick);
+}
+
+async function copyExactTickCommand(targetTick: number): Promise<void> {
     const command = `demo_goto ${targetTick}`;
 
     try {
@@ -1298,7 +1333,7 @@ function getReplayViewportTransform(tick = getPlaybackTick()): ViewportTransform
         translateY: mouseViewportTranslateY + mouseViewportZoomScale * selectedTransform.translateY,
     };
 
-    if (mouseViewportZoomScale <= 1 || preserveUnconstrainedViewport || !replayContainer) return transform;
+    if (preserveUnconstrainedViewport || !replayContainer) return transform;
 
     const rect = replayContainer.getBoundingClientRect();
     return constrainViewportTransformToMap(transform, rect);
@@ -1321,27 +1356,30 @@ function constrainViewportTransformToMap(
     const mapTop = (viewport.height - displayedMapHeight) / 2;
     const scaledMapWidth = displayedMapWidth * transform.scale;
     const scaledMapHeight = displayedMapHeight * transform.scale;
-    const horizontalPadding = scaledMapWidth * MAP_PAN_BOUNDARY_PADDING;
-    const verticalPadding = scaledMapHeight * MAP_PAN_BOUNDARY_PADDING;
-
-    const translateX = scaledMapWidth <= viewport.width
-        ? viewport.width / 2 - (mapLeft + displayedMapWidth / 2) * transform.scale
-        : Math.max(
-            viewport.width - (mapLeft + displayedMapWidth) * transform.scale - horizontalPadding,
-            Math.min(-mapLeft * transform.scale + horizontalPadding, transform.translateX)
-        );
-    const translateY = scaledMapHeight <= viewport.height
-        ? viewport.height / 2 - (mapTop + displayedMapHeight / 2) * transform.scale
-        : Math.max(
-            viewport.height - (mapTop + displayedMapHeight) * transform.scale - verticalPadding,
-            Math.min(-mapTop * transform.scale + verticalPadding, transform.translateY)
-        );
+    const horizontalPadding = Math.max(
+        viewport.width * MAP_PAN_VIEWPORT_PADDING,
+        scaledMapWidth * MAP_PAN_MAP_PADDING
+    );
+    const verticalPadding = Math.max(
+        viewport.height * MAP_PAN_VIEWPORT_PADDING,
+        scaledMapHeight * MAP_PAN_MAP_PADDING
+    );
+    const minTranslateX = viewport.width - (mapLeft + displayedMapWidth) * transform.scale - horizontalPadding;
+    const maxTranslateX = -mapLeft * transform.scale + horizontalPadding;
+    const minTranslateY = viewport.height - (mapTop + displayedMapHeight) * transform.scale - verticalPadding;
+    const maxTranslateY = -mapTop * transform.scale + verticalPadding;
+    const translateX = minTranslateX <= maxTranslateX
+        ? Math.max(minTranslateX, Math.min(maxTranslateX, transform.translateX))
+        : viewport.width / 2 - (mapLeft + displayedMapWidth / 2) * transform.scale;
+    const translateY = minTranslateY <= maxTranslateY
+        ? Math.max(minTranslateY, Math.min(maxTranslateY, transform.translateY))
+        : viewport.height / 2 - (mapTop + displayedMapHeight / 2) * transform.scale;
 
     return { ...transform, translateX, translateY };
 }
 
 function constrainMouseViewportTranslation(): void {
-    if (!replayContainer || mouseViewportZoomScale <= 1) return;
+    if (!replayContainer) return;
 
     const selectedTransform = getSelectedPlayerViewportTransform();
     const clampedTransform = constrainViewportTransformToMap(
@@ -1394,6 +1432,17 @@ function handleViewportWheel(event: WheelEvent): void {
 
     event.preventDefault();
 
+    if (selectedPlayerSteamId !== null) {
+        const nextZoomScale = Math.max(
+            1,
+            Math.min(MAX_MOUSE_VIEWPORT_ZOOM_SCALE, getSelectedPlayerZoomScale() * Math.exp(-event.deltaY * 0.0015))
+        );
+        selectedPlayerZoomPercent = nextZoomScale * 100;
+        preserveUnconstrainedViewport = false;
+        updateReplayViewportTransform();
+        return;
+    }
+
     const rect = replayContainer.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
 
@@ -1438,18 +1487,20 @@ function handleViewportPointerDown(event: PointerEvent): void {
         isShiftDrawingActive ||
         event.shiftKey ||
         event.button !== 0 ||
-        mouseViewportZoomScale <= 1 ||
         !(event.target instanceof HTMLCanvasElement)
     ) {
         return;
     }
 
+    const currentTransform = getReplayViewportTransform();
+    const deselectPlayerOnMove = selectedPlayerSteamId !== null;
     mouseViewportDrag = {
         pointerId: event.pointerId,
         startClientX: event.clientX,
         startClientY: event.clientY,
-        startTranslateX: mouseViewportTranslateX,
-        startTranslateY: mouseViewportTranslateY,
+        startTranslateX: deselectPlayerOnMove ? currentTransform.translateX : mouseViewportTranslateX,
+        startTranslateY: deselectPlayerOnMove ? currentTransform.translateY : mouseViewportTranslateY,
+        deselectPlayerOnMove,
         hasMoved: false,
     };
     event.target.setPointerCapture(event.pointerId);
@@ -1463,6 +1514,10 @@ function handleViewportPointerMove(event: PointerEvent): void {
     if (!mouseViewportDrag.hasMoved && Math.hypot(deltaX, deltaY) < 2) return;
 
     mouseViewportDrag.hasMoved = true;
+    if (mouseViewportDrag.deselectPlayerOnMove) {
+        deselectPlayerPreservingViewport(true);
+        mouseViewportDrag.deselectPlayerOnMove = false;
+    }
     preserveUnconstrainedViewport = false;
     mouseViewportTranslateX = mouseViewportDrag.startTranslateX + deltaX;
     mouseViewportTranslateY = mouseViewportDrag.startTranslateY + deltaY;
@@ -1482,6 +1537,7 @@ function finishViewportPointerDrag(event: PointerEvent): void {
 
 function attachViewportInteractions(element: HTMLDivElement): () => void {
     element.addEventListener('click', handleReplayCanvasClick);
+    element.addEventListener('dblclick', handleReplayCanvasDoubleClick);
     element.addEventListener('wheel', handleViewportWheel, { passive: false });
     element.addEventListener('pointerdown', handleViewportPointerDown);
     element.addEventListener('pointermove', handleViewportPointerMove);
@@ -1490,6 +1546,7 @@ function attachViewportInteractions(element: HTMLDivElement): () => void {
 
     return () => {
         element.removeEventListener('click', handleReplayCanvasClick);
+        element.removeEventListener('dblclick', handleReplayCanvasDoubleClick);
         element.removeEventListener('wheel', handleViewportWheel);
         element.removeEventListener('pointerdown', handleViewportPointerDown);
         element.removeEventListener('pointermove', handleViewportPointerMove);
@@ -1498,43 +1555,169 @@ function attachViewportInteractions(element: HTMLDivElement): () => void {
     };
 }
 
+function getReplayCanvasPoint(event: MouseEvent): { x: number; y: number; tick: number } | null {
+    if (!(event.target instanceof HTMLCanvasElement) || !replayContainer) return null;
+    const rect = replayContainer.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+
+    const transform = getReplayViewportTransform();
+    return {
+        x: (event.clientX - rect.left - transform.translateX) / transform.scale,
+        y: (event.clientY - rect.top - transform.translateY) / transform.scale,
+        tick: getPlaybackTick(),
+    };
+}
+
+function getDeathAtTick(steamId: bigint, tick: number): KillEvent | null {
+    let death: KillEvent | null = null;
+    for (const kill of replayData?.kills ?? []) {
+        if (kill.victimSteamId !== steamId || kill.tick > tick) continue;
+        if (!death || kill.tick > death.tick) death = kill;
+    }
+    return death;
+}
+
+function focusDeadPlayerAtTick(steamId: bigint, tick: number): void {
+    const death = getDeathAtTick(steamId, tick);
+    focusPlayer(steamId);
+    if (death) seekToPlayerEvent(death.tick);
+}
+
+function handleRosterPlayerClick(entry: RosterEntry): void {
+    if (entry.isAlive) selectPlayer(entry.player.steamId);
+    else focusDeadPlayerAtTick(entry.player.steamId, getPlaybackTick());
+}
+
+function scheduleNadeTickCopy(interaction: { throwTick: number; throwerSteamId: bigint }): void {
+    if (nadeClickTimeout) clearTimeout(nadeClickTimeout);
+    nadeClickTimeout = setTimeout(() => {
+        nadeClickTimeout = null;
+        void copyTickCommand(interaction.throwTick);
+    }, NADE_SINGLE_CLICK_DELAY_MS);
+}
+
+function getDeadPlayerInteractionAtCanvasPoint(
+    x: number,
+    y: number,
+    tick: number
+): { deathTick: number; steamId: bigint } | null {
+    if (!replayContainer) return null;
+
+    let closestDeathTick: number | null = null;
+    let closestSteamId: bigint | null = null;
+    let closestDistanceSquared = PLAYER_DOT_CLICK_RADIUS * PLAYER_DOT_CLICK_RADIUS;
+    for (const player of playablePlayers) {
+        const frame = getPlayerFrameAtTick(player.steamId, tick);
+        if (!frame || (frame.isAlive ?? true)) continue;
+
+        const position = worldToCanvas(frame.x, frame.y, mapMetadata, {
+            width: replayContainer.clientWidth,
+            height: replayContainer.clientHeight,
+        });
+        const distanceX = x - position.x;
+        const distanceY = y - position.y;
+        const distanceSquared = distanceX * distanceX + distanceY * distanceY;
+        if (distanceSquared > closestDistanceSquared) continue;
+
+        const death = getDeathAtTick(player.steamId, tick);
+        if (!death) continue;
+        closestDistanceSquared = distanceSquared;
+        closestDeathTick = death.tick;
+        closestSteamId = player.steamId;
+    }
+
+    if (closestDeathTick === null || closestSteamId === null) return null;
+    return { deathTick: closestDeathTick, steamId: closestSteamId };
+}
+
+function scheduleDeadIconTickCopy(deathTick: number): void {
+    if (deadIconClickTimeout) clearTimeout(deadIconClickTimeout);
+    deadIconClickTimeout = setTimeout(() => {
+        deadIconClickTimeout = null;
+        void copyExactTickCommand(getDeadPlayerLeadTick(deathTick));
+    }, DEAD_ICON_SINGLE_CLICK_DELAY_MS);
+}
+
+function handleReplayCanvasDoubleClick(event: MouseEvent): void {
+    const point = getReplayCanvasPoint(event);
+    if (!point) return;
+    const interaction = nadeLayer?.getNadeInteractionAtCanvasPoint(point.x, point.y, point.tick) ?? null;
+    if (!interaction) {
+        const deadPlayerInteraction = getDeadPlayerInteractionAtCanvasPoint(point.x, point.y, point.tick);
+        if (!deadPlayerInteraction) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (deadIconClickTimeout) {
+            clearTimeout(deadIconClickTimeout);
+            deadIconClickTimeout = null;
+        }
+        focusPlayer(deadPlayerInteraction.steamId);
+        setTick(getDeadPlayerLeadTick(deadPlayerInteraction.deathTick));
+        return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (nadeClickTimeout) {
+        clearTimeout(nadeClickTimeout);
+        nadeClickTimeout = null;
+    }
+    if (interaction.throwerSteamId !== 0n) focusPlayer(interaction.throwerSteamId);
+    seekToPlayerEvent(interaction.throwTick);
+}
+
 function handleReplayCanvasClick(event: MouseEvent): void {
     if (ignoreNextCanvasClick) {
         ignoreNextCanvasClick = false;
         return;
     }
-    if (isShiftDrawingActive || event.shiftKey || !(event.target instanceof HTMLCanvasElement) || !replayContainer) return;
+    if (isShiftDrawingActive || event.shiftKey) return;
+    const point = getReplayCanvasPoint(event);
+    if (!point || !replayContainer) return;
 
-    const rect = replayContainer.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
+    const nadeInteraction = nadeLayer?.getNadeInteractionAtCanvasPoint(point.x, point.y, point.tick) ?? null;
+    if (nadeInteraction) {
+        event.preventDefault();
+        event.stopPropagation();
+        scheduleNadeTickCopy(nadeInteraction);
+        return;
+    }
 
-    const transform = getReplayViewportTransform();
-    const clickX = (event.clientX - rect.left - transform.translateX) / transform.scale;
-    const clickY = (event.clientY - rect.top - transform.translateY) / transform.scale;
-    const playbackTick = getPlaybackTick();
+    const deadPlayerInteraction = getDeadPlayerInteractionAtCanvasPoint(point.x, point.y, point.tick);
+    if (deadPlayerInteraction) {
+        event.preventDefault();
+        event.stopPropagation();
+        scheduleDeadIconTickCopy(deadPlayerInteraction.deathTick);
+        return;
+    }
+
     let closestSteamId: bigint | null = null;
+    let closestFrame: PlayerFrame | null = null;
     let closestDistanceSquared = PLAYER_DOT_CLICK_RADIUS * PLAYER_DOT_CLICK_RADIUS;
 
     for (const player of playablePlayers) {
-        const frame = getPlayerFrameAtTick(player.steamId, playbackTick);
+        const frame = getPlayerFrameAtTick(player.steamId, point.tick);
         if (!frame) continue;
 
         const playerPosition = worldToCanvas(frame.x, frame.y, mapMetadata, {
-            width: rect.width,
-            height: rect.height,
+            width: replayContainer.clientWidth,
+            height: replayContainer.clientHeight,
         });
-        const distanceX = clickX - playerPosition.x;
-        const distanceY = clickY - playerPosition.y;
+        const distanceX = point.x - playerPosition.x;
+        const distanceY = point.y - playerPosition.y;
         const distanceSquared = distanceX * distanceX + distanceY * distanceY;
 
         if (distanceSquared <= closestDistanceSquared) {
             closestSteamId = player.steamId;
+            closestFrame = frame;
             closestDistanceSquared = distanceSquared;
         }
     }
 
     if (closestSteamId !== null) {
-        selectPlayer(closestSteamId);
+        if (!closestFrame || (closestFrame.isAlive ?? true)) selectPlayer(closestSteamId);
+    } else if (selectedPlayerSteamId !== null) {
+        deselectPlayerPreservingViewport();
     }
 }
 
@@ -1589,14 +1772,15 @@ $: {
 }
 
 $: {
-    void selectedPlayerSteamId, playablePlayers;
+    void selectedPlayerSteamId, playablePlayers, displayTick;
     if (
         selectedPlayerSteamId !== null &&
-        !playablePlayers.some(player => player.steamId === selectedPlayerSteamId)
+        (
+            !playablePlayers.some(player => player.steamId === selectedPlayerSteamId) ||
+            !(getPlayerFrameAtTick(selectedPlayerSteamId, displayTick)?.isAlive ?? false)
+        )
     ) {
-        selectedPlayerSteamId = null;
-        timelineEventsKey = '';
-        updateReplayViewportTransform();
+        deselectPlayerPreservingViewport();
     }
 }
 
@@ -1705,6 +1889,7 @@ function setSpeed(speed: number) {
 
 function seekToRound(round: RoundData) {
     if (round) {
+        clearAllDrawings();
         setTick(getRoundActiveStart(round));
     }
 }
@@ -1752,6 +1937,8 @@ onMount(() => {
         window.removeEventListener('resize', handleViewportResize);
         if (rafId) cancelAnimationFrame(rafId);
         if (toastTimeout) clearTimeout(toastTimeout);
+        if (nadeClickTimeout) clearTimeout(nadeClickTimeout);
+        if (deadIconClickTimeout) clearTimeout(deadIconClickTimeout);
     };
 });
 </script>
@@ -2051,7 +2238,7 @@ onMount(() => {
 }
 
 .drawing-color-control {
-    grid-template-columns: 84px 44px 1fr;
+    grid-template-columns: 110px 44px 1fr;
 }
 
 .drawing-color-control input[type='color'] {
@@ -2069,6 +2256,37 @@ onMount(() => {
     grid-template-columns: 1fr;
     gap: 8px;
     margin-top: 10px;
+}
+
+.drawing-mode-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.drawing-mode-button {
+    min-height: 30px;
+    border: 1px solid #3a3a50;
+    border-radius: 4px;
+    background: #20202d;
+    color: #94a3b8;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.drawing-mode-button:hover,
+.drawing-mode-button:focus-visible {
+    border-color: #60a5fa;
+    color: #e2e8f0;
+}
+
+.drawing-mode-button.selected {
+    border-color: #3b82f6;
+    background: #2563eb;
+    color: #ffffff;
 }
 
 .drawing-hint {
@@ -2393,6 +2611,11 @@ onMount(() => {
         bind:replayData={replayData}
         {mapVariant}
     />
+    <DroppedEquipmentLayer
+        bind:replayData={replayData}
+        bind:mapMetadata={mapMetadata}
+        bind:isPlaying={isPlaying}
+    />
     <PlayerLayer 
         bind:replayData={replayData}
         bind:mapMetadata={mapMetadata}
@@ -2409,7 +2632,8 @@ onMount(() => {
         {noiseForSelectedPlayer}
         {enabledNoiseSources}
     />
-    <NadeLayer 
+    <NadeLayer
+        bind:this={nadeLayer}
         bind:replayData={replayData}
         bind:mapMetadata={mapMetadata}
         bind:isPlaying={isPlaying}
@@ -2423,9 +2647,12 @@ onMount(() => {
     />
     <DrawingLayer
         {isShiftDrawingActive}
-        {drawingColor}
+        {leftDrawingColor}
+        {rightDrawingColor}
         strokeWidth={drawingStrokeWidth}
         clearSignal={drawingClearSignal}
+        {drawingMode}
+        fadeSeconds={drawingFadeSeconds}
     />
 
     <Controls
@@ -2578,10 +2805,14 @@ onMount(() => {
         </section>
         <section class="control-section">
             <div class="controls-heading">Drawing</div>
-            <p class="drawing-hint">Hold Shift and drag with the left mouse button to draw.</p>
+            <p class="drawing-hint">Hold Shift and drag with the left or right mouse button to draw.</p>
             <label class="drawing-color-control">
-                <span>Color</span>
-                <input type="color" bind:value={drawingColor} />
+                <span>Left Mouse Color</span>
+                <input type="color" bind:value={leftDrawingColor} />
+            </label>
+            <label class="drawing-color-control">
+                <span>Right Mouse Color</span>
+                <input type="color" bind:value={rightDrawingColor} />
             </label>
             <label class="drawing-control">
                 <span>Stroke Width</span>
@@ -2594,6 +2825,35 @@ onMount(() => {
                 />
                 <span class="sight-control-value">{Math.round(drawingStrokeWidth)}</span>
             </label>
+            <div class="drawing-mode-toggle" aria-label="Drawing persistence">
+                <button
+                    type="button"
+                    class={`drawing-mode-button${drawingMode === 'permanent' ? ' selected' : ''}`}
+                    onclick={() => drawingMode = 'permanent'}
+                >
+                    Permanent
+                </button>
+                <button
+                    type="button"
+                    class={`drawing-mode-button${drawingMode === 'fade' ? ' selected' : ''}`}
+                    onclick={() => drawingMode = 'fade'}
+                >
+                    Fade
+                </button>
+            </div>
+            {#if drawingMode === 'fade'}
+                <label class="drawing-control">
+                    <span>Fade in s</span>
+                    <input
+                        type="range"
+                        min="1"
+                        max="6"
+                        step="1"
+                        bind:value={drawingFadeSeconds}
+                    />
+                    <span class="sight-control-value">{Math.round(drawingFadeSeconds)}s</span>
+                </label>
+            {/if}
             <div class="drawing-actions">
                 <button type="button" class="panel-button" onclick={clearAllDrawings}>
                     Clear all Drawings
@@ -2613,7 +2873,7 @@ onMount(() => {
                         class:selected={isSelectedPlayer(entry.player.steamId)}
                         style="--player-color: {entry.color};"
                         title={entry.player.name}
-                        onclick={() => selectPlayer(entry.player.steamId)}
+                        onclick={() => handleRosterPlayerClick(entry)}
                     >
                         {entry.player.name}
                     </button>
@@ -2628,7 +2888,7 @@ onMount(() => {
                         class:selected={isSelectedPlayer(entry.player.steamId)}
                         style="--player-color: {entry.color};"
                         title={entry.player.name}
-                        onclick={() => selectPlayer(entry.player.steamId)}
+                        onclick={() => handleRosterPlayerClick(entry)}
                     >
                         {entry.player.name}
                     </button>

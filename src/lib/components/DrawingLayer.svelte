@@ -3,9 +3,12 @@ import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
 
 export let isShiftDrawingActive = false;
-export let drawingColor = '#22c55e';
+export let leftDrawingColor = '#3b82f6';
+export let rightDrawingColor = '#f97316';
 export let strokeWidth = 4;
 export let clearSignal = 0;
+export let drawingMode: 'permanent' | 'fade' = 'permanent';
+export let fadeSeconds = 3;
 
 type DrawingPoint = {
     x: number;
@@ -16,6 +19,8 @@ type DrawingStroke = {
     color: string;
     width: number;
     points: DrawingPoint[];
+    completedAt: number;
+    fadeDurationMs: number | null;
 };
 
 let canvas: HTMLCanvasElement | null = null;
@@ -25,9 +30,14 @@ let activeStroke: DrawingStroke | null = null;
 let activePointerId: number | null = null;
 let lastClearSignal = clearSignal;
 let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
+let fadeRafId: number | null = null;
 
 function clampStrokeWidth(value: number): number {
     return Math.max(1, Math.min(10, Number(value) || 1));
+}
+
+function clampFadeSeconds(value: number): number {
+    return Math.max(1, Math.min(6, Number(value) || 1));
 }
 
 function getCanvasSize(): { width: number; height: number } {
@@ -50,10 +60,11 @@ function resizeCanvas(): void {
     render();
 }
 
-function drawStroke(context: CanvasRenderingContext2D, stroke: DrawingStroke): void {
+function drawStroke(context: CanvasRenderingContext2D, stroke: DrawingStroke, opacity: number): void {
     if (stroke.points.length === 0) return;
 
     context.save();
+    context.globalAlpha = opacity;
     context.lineCap = 'round';
     context.lineJoin = 'round';
     context.strokeStyle = stroke.color;
@@ -78,14 +89,34 @@ function drawStroke(context: CanvasRenderingContext2D, stroke: DrawingStroke): v
     context.restore();
 }
 
-function render(): void {
+function scheduleFadeRender(): void {
+    if (fadeRafId !== null) return;
+    fadeRafId = requestAnimationFrame(timestamp => {
+        fadeRafId = null;
+        render(timestamp);
+    });
+}
+
+function render(timestamp = performance.now()): void {
     if (!ctx) return;
 
     const size = getCanvasSize();
     ctx.clearRect(0, 0, size.width, size.height);
+    let hasFadingStroke = false;
+    strokes = strokes.filter(stroke => {
+        if (stroke === activeStroke || stroke.fadeDurationMs === null) return true;
+        return timestamp - stroke.completedAt < stroke.fadeDurationMs;
+    });
     for (const stroke of strokes) {
-        drawStroke(ctx, stroke);
+        const opacity = stroke === activeStroke || stroke.fadeDurationMs === null
+            ? 1
+            : Math.max(0, 1 - (timestamp - stroke.completedAt) / stroke.fadeDurationMs);
+        drawStroke(ctx, stroke, opacity);
+        if (stroke !== activeStroke && stroke.fadeDurationMs !== null && opacity > 0) {
+            hasFadingStroke = true;
+        }
     }
+    if (hasFadingStroke) scheduleFadeRender();
 }
 
 function getCanvasPoint(event: PointerEvent): DrawingPoint | null {
@@ -101,7 +132,7 @@ function getCanvasPoint(event: PointerEvent): DrawingPoint | null {
 }
 
 function startStroke(event: PointerEvent): void {
-    if (!isShiftDrawingActive || !event.shiftKey || event.button !== 0) return;
+    if (!isShiftDrawingActive || !event.shiftKey || (event.button !== 0 && event.button !== 2)) return;
 
     const point = getCanvasPoint(event);
     if (!point || !canvas) return;
@@ -110,9 +141,11 @@ function startStroke(event: PointerEvent): void {
     canvas.setPointerCapture(event.pointerId);
     activePointerId = event.pointerId;
     activeStroke = {
-        color: drawingColor,
+        color: event.button === 2 ? rightDrawingColor : leftDrawingColor,
         width: clampStrokeWidth(strokeWidth),
         points: [point],
+        completedAt: performance.now(),
+        fadeDurationMs: drawingMode === 'fade' ? clampFadeSeconds(fadeSeconds) * 1000 : null,
     };
     strokes.push(activeStroke);
     render();
@@ -129,21 +162,39 @@ function extendStroke(event: PointerEvent): void {
     render();
 }
 
-function finishStroke(event: PointerEvent): void {
+function completeActiveStroke(): void {
     if (!activeStroke) return;
+    activeStroke.completedAt = performance.now();
+    activeStroke = null;
+    render();
+}
+
+function finishStroke(event: PointerEvent): void {
+    if (!activeStroke || event.pointerId !== activePointerId) return;
 
     event.preventDefault();
-    activeStroke = null;
+    completeActiveStroke();
     activePointerId = null;
     if (canvas?.hasPointerCapture(event.pointerId)) {
         canvas.releasePointerCapture(event.pointerId);
     }
 }
 
+function handleContextMenu(event: MouseEvent): void {
+    if (isShiftDrawingActive || event.shiftKey) event.preventDefault();
+}
+
 function clearDrawings(): void {
+    if (canvas && activePointerId !== null && canvas.hasPointerCapture(activePointerId)) {
+        canvas.releasePointerCapture(activePointerId);
+    }
     activeStroke = null;
     activePointerId = null;
     strokes = [];
+    if (fadeRafId !== null) {
+        cancelAnimationFrame(fadeRafId);
+        fadeRafId = null;
+    }
     render();
 }
 
@@ -171,7 +222,7 @@ $: {
 $: {
     void isShiftDrawingActive;
     if (!isShiftDrawingActive) {
-        activeStroke = null;
+        completeActiveStroke();
         if (canvas && activePointerId !== null && canvas.hasPointerCapture(activePointerId)) {
             canvas.releasePointerCapture(activePointerId);
         }
@@ -184,6 +235,7 @@ onDestroy(() => {
         window.removeEventListener('resize', handleResize);
     }
     if (resizeTimeout) clearTimeout(resizeTimeout);
+    if (fadeRafId !== null) cancelAnimationFrame(fadeRafId);
 });
 </script>
 
@@ -219,4 +271,5 @@ onDestroy(() => {
     onpointermove={extendStroke}
     onpointerup={finishStroke}
     onpointercancel={finishStroke}
+    oncontextmenu={handleContextMenu}
 ></canvas>

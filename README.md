@@ -58,20 +58,26 @@ Draw routes, callouts, and tactical plans directly on the map.
 - Double-click an event marker to copy a CS2 `demo_goto` command for two seconds before that event, ready to paste into the CS2 demo viewer.
 - Use the clickable kill feed—with weapon, headshot, flash-assist, blinded-killer, airborne, no-scope, through-smoke, and wallbang SVG indicators and up to ten recent entries—to jump to kills quickly. Flash assists also identify the assisting player.
 - Clearly highlight player-roster and round-navigation buttons when hovering or using keyboard focus.
+- Click a smoke or fire effect on the map to copy its `demo_goto` command, or double-click it to select the thrower and seek to two seconds before the throw.
+- Interact with compact, 50%-transparent Flashbang, HE grenade, and Decoy destination icons using single-click copy and double-click seek behavior.
 
 ### Tactical information
 
 - Adjust responsive player sight-cone and line-of-sight overlays without redrawing the full player layer.
 - Show noise circles for running, shooting, jumping, and falling.
 - Review grenade and utility activity directly on the map, including smoke/fire center icons and countdowns; Molotovs and incendiaries are hard-capped at 7 seconds and disappear sooner at their actual smoke-extinguished expiry time.
-- Track player health accurately, with dead players shown at zero health.
+- Track living-player health accurately; dead CT players use a blue death icon, dead T players use an orange death icon, and neither shows a health bar.
 
 ### Map interaction and drawing
 
 - Zoom toward the current mouse position with the mouse wheel.
-- Hold the left mouse button and drag to move around the zoomed map, including after deselecting a focused player.
-- Select a player dot or roster name to automatically zoom and center the player at the configured zoom level; deselecting keeps the current zoom and viewport position while stopping camera follow.
-- Create simple drawings by holding <kbd>Shift</kbd> and dragging with the left mouse button; choose the color and stroke width or clear all drawings from the controls.
+- While following a selected player, use the mouse wheel to adjust the Player Selection zoom value while keeping that player centered.
+- Hold the left mouse button and drag to move the map at every zoom level, with generous movement beyond each edge; clicking or dragging empty canvas space exits player follow mode.
+- Select a living player dot or roster name to automatically zoom and center the player at the configured zoom level. Selection clears automatically when that player dies.
+- Single-click a dead-player icon to copy `demo_goto <Tick>` for three seconds before death, or double-click it to select the player and jump to that tick.
+- Create tactical drawings by holding <kbd>Shift</kbd> and dragging with either mouse button. Left and right drawing colors default to CT blue and T orange.
+- Keep drawings permanently for the current round or fade them over 1–6 seconds. Changing rounds and `Clear all Drawings` both remove permanent drawings.
+- Keep the radar at a consistent visual size when maximizing or restoring the application while zoomed.
 
 ## Libraries and tools
 

@@ -8,16 +8,17 @@ import (
 
 func ReplayDataToProto(replay *parser.ReplayData) ([]byte, error) {
 	pbReplay := &pb.ReplayData{
-		Header:  convertHeader(&replay.Header),
-		Map:     convertMap(&replay.Map),
-		Players: make([]*pb.PlayerInfo, 0, len(replay.Players)),
-		Rounds:  make([]*pb.RoundData, 0, len(replay.Rounds)),
-		Kills:   make([]*pb.KillEvent, 0, len(replay.Kills)),
-		Nades:   make([]*pb.NadeEvent, 0, len(replay.Nades)),
-		Flashes: make([]*pb.FlashEvent, 0, len(replay.Flashes)),
-		Noises:  make([]*pb.NoiseEvent, 0, len(replay.Noises)),
-		Bombs:   make([]*pb.BombEvent, 0, len(replay.Bombs)),
-		Frames:  make([]*pb.PlayerFrame, 0, len(replay.PlayerFrames)),
+		Header:           convertHeader(&replay.Header),
+		Map:              convertMap(&replay.Map),
+		Players:          make([]*pb.PlayerInfo, 0, len(replay.Players)),
+		Rounds:           make([]*pb.RoundData, 0, len(replay.Rounds)),
+		Kills:            make([]*pb.KillEvent, 0, len(replay.Kills)),
+		Nades:            make([]*pb.NadeEvent, 0, len(replay.Nades)),
+		Flashes:          make([]*pb.FlashEvent, 0, len(replay.Flashes)),
+		Noises:           make([]*pb.NoiseEvent, 0, len(replay.Noises)),
+		Bombs:            make([]*pb.BombEvent, 0, len(replay.Bombs)),
+		DroppedEquipment: make([]*pb.DroppedEquipment, 0, len(replay.DroppedEquipment)),
+		Frames:           make([]*pb.PlayerFrame, 0, len(replay.PlayerFrames)),
 	}
 
 	for i := range replay.Players {
@@ -46,6 +47,10 @@ func ReplayDataToProto(replay *parser.ReplayData) ([]byte, error) {
 
 	for i := range replay.Bombs {
 		pbReplay.Bombs = append(pbReplay.Bombs, convertBomb(&replay.Bombs[i]))
+	}
+
+	for i := range replay.DroppedEquipment {
+		pbReplay.DroppedEquipment = append(pbReplay.DroppedEquipment, convertDroppedEquipment(&replay.DroppedEquipment[i]))
 	}
 
 	for i := range replay.PlayerFrames {
@@ -202,5 +207,17 @@ func convertBomb(b *parser.BombEvent) *pb.BombEvent {
 		PlayerSteamId: b.PlayerSteamID,
 		Site:          b.Site,
 		HasKit:        b.HasKit,
+	}
+}
+
+func convertDroppedEquipment(item *parser.DroppedEquipment) *pb.DroppedEquipment {
+	return &pb.DroppedEquipment{
+		StartTick:     int32(item.StartTick),
+		EndTick:       int32(item.EndTick),
+		EquipmentName: item.EquipmentName,
+		Category:      item.Category,
+		X:             item.X,
+		Y:             item.Y,
+		Z:             item.Z,
 	}
 }

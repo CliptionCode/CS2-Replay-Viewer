@@ -17,16 +17,17 @@ const (
 )
 
 type ReplayData struct {
-	Header       DemoHeader
-	Players      []PlayerInfo
-	Rounds       []RoundData
-	Kills        []KillEvent
-	Nades        []NadeEvent
-	Flashes      []FlashEvent
-	Noises       []NoiseEvent
-	Bombs        []BombEvent
-	PlayerFrames []PlayerFrame
-	Map          MapData
+	Header           DemoHeader
+	Players          []PlayerInfo
+	Rounds           []RoundData
+	Kills            []KillEvent
+	Nades            []NadeEvent
+	Flashes          []FlashEvent
+	Noises           []NoiseEvent
+	Bombs            []BombEvent
+	DroppedEquipment []DroppedEquipment
+	PlayerFrames     []PlayerFrame
+	Map              MapData
 }
 
 type DemoHeader struct {
@@ -145,6 +146,16 @@ type BombEvent struct {
 	HasKit        bool
 }
 
+type DroppedEquipment struct {
+	StartTick     int
+	EndTick       int
+	EquipmentName string
+	Category      string
+	X             float32
+	Y             float32
+	Z             float32
+}
+
 type MapData struct {
 	Name   string
 	PosX   float64
@@ -174,6 +185,7 @@ func ParseFile(path string) (*ReplayData, error) {
 		playerRoundContributions: make(map[uint64]int),
 		playerTotalRounds:        make(map[uint64]int),
 		infernoNadeIndices:       make(map[int64]int),
+		activeDroppedEquipment:   make(map[int]activeDroppedEquipment),
 	}
 
 	p.RegisterEventHandler(func(e events.Kill) {
@@ -280,22 +292,24 @@ type killRecord struct {
 }
 
 type frameRecorder struct {
-	kills              []KillEvent
-	nades              []NadeEvent
-	flashes            []FlashEvent
-	noises             []NoiseEvent
-	bombs              []BombEvent
-	rounds             []RoundData
-	currentRound       *RoundData
-	playerFrames       []PlayerFrame
-	playerStats        map[uint64]*playerStatTracker
-	damageMap          map[uint64]map[uint64]int
-	lastFrames         map[uint64]PlayerFrame
-	lastTick           int
-	mapName            string
-	serverName         string
-	maxTick            int
-	infernoNadeIndices map[int64]int
+	kills                  []KillEvent
+	nades                  []NadeEvent
+	flashes                []FlashEvent
+	noises                 []NoiseEvent
+	bombs                  []BombEvent
+	droppedEquipment       []DroppedEquipment
+	rounds                 []RoundData
+	currentRound           *RoundData
+	playerFrames           []PlayerFrame
+	playerStats            map[uint64]*playerStatTracker
+	damageMap              map[uint64]map[uint64]int
+	lastFrames             map[uint64]PlayerFrame
+	lastTick               int
+	mapName                string
+	serverName             string
+	maxTick                int
+	infernoNadeIndices     map[int64]int
+	activeDroppedEquipment map[int]activeDroppedEquipment
 
 	roundStats  map[int]*roundStats
 	recentKills []killRecord
@@ -304,6 +318,12 @@ type frameRecorder struct {
 	playerTotalRounds        map[uint64]int
 	firstRoundKnifeOnlySeen  bool
 	firstRoundNonKnifeSeen   bool
+}
+
+type activeDroppedEquipment struct {
+	segmentIndex  int
+	equipmentType common.EquipmentType
+	lastSeenTick  int
 }
 
 type playerStatTracker struct {
@@ -453,6 +473,7 @@ func isTeamMate(steamID1, steamID2 uint64, p demoinfocs.Parser) bool {
 
 func (r *frameRecorder) recordRoundStart(p demoinfocs.Parser) {
 	tick := p.CurrentFrame()
+	r.closeDroppedEquipment(max(0, tick-1))
 	if tick > r.maxTick {
 		r.maxTick = tick
 	}
@@ -485,6 +506,7 @@ func (r *frameRecorder) recordRoundEnd(e events.RoundEnd, p demoinfocs.Parser) {
 		r.maxTick = tick
 	}
 	r.observeInitialRoundInventory(p)
+	r.closeDroppedEquipment(tick)
 	if r.isRecordingInitialRound() {
 		r.currentRound.KnifeOnly = r.firstRoundKnifeOnlySeen && !r.firstRoundNonKnifeSeen
 	}
@@ -991,6 +1013,7 @@ func (r *frameRecorder) recordFrameDone(p demoinfocs.Parser) {
 		r.maxTick = tick
 	}
 	r.observeInitialRoundInventory(p)
+	r.recordDroppedEquipment(p, tick)
 
 	for _, player := range p.GameState().Participants().All() {
 		if player == nil {
@@ -1014,6 +1037,117 @@ func (r *frameRecorder) recordFrameDone(p demoinfocs.Parser) {
 		}
 		r.playerFrames = append(r.playerFrames, frame)
 	}
+}
+
+const droppedEquipmentMoveThresholdSquared = 16
+
+func droppedEquipmentCategory(equipment *common.Equipment) (string, bool) {
+	if equipment == nil || equipment.Type == common.EqUnknown || equipment.Type == common.EqWorld {
+		return "", false
+	}
+	if equipment.Class() == common.EqClassGrenade {
+		return "utility", true
+	}
+	if equipment.Class() == common.EqClassPistols ||
+		equipment.Class() == common.EqClassSMG ||
+		equipment.Class() == common.EqClassHeavy ||
+		equipment.Class() == common.EqClassRifle ||
+		equipment.Type == common.EqKnife ||
+		equipment.Type == common.EqZeus {
+		return "weapon", true
+	}
+	return "", false
+}
+
+func droppedEquipmentPositionChanged(item DroppedEquipment, x, y, z float32) bool {
+	dx := item.X - x
+	dy := item.Y - y
+	dz := item.Z - z
+	return dx*dx+dy*dy+dz*dz > droppedEquipmentMoveThresholdSquared
+}
+
+func (r *frameRecorder) closeDroppedEquipment(endTick int) {
+	for entityID, active := range r.activeDroppedEquipment {
+		segment := &r.droppedEquipment[active.segmentIndex]
+		segment.EndTick = max(segment.StartTick, endTick)
+		delete(r.activeDroppedEquipment, entityID)
+	}
+}
+
+func isEquipmentDropped(equipment *common.Equipment, p demoinfocs.Parser) bool {
+	if equipment == nil || equipment.Entity == nil {
+		return false
+	}
+	ownerValue, ok := equipment.Entity.PropertyValue("m_hOwnerEntity")
+	if ok && ownerValue.Any != nil {
+		return p.GameState().Participants().FindByPawnHandle(ownerValue.Handle()) == nil
+	}
+	return equipment.Owner == nil
+}
+
+func (r *frameRecorder) recordDroppedEquipment(p demoinfocs.Parser, tick int) {
+	if r.currentRound == nil {
+		r.closeDroppedEquipment(max(0, tick-1))
+		return
+	}
+
+	seen := make(map[int]struct{})
+	for entityID, equipment := range p.GameState().Weapons() {
+		category, supported := droppedEquipmentCategory(equipment)
+		if !supported || !isEquipmentDropped(equipment, p) {
+			continue
+		}
+
+		position := equipment.Entity.Position()
+		x, y, z := float32(position.X), float32(position.Y), float32(position.Z)
+		seen[entityID] = struct{}{}
+		active, exists := r.activeDroppedEquipment[entityID]
+		if exists && active.equipmentType != equipment.Type {
+			segment := &r.droppedEquipment[active.segmentIndex]
+			segment.EndTick = max(segment.StartTick, tick-1)
+			delete(r.activeDroppedEquipment, entityID)
+			exists = false
+		}
+
+		if exists {
+			segment := &r.droppedEquipment[active.segmentIndex]
+			if droppedEquipmentPositionChanged(*segment, x, y, z) {
+				segment.EndTick = max(segment.StartTick, tick-1)
+				exists = false
+			} else {
+				segment.EndTick = tick
+				active.lastSeenTick = tick
+				r.activeDroppedEquipment[entityID] = active
+			}
+		}
+
+		if !exists {
+			r.droppedEquipment = append(r.droppedEquipment, DroppedEquipment{
+				StartTick:     tick,
+				EndTick:       tick,
+				EquipmentName: equipment.String(),
+				Category:      category,
+				X:             x,
+				Y:             y,
+				Z:             z,
+			})
+			r.activeDroppedEquipment[entityID] = activeDroppedEquipment{
+				segmentIndex:  len(r.droppedEquipment) - 1,
+				equipmentType: equipment.Type,
+				lastSeenTick:  tick,
+			}
+		}
+	}
+
+	for entityID, active := range r.activeDroppedEquipment {
+		if _, ok := seen[entityID]; ok && active.lastSeenTick == tick {
+			continue
+		}
+		segment := &r.droppedEquipment[active.segmentIndex]
+		segment.EndTick = max(segment.StartTick, tick-1)
+		delete(r.activeDroppedEquipment, entityID)
+	}
+
 }
 
 func (r *frameRecorder) ensureStats(steamID uint64) *playerStatTracker {
@@ -1230,6 +1364,7 @@ func bombsiteString(site events.Bombsite) string {
 }
 
 func (r *frameRecorder) buildReplayData(p demoinfocs.Parser) *ReplayData {
+	r.closeDroppedEquipment(r.maxTick)
 	replay := &ReplayData{}
 	tickRate := int(tickRateOrDefault(p))
 	bombTimeSeconds := float32(40)
@@ -1250,6 +1385,7 @@ func (r *frameRecorder) buildReplayData(p demoinfocs.Parser) *ReplayData {
 	replay.Flashes = r.flashes
 	replay.Noises = r.noises
 	replay.Bombs = r.bombs
+	replay.DroppedEquipment = r.droppedEquipment
 	replay.Rounds = clampRoundEndTicks(removeInitialKnifeRound(r.rounds))
 	replay.PlayerFrames = r.playerFrames
 

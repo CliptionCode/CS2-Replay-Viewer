@@ -286,10 +286,9 @@ function stopRenderLoop() {
 }
 
 function resizeCanvas(canvas: HTMLCanvasElement, context: CanvasRenderingContext2D | null): void {
-    const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    const width = Math.floor(rect.width * dpr);
-    const height = Math.floor(rect.height * dpr);
+    const width = Math.floor(canvas.clientWidth * dpr);
+    const height = Math.floor(canvas.clientHeight * dpr);
 
     if (!context) return;
 
@@ -412,6 +411,23 @@ function handleMouseMove(event: MouseEvent): void {
     feedCanvas.style.cursor = getKillFeedHitboxAt(event) ? 'pointer' : 'default';
 }
 
+function handleDoubleClick(event: MouseEvent): void {
+    if (!getKillFeedHitboxAt(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+}
+
+function attachFeedInteractions(element: HTMLCanvasElement): () => void {
+    element.addEventListener('click', handleClick);
+    element.addEventListener('dblclick', handleDoubleClick);
+    element.addEventListener('mousemove', handleMouseMove);
+    return () => {
+        element.removeEventListener('click', handleClick);
+        element.removeEventListener('dblclick', handleDoubleClick);
+        element.removeEventListener('mousemove', handleMouseMove);
+    };
+}
+
 onDestroy(() => {
     if (browser) {
         window.removeEventListener('resize', handleResize);
@@ -463,6 +479,5 @@ onDestroy(() => {
     bind:this={feedCanvas}
     class="kill-layer kill-feed-layer canvas"
     style="width: 100%; height: 100%;"
-    onclick={handleClick}
-    onmousemove={handleMouseMove}
+    {@attach attachFeedInteractions}
 ></canvas>

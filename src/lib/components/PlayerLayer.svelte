@@ -2,6 +2,7 @@
 import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
 import { worldToCanvas } from '$lib/canvas/transforms';
+import { equipmentIconPath } from '$lib/equipment-icons';
 import { getPlaybackTick, subscribePlaybackTick } from '$lib/playback-state';
 import { getRoundDisplayEndTick, getRoundForTick } from '$lib/replay/rounds';
 import type { FlashEvent, NoiseEvent, ReplayData, PlayerFrame, MapData as MapMetadata } from '$lib/types/replay/replay_pb';
@@ -51,6 +52,64 @@ const RUNNING_NOISE_HOLD_TICKS = 28;
 const RUNNING_NOISE_FADE_TICKS = 14;
 const MAX_FULL_FLASH_DURATION_SECONDS = 5;
 const MIN_FLASH_ALPHA = 0.06;
+const DEATH_ICON_PATH = equipmentIconPath('icon-death.svg');
+const DEATH_ICON_SIZE = 18;
+let deathIcon: HTMLImageElement | null = null;
+const tintedDeathIcons = new Map<string, HTMLCanvasElement>();
+
+function getDeathIcon(): HTMLImageElement | null {
+    if (deathIcon || !browser) return deathIcon;
+    deathIcon = new Image();
+    deathIcon.decoding = 'async';
+    deathIcon.onload = () => {
+        tintedDeathIcons.clear();
+        scheduleRender();
+    };
+    deathIcon.onerror = scheduleRender;
+    deathIcon.src = DEATH_ICON_PATH;
+    return deathIcon;
+}
+
+function getTintedDeathIcon(color: string): HTMLCanvasElement | null {
+    const cached = tintedDeathIcons.get(color);
+    if (cached) return cached;
+    const image = getDeathIcon();
+    if (!image?.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0 || !browser) return null;
+
+    const tinted = document.createElement('canvas');
+    tinted.width = image.naturalWidth;
+    tinted.height = image.naturalHeight;
+    const tintedContext = tinted.getContext('2d');
+    if (!tintedContext) return null;
+    tintedContext.drawImage(image, 0, 0);
+    tintedContext.globalCompositeOperation = 'source-in';
+    tintedContext.fillStyle = color;
+    tintedContext.fillRect(0, 0, tinted.width, tinted.height);
+    tintedDeathIcons.set(color, tinted);
+    return tinted;
+}
+
+function drawDeathIcon(context: CanvasRenderingContext2D, x: number, y: number, color: string): void {
+    const tintedIcon = getTintedDeathIcon(color);
+    if (tintedIcon) {
+        const scale = Math.min(DEATH_ICON_SIZE / tintedIcon.width, DEATH_ICON_SIZE / tintedIcon.height);
+        const width = tintedIcon.width * scale;
+        const height = tintedIcon.height * scale;
+        context.drawImage(tintedIcon, x - width / 2, y - height / 2, width, height);
+        return;
+    }
+
+    context.save();
+    context.strokeStyle = color;
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(x - 5, y - 5);
+    context.lineTo(x + 5, y + 5);
+    context.moveTo(x + 5, y - 5);
+    context.lineTo(x - 5, y + 5);
+    context.stroke();
+    context.restore();
+}
 
 function lerp(start: number, end: number, alpha: number): number {
     return start + (end - start) * alpha;
@@ -581,13 +640,17 @@ function drawPlayer(
 
     drawFlashCircle(ctx, getActiveFlash(steamId, tick), tick, pos);
     
-    ctx.beginPath();
-    ctx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
-    ctx.fillStyle = isAlive ? playerColor : '#6b7280';
-    ctx.fill();
-    ctx.strokeStyle = isSelected ? HIGHLIGHT_COLOR : '#ffffff';
-    ctx.lineWidth = isSelected ? 3 : 2;
-    ctx.stroke();
+    if (isAlive) {
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = playerColor;
+        ctx.fill();
+        ctx.strokeStyle = isSelected ? HIGHLIGHT_COLOR : '#ffffff';
+        ctx.lineWidth = isSelected ? 3 : 2;
+        ctx.stroke();
+    } else {
+        drawDeathIcon(ctx, pos.x, pos.y, teamColor);
+    }
 
     if (isSelected) {
         ctx.beginPath();
@@ -620,12 +683,14 @@ function drawPlayer(
         }
     }
     
-    const health = isAlive ? Math.max(0, Math.min(100, frame.health ?? 0)) : 0;
-    const healthColor = health < 50 ? '#ef4444' : '#4ade80';
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
-    ctx.fillRect(pos.x - 10, pos.y + 8, 20, 3);
-    ctx.fillStyle = healthColor;
-    ctx.fillRect(pos.x - 10, pos.y + 8, 20 * health / 100, 3);
+    if (isAlive) {
+        const health = Math.max(0, Math.min(100, frame.health ?? 0));
+        const healthColor = health < 50 ? '#ef4444' : '#4ade80';
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+        ctx.fillRect(pos.x - 10, pos.y + 8, 20, 3);
+        ctx.fillStyle = healthColor;
+        ctx.fillRect(pos.x - 10, pos.y + 8, 20 * health / 100, 3);
+    }
 }
 
 function drawPlayerSightOverlay(
@@ -760,11 +825,10 @@ function stopRenderLoop() {
 }
 
 function resizeCanvas(canvas: HTMLCanvasElement, context: CanvasRenderingContext2D | null): void {
-    const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
 
-    const width = Math.floor(rect.width * dpr);
-    const height = Math.floor(rect.height * dpr);
+    const width = Math.floor(canvas.clientWidth * dpr);
+    const height = Math.floor(canvas.clientHeight * dpr);
 
     if (context) {
         context.canvas.width = width;

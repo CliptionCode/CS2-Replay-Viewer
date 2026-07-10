@@ -36,8 +36,15 @@ const BASE_EFFECT_ICON_SIZE = 28;
 const SMOKE_EFFECT_ICON_SIZE = BASE_EFFECT_ICON_SIZE * 2;
 const FIRE_EFFECT_ICON_SIZE = BASE_EFFECT_ICON_SIZE * 1.5;
 const FIRE_EFFECT_ICON_OPACITY = 0.5;
+const DESTINATION_MARKER_TICKS = 5 * TICKS_PER_SECOND;
+const DESTINATION_MARKER_ICON_SIZE = 14;
+const DESTINATION_MARKER_INITIAL_OPACITY = 0.5;
+const DESTINATION_MARKER_HIT_RADIUS = 18;
 const SMOKE_EFFECT_ICON_PATH = equipmentIconPath('map_smoke.svg');
 const FIRE_EFFECT_ICON_PATH = equipmentIconPath('inferno.svg');
+const FLASH_DESTINATION_ICON_PATH = equipmentIconPath('flashbang.svg');
+const HE_DESTINATION_ICON_PATH = equipmentIconPath('hegrenade.svg');
+const DECOY_DESTINATION_ICON_PATH = equipmentIconPath('decoy.svg');
 
 type NadePathPoint = Pick<NadeTrajectoryPoint, 'tick' | 'x' | 'y' | 'z'>;
 
@@ -64,23 +71,39 @@ function getEffectIcon(path: string): HTMLImageElement | null {
     return image;
 }
 
-function drawEffectIcon(context: CanvasRenderingContext2D, nadeType: string, x: number, y: number): void {
-    const path = getEffectIconPath(nadeType);
-    if (!path) return;
-
+function drawCachedIcon(
+    context: CanvasRenderingContext2D,
+    path: string,
+    x: number,
+    y: number,
+    iconSize: number,
+    opacity = 1
+): void {
     const image = getEffectIcon(path);
     if (!image?.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
 
-    const iconSize = nadeType === 'smoke' ? SMOKE_EFFECT_ICON_SIZE : FIRE_EFFECT_ICON_SIZE;
     const scale = Math.min(iconSize / image.naturalWidth, iconSize / image.naturalHeight);
     const width = image.naturalWidth * scale;
     const height = image.naturalHeight * scale;
     context.save();
-    if (nadeType === 'molotov' || nadeType === 'incendiary') {
-        context.globalAlpha *= FIRE_EFFECT_ICON_OPACITY;
-    }
+    context.globalAlpha *= opacity;
     context.drawImage(image, x - width / 2, y - height / 2, width, height);
     context.restore();
+}
+
+function drawEffectIcon(context: CanvasRenderingContext2D, nadeType: string, x: number, y: number): void {
+    const path = getEffectIconPath(nadeType);
+    if (!path) return;
+
+    const iconSize = nadeType === 'smoke' ? SMOKE_EFFECT_ICON_SIZE : FIRE_EFFECT_ICON_SIZE;
+    drawCachedIcon(
+        context,
+        path,
+        x,
+        y,
+        iconSize,
+        nadeType === 'molotov' || nadeType === 'incendiary' ? FIRE_EFFECT_ICON_OPACITY : 1
+    );
 }
 
 function getNadeColor(nadeType: string): string {
@@ -128,6 +151,17 @@ function isDecoyNade(nade: NadeEvent): boolean {
 
 function isFireNade(nade: NadeEvent): boolean {
     return nade.nadeType === 'molotov' || nade.nadeType === 'incendiary';
+}
+
+function isDestinationMarkerNade(nade: NadeEvent): boolean {
+    return nade.nadeType === 'flashbang' || nade.nadeType === 'hegrenade' || nade.nadeType === 'decoy';
+}
+
+function getDestinationMarkerIconPath(nadeType: string): string | null {
+    if (nadeType === 'flashbang') return FLASH_DESTINATION_ICON_PATH;
+    if (nadeType === 'hegrenade') return HE_DESTINATION_ICON_PATH;
+    if (nadeType === 'decoy') return DECOY_DESTINATION_ICON_PATH;
+    return null;
 }
 
 function hasTrajectory(nade: NadeEvent): boolean {
@@ -476,6 +510,36 @@ function drawNadeEffect(
     ctx.restore();
 }
 
+function drawDestinationMarker(
+    context: CanvasRenderingContext2D,
+    nade: NadeEvent,
+    mapMetadata: MapMetadata,
+    canvasSize: { width: number; height: number },
+    tick: number
+): void {
+    const detonationTick = getCanonicalDetonationTick(nade);
+    const age = tick - detonationTick;
+    if (age < 0 || age >= DESTINATION_MARKER_TICKS) return;
+
+    const iconPath = getDestinationMarkerIconPath(nade.nadeType);
+    if (!iconPath) return;
+    const endPoint = getCanonicalEndPoint(nade);
+    const position = worldToCanvas(endPoint.x, endPoint.y, mapMetadata, canvasSize);
+    const alpha = DESTINATION_MARKER_INITIAL_OPACITY * Math.max(0, 1 - age / DESTINATION_MARKER_TICKS);
+
+    context.save();
+    context.globalAlpha = alpha;
+    context.fillStyle = getNadeColor(nade.nadeType);
+    context.beginPath();
+    context.arc(position.x, position.y, 15, 0, Math.PI * 2);
+    context.fill();
+    context.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    context.lineWidth = 1.5;
+    context.stroke();
+    drawCachedIcon(context, iconPath, position.x, position.y, DESTINATION_MARKER_ICON_SIZE);
+    context.restore();
+}
+
 function drawNadeFlight(
     ctx: CanvasRenderingContext2D,
     nade: NadeEvent,
@@ -554,11 +618,10 @@ function stopRenderLoop() {
 }
 
 function resizeCanvas(container: HTMLCanvasElement): { width: number; height: number } {
-    const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
 
-    const width = Math.floor(rect.width * dpr);
-    const height = Math.floor(rect.height * dpr);
+    const width = Math.floor(container.clientWidth * dpr);
+    const height = Math.floor(container.clientHeight * dpr);
 
     if (ctx) {
         ctx.canvas.width = width;
@@ -584,8 +647,60 @@ function getActiveNades(tick: number): NadeEvent[] {
     return replayData.nades.filter(n => {
         const detTick = getCanonicalDetonationTick(n);
         const fadeTick = getCanonicalFadeTick(n);
-        return detTick > 0 && fadeTick > 0 && detTick <= tick && tick < fadeTick && !isTrajectoryEffectDuplicate(n);
+        return !isDecoyNade(n) && detTick > 0 && fadeTick > 0 && detTick <= tick && tick < fadeTick && !isTrajectoryEffectDuplicate(n);
     });
+}
+
+function getDestinationMarkerNades(tick: number): NadeEvent[] {
+    if (!replayData?.nades) return [];
+    return replayData.nades.filter(nade => {
+        if (!isDestinationMarkerNade(nade) || isTrajectoryEffectDuplicate(nade)) return false;
+        const detonationTick = getCanonicalDetonationTick(nade);
+        return detonationTick > 0 && detonationTick <= tick && tick < detonationTick + DESTINATION_MARKER_TICKS;
+    });
+}
+
+function getInteractionSourceNade(renderedNade: NadeEvent): NadeEvent {
+    if (isProjectileNadeRecord(renderedNade) || !replayData?.nades) return renderedNade;
+    return replayData.nades.find(candidate =>
+        isProjectileNadeRecord(candidate) && getMatchingEffectEvent(candidate) === renderedNade
+    ) ?? renderedNade;
+}
+
+function getInteractiveNadeAtCanvasPoint(x: number, y: number, tick: number): NadeEvent | null {
+    if (!container) return null;
+    const canvasSize = { width: container.clientWidth, height: container.clientHeight };
+    const destinationMarkers = getDestinationMarkerNades(tick);
+    for (let i = destinationMarkers.length - 1; i >= 0; i--) {
+        const nade = destinationMarkers[i];
+        const endPoint = getCanonicalEndPoint(nade);
+        const position = worldToCanvas(endPoint.x, endPoint.y, mapMetadata, canvasSize);
+        if (Math.hypot(x - position.x, y - position.y) <= DESTINATION_MARKER_HIT_RADIUS) return nade;
+    }
+
+    const effectNades = getActiveNades(tick);
+    for (let i = effectNades.length - 1; i >= 0; i--) {
+        const nade = effectNades[i];
+        if (nade.nadeType !== 'smoke' && !isFireNade(nade)) continue;
+        const endPoint = getCanonicalEndPoint(nade);
+        const position = worldToCanvas(endPoint.x, endPoint.y, mapMetadata, canvasSize);
+        if (Math.hypot(x - position.x, y - position.y) <= getNadeEffectRadius(nade.nadeType)) return nade;
+    }
+    return null;
+}
+
+export function getNadeInteractionAtCanvasPoint(
+    x: number,
+    y: number,
+    tick: number
+): { throwTick: number; throwerSteamId: bigint } | null {
+    const renderedNade = getInteractiveNadeAtCanvasPoint(x, y, tick);
+    if (!renderedNade) return null;
+    const sourceNade = getInteractionSourceNade(renderedNade);
+    return {
+        throwTick: Math.floor(getNadeTimelineStartTick(sourceNade)),
+        throwerSteamId: sourceNade.throwerSteamId || renderedNade.throwerSteamId,
+    };
 }
 
 function isTrajectoryEffectDuplicate(nade: NadeEvent): boolean {
@@ -697,6 +812,7 @@ function render() {
 
     const roundRange = getCurrentRoundRange(tick);
     const activeNades = getActiveNades(tick);
+    const destinationMarkers = getDestinationMarkerNades(tick);
 
     // Draw a short rolling flight trail. Older dashed segments expire after ~0.6s.
     for (const nade of replayData.nades) {
@@ -708,6 +824,10 @@ function render() {
     for (const nade of activeNades) {
         if (!isNadeInRoundRange(nade, roundRange)) continue;
         drawNadeEffect(ctx, nade, mapMetadata, canvasSize, tick);
+    }
+    for (const nade of destinationMarkers) {
+        if (!isNadeInRoundRange(nade, roundRange)) continue;
+        drawDestinationMarker(ctx, nade, mapMetadata, canvasSize, tick);
     }
     ctx.restore();
 }

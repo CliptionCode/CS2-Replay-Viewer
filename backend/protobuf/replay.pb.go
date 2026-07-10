@@ -22,19 +22,20 @@ const (
 )
 
 type ReplayData struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Header        *DemoHeader            `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
-	Players       []*PlayerInfo          `protobuf:"bytes,2,rep,name=players,proto3" json:"players,omitempty"`
-	Rounds        []*RoundData           `protobuf:"bytes,3,rep,name=rounds,proto3" json:"rounds,omitempty"`
-	Kills         []*KillEvent           `protobuf:"bytes,4,rep,name=kills,proto3" json:"kills,omitempty"`
-	Nades         []*NadeEvent           `protobuf:"bytes,5,rep,name=nades,proto3" json:"nades,omitempty"`
-	Frames        []*PlayerFrame         `protobuf:"bytes,6,rep,name=frames,proto3" json:"frames,omitempty"`
-	Map           *MapData               `protobuf:"bytes,7,opt,name=map,proto3" json:"map,omitempty"`
-	Flashes       []*FlashEvent          `protobuf:"bytes,8,rep,name=flashes,proto3" json:"flashes,omitempty"`
-	Noises        []*NoiseEvent          `protobuf:"bytes,9,rep,name=noises,proto3" json:"noises,omitempty"`
-	Bombs         []*BombEvent           `protobuf:"bytes,10,rep,name=bombs,proto3" json:"bombs,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Header           *DemoHeader            `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
+	Players          []*PlayerInfo          `protobuf:"bytes,2,rep,name=players,proto3" json:"players,omitempty"`
+	Rounds           []*RoundData           `protobuf:"bytes,3,rep,name=rounds,proto3" json:"rounds,omitempty"`
+	Kills            []*KillEvent           `protobuf:"bytes,4,rep,name=kills,proto3" json:"kills,omitempty"`
+	Nades            []*NadeEvent           `protobuf:"bytes,5,rep,name=nades,proto3" json:"nades,omitempty"`
+	Frames           []*PlayerFrame         `protobuf:"bytes,6,rep,name=frames,proto3" json:"frames,omitempty"`
+	Map              *MapData               `protobuf:"bytes,7,opt,name=map,proto3" json:"map,omitempty"`
+	Flashes          []*FlashEvent          `protobuf:"bytes,8,rep,name=flashes,proto3" json:"flashes,omitempty"`
+	Noises           []*NoiseEvent          `protobuf:"bytes,9,rep,name=noises,proto3" json:"noises,omitempty"`
+	Bombs            []*BombEvent           `protobuf:"bytes,10,rep,name=bombs,proto3" json:"bombs,omitempty"`
+	DroppedEquipment []*DroppedEquipment    `protobuf:"bytes,11,rep,name=dropped_equipment,json=droppedEquipment,proto3" json:"dropped_equipment,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *ReplayData) Reset() {
@@ -133,6 +134,13 @@ func (x *ReplayData) GetNoises() []*NoiseEvent {
 func (x *ReplayData) GetBombs() []*BombEvent {
 	if x != nil {
 		return x.Bombs
+	}
+	return nil
+}
+
+func (x *ReplayData) GetDroppedEquipment() []*DroppedEquipment {
+	if x != nil {
+		return x.DroppedEquipment
 	}
 	return nil
 }
@@ -1177,6 +1185,98 @@ func (x *BombEvent) GetHasKit() bool {
 	return false
 }
 
+type DroppedEquipment struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StartTick     int32                  `protobuf:"varint,1,opt,name=start_tick,json=startTick,proto3" json:"start_tick,omitempty"`
+	EndTick       int32                  `protobuf:"varint,2,opt,name=end_tick,json=endTick,proto3" json:"end_tick,omitempty"`
+	EquipmentName string                 `protobuf:"bytes,3,opt,name=equipment_name,json=equipmentName,proto3" json:"equipment_name,omitempty"`
+	Category      string                 `protobuf:"bytes,4,opt,name=category,proto3" json:"category,omitempty"`
+	X             float32                `protobuf:"fixed32,5,opt,name=x,proto3" json:"x,omitempty"`
+	Y             float32                `protobuf:"fixed32,6,opt,name=y,proto3" json:"y,omitempty"`
+	Z             float32                `protobuf:"fixed32,7,opt,name=z,proto3" json:"z,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DroppedEquipment) Reset() {
+	*x = DroppedEquipment{}
+	mi := &file_replay_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DroppedEquipment) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DroppedEquipment) ProtoMessage() {}
+
+func (x *DroppedEquipment) ProtoReflect() protoreflect.Message {
+	mi := &file_replay_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DroppedEquipment.ProtoReflect.Descriptor instead.
+func (*DroppedEquipment) Descriptor() ([]byte, []int) {
+	return file_replay_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *DroppedEquipment) GetStartTick() int32 {
+	if x != nil {
+		return x.StartTick
+	}
+	return 0
+}
+
+func (x *DroppedEquipment) GetEndTick() int32 {
+	if x != nil {
+		return x.EndTick
+	}
+	return 0
+}
+
+func (x *DroppedEquipment) GetEquipmentName() string {
+	if x != nil {
+		return x.EquipmentName
+	}
+	return ""
+}
+
+func (x *DroppedEquipment) GetCategory() string {
+	if x != nil {
+		return x.Category
+	}
+	return ""
+}
+
+func (x *DroppedEquipment) GetX() float32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *DroppedEquipment) GetY() float32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *DroppedEquipment) GetZ() float32 {
+	if x != nil {
+		return x.Z
+	}
+	return 0
+}
+
 type MapData struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -1193,7 +1293,7 @@ type MapData struct {
 
 func (x *MapData) Reset() {
 	*x = MapData{}
-	mi := &file_replay_proto_msgTypes[11]
+	mi := &file_replay_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1205,7 +1305,7 @@ func (x *MapData) String() string {
 func (*MapData) ProtoMessage() {}
 
 func (x *MapData) ProtoReflect() protoreflect.Message {
-	mi := &file_replay_proto_msgTypes[11]
+	mi := &file_replay_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1218,7 +1318,7 @@ func (x *MapData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MapData.ProtoReflect.Descriptor instead.
 func (*MapData) Descriptor() ([]byte, []int) {
-	return file_replay_proto_rawDescGZIP(), []int{11}
+	return file_replay_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *MapData) GetName() string {
@@ -1281,7 +1381,7 @@ var File_replay_proto protoreflect.FileDescriptor
 
 const file_replay_proto_rawDesc = "" +
 	"\n" +
-	"\freplay.proto\x12\x06replay\"\xb6\x03\n" +
+	"\freplay.proto\x12\x06replay\"\xfd\x03\n" +
 	"\n" +
 	"ReplayData\x12*\n" +
 	"\x06header\x18\x01 \x01(\v2\x12.replay.DemoHeaderR\x06header\x12,\n" +
@@ -1294,7 +1394,8 @@ const file_replay_proto_rawDesc = "" +
 	"\aflashes\x18\b \x03(\v2\x12.replay.FlashEventR\aflashes\x12*\n" +
 	"\x06noises\x18\t \x03(\v2\x12.replay.NoiseEventR\x06noises\x12'\n" +
 	"\x05bombs\x18\n" +
-	" \x03(\v2\x11.replay.BombEventR\x05bombs\"\xd7\x01\n" +
+	" \x03(\v2\x11.replay.BombEventR\x05bombs\x12E\n" +
+	"\x11dropped_equipment\x18\v \x03(\v2\x18.replay.DroppedEquipmentR\x10droppedEquipment\"\xd7\x01\n" +
 	"\n" +
 	"DemoHeader\x12\x19\n" +
 	"\bmap_name\x18\x01 \x01(\tR\amapName\x12\x1b\n" +
@@ -1408,7 +1509,16 @@ const file_replay_proto_rawDesc = "" +
 	"event_type\x18\x02 \x01(\tR\teventType\x12&\n" +
 	"\x0fplayer_steam_id\x18\x03 \x01(\x04R\rplayerSteamId\x12\x12\n" +
 	"\x04site\x18\x04 \x01(\tR\x04site\x12\x17\n" +
-	"\ahas_kit\x18\x05 \x01(\bR\x06hasKit\"\xb7\x01\n" +
+	"\ahas_kit\x18\x05 \x01(\bR\x06hasKit\"\xb9\x01\n" +
+	"\x10DroppedEquipment\x12\x1d\n" +
+	"\n" +
+	"start_tick\x18\x01 \x01(\x05R\tstartTick\x12\x19\n" +
+	"\bend_tick\x18\x02 \x01(\x05R\aendTick\x12%\n" +
+	"\x0eequipment_name\x18\x03 \x01(\tR\requipmentName\x12\x1a\n" +
+	"\bcategory\x18\x04 \x01(\tR\bcategory\x12\f\n" +
+	"\x01x\x18\x05 \x01(\x02R\x01x\x12\f\n" +
+	"\x01y\x18\x06 \x01(\x02R\x01y\x12\f\n" +
+	"\x01z\x18\a \x01(\x02R\x01z\"\xb7\x01\n" +
 	"\aMapData\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x13\n" +
 	"\x05pos_x\x18\x02 \x01(\x01R\x04posX\x12\x13\n" +
@@ -1431,7 +1541,7 @@ func file_replay_proto_rawDescGZIP() []byte {
 	return file_replay_proto_rawDescData
 }
 
-var file_replay_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_replay_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_replay_proto_goTypes = []any{
 	(*ReplayData)(nil),          // 0: replay.ReplayData
 	(*DemoHeader)(nil),          // 1: replay.DemoHeader
@@ -1444,7 +1554,8 @@ var file_replay_proto_goTypes = []any{
 	(*FlashEvent)(nil),          // 8: replay.FlashEvent
 	(*NoiseEvent)(nil),          // 9: replay.NoiseEvent
 	(*BombEvent)(nil),           // 10: replay.BombEvent
-	(*MapData)(nil),             // 11: replay.MapData
+	(*DroppedEquipment)(nil),    // 11: replay.DroppedEquipment
+	(*MapData)(nil),             // 12: replay.MapData
 }
 var file_replay_proto_depIdxs = []int32{
 	1,  // 0: replay.ReplayData.header:type_name -> replay.DemoHeader
@@ -1453,16 +1564,17 @@ var file_replay_proto_depIdxs = []int32{
 	4,  // 3: replay.ReplayData.kills:type_name -> replay.KillEvent
 	5,  // 4: replay.ReplayData.nades:type_name -> replay.NadeEvent
 	7,  // 5: replay.ReplayData.frames:type_name -> replay.PlayerFrame
-	11, // 6: replay.ReplayData.map:type_name -> replay.MapData
+	12, // 6: replay.ReplayData.map:type_name -> replay.MapData
 	8,  // 7: replay.ReplayData.flashes:type_name -> replay.FlashEvent
 	9,  // 8: replay.ReplayData.noises:type_name -> replay.NoiseEvent
 	10, // 9: replay.ReplayData.bombs:type_name -> replay.BombEvent
-	6,  // 10: replay.NadeEvent.trajectory:type_name -> replay.NadeTrajectoryPoint
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	11, // 10: replay.ReplayData.dropped_equipment:type_name -> replay.DroppedEquipment
+	6,  // 11: replay.NadeEvent.trajectory:type_name -> replay.NadeTrajectoryPoint
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_replay_proto_init() }
@@ -1476,7 +1588,7 @@ func file_replay_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_replay_proto_rawDesc), len(file_replay_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
