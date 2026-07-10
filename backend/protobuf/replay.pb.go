@@ -822,6 +822,8 @@ type PlayerFrame struct {
 	Armor         int32                  `protobuf:"varint,9,opt,name=armor,proto3" json:"armor,omitempty"`
 	Weapon        string                 `protobuf:"bytes,10,opt,name=weapon,proto3" json:"weapon,omitempty"`
 	IsAlive       bool                   `protobuf:"varint,11,opt,name=is_alive,json=isAlive,proto3" json:"is_alive,omitempty"`
+	Utilities     []string               `protobuf:"bytes,12,rep,name=utilities,proto3" json:"utilities,omitempty"`
+	HasBomb       bool                   `protobuf:"varint,13,opt,name=has_bomb,json=hasBomb,proto3" json:"has_bomb,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -929,6 +931,20 @@ func (x *PlayerFrame) GetWeapon() string {
 func (x *PlayerFrame) GetIsAlive() bool {
 	if x != nil {
 		return x.IsAlive
+	}
+	return false
+}
+
+func (x *PlayerFrame) GetUtilities() []string {
+	if x != nil {
+		return x.Utilities
+	}
+	return nil
+}
+
+func (x *PlayerFrame) GetHasBomb() bool {
+	if x != nil {
+		return x.HasBomb
 	}
 	return false
 }
@@ -1471,7 +1487,7 @@ const file_replay_proto_rawDesc = "" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12\f\n" +
 	"\x01x\x18\x02 \x01(\x02R\x01x\x12\f\n" +
 	"\x01y\x18\x03 \x01(\x02R\x01y\x12\f\n" +
-	"\x01z\x18\x04 \x01(\x02R\x01z\"\xef\x01\n" +
+	"\x01z\x18\x04 \x01(\x02R\x01z\"\xa8\x02\n" +
 	"\vPlayerFrame\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12\x19\n" +
 	"\bsteam_id\x18\x02 \x01(\x04R\asteamId\x12\f\n" +
@@ -1484,7 +1500,9 @@ const file_replay_proto_rawDesc = "" +
 	"\x05armor\x18\t \x01(\x05R\x05armor\x12\x16\n" +
 	"\x06weapon\x18\n" +
 	" \x01(\tR\x06weapon\x12\x19\n" +
-	"\bis_alive\x18\v \x01(\bR\aisAlive\"\xba\x01\n" +
+	"\bis_alive\x18\v \x01(\bR\aisAlive\x12\x1c\n" +
+	"\tutilities\x18\f \x03(\tR\tutilities\x12\x19\n" +
+	"\bhas_bomb\x18\r \x01(\bR\ahasBomb\"\xba\x01\n" +
 	"\n" +
 	"FlashEvent\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12&\n" +

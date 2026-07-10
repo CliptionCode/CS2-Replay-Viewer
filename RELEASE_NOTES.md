@@ -1,6 +1,6 @@
-# CS2 Replay Viewer v0.1.8
+# CS2 Replay Viewer v0.1.9
 
-Version 0.1.8 expands tactical review with interactive grenade destinations, flexible drawing tools, clearer death review, and more freedom when navigating the radar.
+Version 0.1.9 makes player loadouts and audible actions easier to review by adding live utility icons, dropped C4 tracking, and new noise-circle filters.
 
 ## Change Overview
 
@@ -11,61 +11,45 @@ Version 0.1.8 expands tactical review with interactive grenade destinations, fle
 
 ## 🚀 New Features
 
-### Interactive Grenades on the Map
+### Drop and Reload Noise
 
-- Smoke and fire effect areas can now be clicked to copy a two-second lead-in `demo_goto` command.
-- Double-clicking a smoke or fire area selects its thrower and seeks to two seconds before the throw.
-- Flashbang, HE grenade, and Decoy destinations now show color-coded equipment icons for five seconds after landing.
-- Destination equipment icons use a compact size, begin at 50% opacity, and gradually fade away.
-- Single-clicking a destination icon copies the throw's lead-in command, while double-clicking selects the thrower and seeks to the throw.
+- Weapon, utility, and C4 drops can now display noise circles.
+- Weapon reloads can now display noise circles.
+- Each new noise source has its own checkbox and is enabled by default.
+- New source filters only display circles while the master `Show Noise Circle` checkbox is enabled.
 
-### Dropped Equipment
+### Dropped C4
 
-- Parser-reported dropped weapons and utilities appear as small equipment icons at their exact ground positions.
-- Dropped items remain visible through the complete seven-second post-round window.
-- The `Dropped Equipment` section provides separate `Show Dropped Weapons` and `Show Dropped Utility` checkboxes, both enabled by default.
+- Ownerless C4 now appears at its exact ground position with the C4 icon.
+- The C4 marker disappears when it is picked up or planted and does not remain after explosion or defuse.
+- A new `Dropped C4` checkbox is enabled by default in the `Dropped Equipment` section.
 
-### Dual-Color and Fading Drawings
+### Live Player Equipment
 
-- Shift-drag with the left mouse button to draw in CT blue by default.
-- Shift-drag with the right mouse button to draw in T orange by default.
-- Both mouse colors can be customized independently.
-- Choose `Permanent` for round-long drawings or `Fade` for strokes that disappear gradually over 1–6 seconds.
+- Living players continue to show the name of their currently selected weapon or utility.
+- Every remaining grenade is shown above the player's name with a white utility icon.
+- The C4 icon appears in the same inventory row while a living player is carrying the bomb.
+- Players carrying two Flashbangs display two Flashbang icons, and throwing one removes only one icon.
 
 ## 🔧 Adjusted Features
 
-### Player-Focused Navigation
+### Noise Controls
 
-- Scrolling while a player is selected adjusts the visible Player Selection zoom value and keeps the player centered.
-- Clicking empty map space or beginning a left-button drag stops following the selected player while preserving the current view.
-- Mouse-position zoom remains available when no player is selected.
-- Player selection now ends automatically when the selected player dies.
+- Corrected the master control label from `Show Noice Circle` to `Show Noise Circle`.
+- Existing running, jumping, shooting, and falling filters continue to work independently alongside the new sources.
 
-### More Flexible Map Movement
+### Dropped Equipment
 
-- The radar can now be dragged even at the fully zoomed-out view.
-- Pan limits provide substantially more room to position the radar toward any edge at both low and high zoom levels.
-
-### Dead Players
-
-- Dead players use a death icon instead of a player dot and no longer show a health bar.
-- Dead Counter-Terrorists use blue death icons, while dead Terrorists use orange death icons.
-- Single-clicking a dead-player icon copies a `demo_goto` command for three seconds before the death.
-- Double-clicking a dead-player icon selects that player and jumps directly to the same three-second lead-in.
-
-### Round Drawings
-
-- Changing rounds clears all drawings automatically.
-- Permanent drawings otherwise remain until `Clear all Drawings` is used.
+- Dropped-equipment visibility now covers weapons, utility, and C4 with a separate default-enabled filter for each category.
 
 ## 🐛 Bug Fixes
 
-### Stable Map Size When Maximizing
+### Stable Utility Inventory
 
-- The radar no longer becomes extremely small when maximizing the application while zoomed.
-- Maximizing and restoring the application now preserve a consistent radar size.
+- Multiple carried utility icons now keep a consistent left-to-right order instead of repeatedly swapping positions.
+- Utility slots remain fixed while icon images load, preventing the row from shifting or re-centering.
 
 ## 📦 Version and Documentation
 
-- Updated CS2 Replay Viewer directly from version `0.1.6` to `0.1.8`; version `0.1.7` was not released separately.
-- Updated the feature guide and project context for all new controls and interactions included in this combined release.
+- Increased the application version from `0.1.8` to `0.1.9`.
+- Updated the feature guide and project context for the new noise, equipment, and player-inventory behavior.

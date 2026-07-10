@@ -66,7 +66,7 @@ func TestDroppedEquipmentCategory(t *testing.T) {
 		{common.EqZeus, "weapon", true},
 		{common.EqSmoke, "utility", true},
 		{common.EqFlash, "utility", true},
-		{common.EqBomb, "", false},
+		{common.EqBomb, "c4", true},
 		{common.EqDefuseKit, "", false},
 	}
 
@@ -75,6 +75,42 @@ func TestDroppedEquipmentCategory(t *testing.T) {
 		if category != test.category || visible != test.visible {
 			t.Fatalf("%s category = %q, %v; want %q, %v", test.equipmentType, category, visible, test.category, test.visible)
 		}
+	}
+}
+
+func TestInventoryUtilityTypes(t *testing.T) {
+	for _, equipmentType := range []common.EquipmentType{
+		common.EqFlash, common.EqSmoke, common.EqHE, common.EqMolotov, common.EqIncendiary, common.EqDecoy,
+	} {
+		if !isInventoryUtility(common.NewEquipment(equipmentType)) {
+			t.Fatalf("%s should be included in the utility inventory", equipmentType)
+		}
+	}
+	for _, equipmentType := range []common.EquipmentType{common.EqAK47, common.EqBomb, common.EqKnife} {
+		if isInventoryUtility(common.NewEquipment(equipmentType)) {
+			t.Fatalf("%s should not be included in the utility inventory", equipmentType)
+		}
+	}
+}
+
+func TestBombUnavailableState(t *testing.T) {
+	recorder := frameRecorder{bombs: []BombEvent{
+		{Tick: 100, EventType: "planted"},
+		{Tick: 200, EventType: "exploded"},
+	}}
+	if recorder.isBombUnavailableAt(99) {
+		t.Fatal("bomb should not be planted before the plant event")
+	}
+	if !recorder.isBombUnavailableAt(150) {
+		t.Fatal("bomb should be planted between plant and explosion")
+	}
+	if !recorder.isBombUnavailableAt(200) {
+		t.Fatal("bomb should remain unavailable after explosion")
+	}
+
+	recorder.currentRound = &RoundData{StartTick: 300}
+	if recorder.isBombUnavailableAt(350) {
+		t.Fatal("a prior round's bomb events should not hide the current round's C4")
 	}
 }
 

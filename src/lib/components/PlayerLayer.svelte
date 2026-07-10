@@ -2,7 +2,7 @@
 import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
 import { worldToCanvas } from '$lib/canvas/transforms';
-import { equipmentIconPath } from '$lib/equipment-icons';
+import { equipmentIconPath, getWeaponIconPath } from '$lib/equipment-icons';
 import { getPlaybackTick, subscribePlaybackTick } from '$lib/playback-state';
 import { getRoundDisplayEndTick, getRoundForTick } from '$lib/replay/rounds';
 import type { FlashEvent, NoiseEvent, ReplayData, PlayerFrame, MapData as MapMetadata } from '$lib/types/replay/replay_pb';
@@ -25,6 +25,10 @@ export let enabledNoiseSources: Record<string, boolean> = {
     jump: true,
     shooting: true,
     falling: true,
+    weapon_drop: true,
+    utility_drop: true,
+    c4_drop: true,
+    weapon_reload: true,
 };
 
 let container: HTMLCanvasElement | null = null;
@@ -54,8 +58,54 @@ const MAX_FULL_FLASH_DURATION_SECONDS = 5;
 const MIN_FLASH_ALPHA = 0.06;
 const DEATH_ICON_PATH = equipmentIconPath('icon-death.svg');
 const DEATH_ICON_SIZE = 18;
+const UTILITY_ICON_SIZE = 13;
+const UTILITY_ICON_GAP = 3;
 let deathIcon: HTMLImageElement | null = null;
 const tintedDeathIcons = new Map<string, HTMLCanvasElement>();
+const equipmentIcons = new Map<string, HTMLImageElement>();
+
+function getEquipmentIcon(equipmentName: string): HTMLImageElement | null {
+    const path = getWeaponIconPath(equipmentName);
+    const cached = equipmentIcons.get(path);
+    if (cached) return cached;
+    if (!browser) return null;
+
+    const image = new Image();
+    image.decoding = 'async';
+    image.onload = scheduleRender;
+    image.onerror = scheduleRender;
+    image.src = path;
+    equipmentIcons.set(path, image);
+    return image;
+}
+
+function drawUtilityInventory(
+    context: CanvasRenderingContext2D,
+    utilities: readonly string[],
+    centerX: number,
+    centerY: number
+): void {
+    if (utilities.length === 0) return;
+
+    const totalWidth = utilities.length * UTILITY_ICON_SIZE + UTILITY_ICON_GAP * (utilities.length - 1);
+    let x = centerX - totalWidth / 2;
+    for (const utility of utilities) {
+        const image = getEquipmentIcon(utility);
+        if (image?.complete && image.naturalWidth > 0 && image.naturalHeight > 0) {
+            const scale = Math.min(UTILITY_ICON_SIZE / image.naturalWidth, UTILITY_ICON_SIZE / image.naturalHeight);
+            const width = image.naturalWidth * scale;
+            const height = image.naturalHeight * scale;
+            context.drawImage(
+                image,
+                x + (UTILITY_ICON_SIZE - width) / 2,
+                centerY - height / 2,
+                width,
+                height
+            );
+        }
+        x += UTILITY_ICON_SIZE + UTILITY_ICON_GAP;
+    }
+}
 
 function getDeathIcon(): HTMLImageElement | null {
     if (deathIcon || !browser) return deathIcon;
@@ -274,7 +324,11 @@ function shouldDrawSightCone(steamId: string): boolean {
 
 function normalizeNoiseType(noiseType: string): string {
     if (!noiseType || noiseType === 'sound' || noiseType === 'footstep') return 'running';
-    if (noiseType === 'jump' || noiseType === 'running' || noiseType === 'shooting' || noiseType === 'falling') {
+    if (
+        noiseType === 'jump' || noiseType === 'running' || noiseType === 'shooting' ||
+        noiseType === 'falling' || noiseType === 'weapon_drop' || noiseType === 'utility_drop' ||
+        noiseType === 'c4_drop' || noiseType === 'weapon_reload'
+    ) {
         return noiseType;
     }
     return '';
@@ -529,13 +583,14 @@ function drawNoiseCircles(
 
         if (noise.endTick < tick) continue;
 
+        const followsPlayer = normalizedType === 'shooting' || normalizedType === 'weapon_reload';
         const playerFrame = playerFrames.get(noise.steamId.toString());
-        if (!playerFrame?.isAlive) continue;
+        if (followsPlayer && !playerFrame?.isAlive) continue;
 
         const totalTicks = Math.max(1, noise.endTick - noise.tick);
         const remainingRatio = Math.max(0.22, Math.min(1, (noise.endTick - tick) / totalTicks));
-        const circleX = normalizedType === 'shooting' ? playerFrame.x : noise.x;
-        const circleY = normalizedType === 'shooting' ? playerFrame.y : noise.y;
+        const circleX = followsPlayer ? playerFrame!.x : noise.x;
+        const circleY = followsPlayer ? playerFrame!.y : noise.y;
         const pos = worldToCanvas(circleX, circleY, mapMetadata, canvasSize);
         const radius = getWorldRadiusInCanvasPixels(circleX, circleY, noise.radius, mapMetadata, canvasSize);
 
@@ -668,6 +723,10 @@ function drawPlayer(
 
         const playerName = getPlayerName(steamId);
         const weapon = frame.weapon || '';
+        const utilities = [
+            ...(frame.utilities ?? []),
+            ...(frame.hasBomb ? ['C4'] : []),
+        ].sort((a, b) => a.localeCompare(b));
         const nameY = weapon ? pos.y - 24 : pos.y - 10;
 
         ctx.font = '600 12px Inter, sans-serif';
@@ -680,6 +739,9 @@ function drawPlayer(
             ctx.fillStyle = '#e2e8f0';
             ctx.strokeText(weapon, pos.x, pos.y - 10);
             ctx.fillText(weapon, pos.x, pos.y - 10);
+        }
+        if (utilities.length > 0) {
+            drawUtilityInventory(ctx, utilities, pos.x, nameY - 15);
         }
     }
     

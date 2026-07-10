@@ -102,6 +102,8 @@ message PlayerFrame {
   int32 armor = 9;
   string weapon = 10;
   bool is_alive = 11;
+  repeated string utilities = 12;
+  bool has_bomb = 13;
 }
 
 message FlashEvent {

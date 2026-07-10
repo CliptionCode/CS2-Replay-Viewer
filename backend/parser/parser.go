@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	demoinfocs "github.com/markus-wa/demoinfocs-golang/v5/pkg/demoinfocs"
@@ -106,17 +107,19 @@ type TrajectoryPoint struct {
 }
 
 type PlayerFrame struct {
-	Tick    int
-	SteamID uint64
-	X       float32
-	Y       float32
-	Z       float32
-	Yaw     float32
-	Pitch   float32
-	Health  int
-	Armor   int
-	Weapon  string
-	IsAlive bool
+	Tick      int
+	SteamID   uint64
+	X         float32
+	Y         float32
+	Z         float32
+	Yaw       float32
+	Pitch     float32
+	Health    int
+	Armor     int
+	Weapon    string
+	IsAlive   bool
+	Utilities []string
+	HasBomb   bool
 }
 
 type FlashEvent struct {
@@ -238,6 +241,12 @@ func ParseFile(path string) (*ReplayData, error) {
 	})
 	p.RegisterEventHandler(func(e events.WeaponFire) {
 		recorder.recordWeaponFire(e, p)
+	})
+	p.RegisterEventHandler(func(e events.WeaponReload) {
+		recorder.recordWeaponReload(e, p)
+	})
+	p.RegisterEventHandler(func(e events.ItemDrop) {
+		recorder.recordItemDrop(e, p)
 	})
 	p.RegisterEventHandler(func(e events.BombPlantBegin) {
 		recorder.recordBombPlantBegin(e, p)
@@ -887,6 +896,32 @@ func (r *frameRecorder) recordWeaponFire(e events.WeaponFire, p demoinfocs.Parse
 	r.recordNoise(tick, secondsToTicks(0.35, p), e.Shooter.SteamID64, pos.X, pos.Y, pos.Z, 900, "shooting")
 }
 
+func (r *frameRecorder) recordWeaponReload(e events.WeaponReload, p demoinfocs.Parser) {
+	if e.Player == nil || !e.Player.IsAlive() {
+		return
+	}
+
+	tick := p.CurrentFrame()
+	pos := e.Player.Position()
+	r.recordNoise(tick, secondsToTicks(0.45, p), e.Player.SteamID64, pos.X, pos.Y, pos.Z, 900, "weapon_reload")
+}
+
+func (r *frameRecorder) recordItemDrop(e events.ItemDrop, p demoinfocs.Parser) {
+	if e.Player == nil || e.Weapon == nil {
+		return
+	}
+
+	category, supported := droppedEquipmentCategory(e.Weapon)
+	if !supported {
+		return
+	}
+
+	noiseType := category + "_drop"
+	tick := p.CurrentFrame()
+	pos := e.Player.Position()
+	r.recordNoise(tick, secondsToTicks(0.4, p), e.Player.SteamID64, pos.X, pos.Y, pos.Z, 700, noiseType)
+}
+
 func (r *frameRecorder) recordNoise(tick int, durationTicks int, steamID uint64, x, y, z float64, radius int, noiseType string) {
 	if steamID == 0 || radius <= 0 {
 		return
@@ -1035,6 +1070,15 @@ func (r *frameRecorder) recordFrameDone(p demoinfocs.Parser) {
 		if wep := player.ActiveWeapon(); wep != nil {
 			frame.Weapon = wep.String()
 		}
+		for _, equipment := range player.Weapons() {
+			if equipment != nil && equipment.Type == common.EqBomb {
+				frame.HasBomb = true
+			}
+			if isInventoryUtility(equipment) {
+				frame.Utilities = append(frame.Utilities, equipment.String())
+			}
+		}
+		sort.Strings(frame.Utilities)
 		r.playerFrames = append(r.playerFrames, frame)
 	}
 }
@@ -1048,6 +1092,9 @@ func droppedEquipmentCategory(equipment *common.Equipment) (string, bool) {
 	if equipment.Class() == common.EqClassGrenade {
 		return "utility", true
 	}
+	if equipment.Type == common.EqBomb {
+		return "c4", true
+	}
 	if equipment.Class() == common.EqClassPistols ||
 		equipment.Class() == common.EqClassSMG ||
 		equipment.Class() == common.EqClassHeavy ||
@@ -1057,6 +1104,18 @@ func droppedEquipmentCategory(equipment *common.Equipment) (string, bool) {
 		return "weapon", true
 	}
 	return "", false
+}
+
+func isInventoryUtility(equipment *common.Equipment) bool {
+	if equipment == nil {
+		return false
+	}
+	switch equipment.Type {
+	case common.EqFlash, common.EqSmoke, common.EqHE, common.EqMolotov, common.EqIncendiary, common.EqDecoy:
+		return true
+	default:
+		return false
+	}
 }
 
 func droppedEquipmentPositionChanged(item DroppedEquipment, x, y, z float32) bool {
@@ -1094,7 +1153,7 @@ func (r *frameRecorder) recordDroppedEquipment(p demoinfocs.Parser, tick int) {
 	seen := make(map[int]struct{})
 	for entityID, equipment := range p.GameState().Weapons() {
 		category, supported := droppedEquipmentCategory(equipment)
-		if !supported || !isEquipmentDropped(equipment, p) {
+		if !supported || (category == "c4" && r.isBombUnavailableAt(tick)) || !isEquipmentDropped(equipment, p) {
 			continue
 		}
 
@@ -1148,6 +1207,27 @@ func (r *frameRecorder) recordDroppedEquipment(p demoinfocs.Parser, tick int) {
 		delete(r.activeDroppedEquipment, entityID)
 	}
 
+}
+
+func (r *frameRecorder) isBombUnavailableAt(tick int) bool {
+	roundStartTick := 0
+	if r.currentRound != nil {
+		roundStartTick = r.currentRound.StartTick
+	}
+	for i := len(r.bombs) - 1; i >= 0; i-- {
+		event := r.bombs[i]
+		if event.Tick > tick {
+			continue
+		}
+		if event.Tick < roundStartTick {
+			break
+		}
+		switch event.EventType {
+		case "planted", "exploded", "defused":
+			return true
+		}
+	}
+	return false
 }
 
 func (r *frameRecorder) ensureStats(steamID uint64) *playerStatTracker {

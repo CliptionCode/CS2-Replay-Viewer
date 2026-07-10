@@ -64,10 +64,11 @@ Draw routes, callouts, and tactical plans directly on the map.
 ### Tactical information
 
 - Adjust responsive player sight-cone and line-of-sight overlays without redrawing the full player layer.
-- Show noise circles for running, shooting, jumping, and falling.
+- Show independently filterable noise circles for running, shooting, jumping, falling, weapon drops, utility drops, C4 drops, and weapon reloads.
 - Review grenade and utility activity directly on the map, including smoke/fire center icons and countdowns; Molotovs and incendiaries are hard-capped at 7 seconds and disappear sooner at their actual smoke-extinguished expiry time.
 - Track living-player health accurately; dead CT players use a blue death icon, dead T players use an orange death icon, and neither shows a health bar.
-- Show exact parser-reported dropped weapon and utility icons through the full seven-second post-round window, with separate visibility checkboxes enabled by default.
+- See each living player's currently selected weapon or utility name, all remaining utility, and carried C4 as stable icons above their name, including both carried Flashbangs when applicable.
+- Show exact parser-reported dropped weapon, utility, and ownerless C4 icons through the full seven-second post-round window, with separate visibility checkboxes enabled by default.
 
 ### Map interaction and drawing
 

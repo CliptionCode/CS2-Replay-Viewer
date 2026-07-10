@@ -133,6 +133,10 @@ const NOISE_SOURCE_OPTIONS = [
     { key: 'jump', label: 'Jump Noise' },
     { key: 'shooting', label: 'Shooting Noise' },
     { key: 'falling', label: 'Falling Noise' },
+    { key: 'weapon_drop', label: 'Weapon Drop Noise' },
+    { key: 'utility_drop', label: 'Utility Drop Noise' },
+    { key: 'c4_drop', label: 'C4 Drop Noise' },
+    { key: 'weapon_reload', label: 'Weapon Reload Noise' },
 ] as const;
 
 const TIMELINE_UTILITY_OPTIONS = [
@@ -185,6 +189,7 @@ let isShiftDrawingActive = false;
 let drawingClearSignal = 0;
 let showDroppedWeapons = true;
 let showDroppedUtility = true;
+let showDroppedC4 = true;
 let selectedPlayerSteamId: bigint | null = null;
 let showNoiseCircle = false;
 let noiseForSelectedPlayer = false;
@@ -193,6 +198,10 @@ let enabledNoiseSources: Record<NoiseSourceKey, boolean> = {
     jump: true,
     shooting: true,
     falling: true,
+    weapon_drop: true,
+    utility_drop: true,
+    c4_drop: true,
+    weapon_reload: true,
 };
 let showAllTimelineUtilities = false;
 let enabledTimelineUtilities: Record<TimelineUtilityKey, boolean> = {
@@ -2619,6 +2628,7 @@ onMount(() => {
         bind:isPlaying={isPlaying}
         {showDroppedWeapons}
         {showDroppedUtility}
+        {showDroppedC4}
     />
     <PlayerLayer 
         bind:replayData={replayData}
@@ -2758,7 +2768,7 @@ onMount(() => {
             <div class="controls-heading">Noise</div>
             <label class="checkbox-control">
                 <input type="checkbox" bind:checked={showNoiseCircle} />
-                <span>Show Noice Circle</span>
+                <span>Show Noise Circle</span>
             </label>
             <label class="checkbox-control">
                 <input
@@ -2816,6 +2826,10 @@ onMount(() => {
             <label class="checkbox-control">
                 <input type="checkbox" bind:checked={showDroppedUtility} />
                 <span>Show Dropped Utility</span>
+            </label>
+            <label class="checkbox-control">
+                <input type="checkbox" bind:checked={showDroppedC4} />
+                <span>Dropped C4</span>
             </label>
         </section>
         <section class="control-section">

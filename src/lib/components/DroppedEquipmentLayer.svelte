@@ -11,6 +11,7 @@ export let mapMetadata: MapMetadata;
 export let isPlaying = false;
 export let showDroppedWeapons = true;
 export let showDroppedUtility = true;
+export let showDroppedC4 = true;
 
 const ICON_SIZE = 18;
 
@@ -41,6 +42,7 @@ function isVisible(item: DroppedEquipment, tick: number): boolean {
     if (item.startTick > tick || item.endTick < tick) return false;
     if (item.category === 'weapon') return showDroppedWeapons;
     if (item.category === 'utility') return showDroppedUtility;
+    if (item.category === 'c4') return showDroppedC4;
     return false;
 }
 
@@ -129,7 +131,7 @@ $: {
 }
 
 $: {
-    void replayData, mapMetadata, showDroppedWeapons, showDroppedUtility;
+    void replayData, mapMetadata, showDroppedWeapons, showDroppedUtility, showDroppedC4;
     if (browser && ctx) scheduleRender();
 }
 

@@ -163,17 +163,19 @@ func convertNade(n *parser.NadeEvent) *pb.NadeEvent {
 
 func convertFrame(f *parser.PlayerFrame) *pb.PlayerFrame {
 	return &pb.PlayerFrame{
-		Tick:    int32(f.Tick),
-		SteamId: f.SteamID,
-		X:       f.X,
-		Y:       f.Y,
-		Z:       f.Z,
-		Yaw:     f.Yaw,
-		Pitch:   f.Pitch,
-		Health:  int32(f.Health),
-		Armor:   int32(f.Armor),
-		Weapon:  f.Weapon,
-		IsAlive: f.IsAlive,
+		Tick:      int32(f.Tick),
+		SteamId:   f.SteamID,
+		X:         f.X,
+		Y:         f.Y,
+		Z:         f.Z,
+		Yaw:       f.Yaw,
+		Pitch:     f.Pitch,
+		Health:    int32(f.Health),
+		Armor:     int32(f.Armor),
+		Weapon:    f.Weapon,
+		IsAlive:   f.IsAlive,
+		Utilities: append([]string(nil), f.Utilities...),
+		HasBomb:   f.HasBomb,
 	}
 }
 

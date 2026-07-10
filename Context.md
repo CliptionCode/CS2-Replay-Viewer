@@ -2,7 +2,7 @@
 
 > Supplementary information for an AI implementing this project. Contains background knowledge, gotchas, library deep-dives, and reference material not covered in the implementation plan.
 
-> **Application version:** `0.1.8`. This version refines grenade destination markers, team-colors dead-player icons, adds death-specific three-second click behavior and automatic deselection, supports exact parser-backed dropped-equipment rendering through the post-round window, and expands map panning at every zoom level. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application package entry in `src-tauri/Cargo.lock` on the same version when releasing later changes.
+> **Application version:** `0.1.9`. This version adds drop/reload noise sources, ownerless C4 tracking, selected-equipment names, and stable live per-player utility inventory icons. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application package entry in `src-tauri/Cargo.lock` on the same version when releasing later changes.
 
 > **IMPORTANT:** Whenever writing or modifying **Svelte** code, always load the `svelte-core-bestpractices` and `svelte-code-writer` skills first. Whenever writing or modifying **Rust** code, always load the `rust-best-practices` skill first.
 >
@@ -249,7 +249,7 @@ Color coding by nade type:
 - Molotov: `#dc2626` (red)
 - Decoy: `#92400e` (brown)
 
-Player labels in `PlayerLayer.svelte` show the player name above the current weapon label. Alive players also get a white radar-style sight cone computed from interpolated `yaw` to indicate look direction.
+Player labels in `PlayerLayer.svelte` show the player name above the current selected weapon or utility name. Remaining utility icons render in white above the player name, including duplicate Flashbang icons when two are carried. If the alive player currently owns the bomb, `c4.svg` appears in the same inventory row. Utility names are sorted in every parser frame, and the canvas reserves one fixed-width slot per carried item so icons never exchange positions or re-center as their images load. Alive players also get a white radar-style sight cone computed from interpolated `yaw` to indicate look direction.
 
 ### 4.5 Team Color Convention
 
@@ -321,11 +321,11 @@ Use `@bufbuild/protobuf` (formerly protobuf-es). It's modern, tree-shakeable, pr
 
 ### 6.3 Protobuf Handling of PlayerFrames
 
-The ReplayData protobuf schema contains a DemoHeader, repeated PlayerInfo, repeated RoundData, repeated KillEvent, repeated NadeEvent, repeated PlayerFrame, MapData, repeated FlashEvent, repeated NoiseEvent, repeated BombEvent, and repeated DroppedEquipment. Each PlayerFrame stores tick, steam_id, x/y/z coordinates, yaw/pitch, health, armor, weapon, and is_alive. Each DroppedEquipment record is a compact visibility segment with start/end ticks, equipment name, weapon/utility category, and world position. Re-parse the original `.dem` to populate dropped equipment; older protobuf files decode the new list as empty.
+The ReplayData protobuf schema contains a DemoHeader, repeated PlayerInfo, repeated RoundData, repeated KillEvent, repeated NadeEvent, repeated PlayerFrame, MapData, repeated FlashEvent, repeated NoiseEvent, repeated BombEvent, and repeated DroppedEquipment. Each PlayerFrame stores tick, steam_id, x/y/z coordinates, yaw/pitch, health, armor, weapon, is_alive, a repeated utilities list, and `has_bomb`. Each DroppedEquipment record is a compact visibility segment with start/end ticks, equipment name, weapon/utility/C4 category, and world position. Re-parse the original `.dem` to populate dropped equipment, utility inventories, and bomb possession; older protobuf files decode the new fields as empty/false.
 
 `KillEvent` includes the parser's `assisted_by_flash`, `assister_steam_id`, `attacker_blind`, `killer_airborne`, `no_scope`, `through_smoke`, and `penetrated_objects` data so the kill feed can reproduce conditional CS2 kill indicators and name a flash assister. Older protobuf files decode the added fields as zero/`false`; re-parse the original `.dem` to populate them. `FlashEvent`, `NoiseEvent`, and `BombEvent` are parser-backed event streams used by the current UI:
 - `FlashEvent`: flashed player, attacker, duration, and end tick. Re-parse demos to populate it.
-- `NoiseEvent`: sound origin, radius, identity, type, and end tick for noise-radius rendering. Current parser-backed types are `running`, `jump`, `shooting`, and `falling`; older empty, `sound`, or `footstep` values are treated as `running` by the frontend.
+- `NoiseEvent`: sound origin, radius, identity, type, and end tick for noise-radius rendering. Current parser-backed types are `running`, `jump`, `shooting`, `falling`, `weapon_drop`, `utility_drop`, `c4_drop`, and `weapon_reload`; older empty, `sound`, or `footstep` values are treated as `running` by the frontend.
 - `BombEvent`: plant, explosion, defuse start/abort, and defuse completion events used by bomb labels and timeline markers.
 
 Protobuf uses **varint encoding for ints and float32 for positions**. Each `PlayerFrame` is ~40-50 bytes in protobuf. 1.5M frames × 45 bytes = ~68 MB for the frames alone.
@@ -443,7 +443,60 @@ Install commands: winget for Go, Rust, and Node.js LTS; then `npm i -g pnpm`, `g
 
 ### 8.3 Build & Run Commands
 
-Development server commands are intentionally not run by the agent. Build protobuf: `cd proto && buf generate && cd ..`. Build Go sidecar: `cd backend && go build -o ../src-tauri/binaries/cs2-parser-x86_64-pc-windows-msvc.exe . && cd ..`. Check Rust: `cd src-tauri && cargo check`. Check frontend without auto-fixing when needed. Never run `npx @sveltejs/mcp svelte-autofixer` or any other Svelte autofixer command.
+Development server commands are intentionally not run by the agent. Never run `npx @sveltejs/mcp svelte-autofixer` or any other Svelte autofixer command.
+
+#### Sandbox-safe agent workflow (Windows PowerShell)
+
+The managed workspace sandbox cannot reliably access toolchain cache and temporary paths below `C:\Users\<user>`. **Do not first run `go test`, `go build`, `pnpm check`, or `pnpm build` with their default environment and then retry with elevated access.** Before any build, generation, or verification command, initialize workspace-local temporary and Go cache directories once from the repository root:
+
+```powershell
+New-Item -ItemType Directory -Force temp\go-build, temp\go-tmp, temp\tool-tmp | Out-Null
+$env:GOCACHE = (Resolve-Path temp\go-build).Path
+$env:GOTMPDIR = (Resolve-Path temp\go-tmp).Path
+$env:TEMP = (Resolve-Path temp\tool-tmp).Path
+$env:TMP = $env:TEMP
+```
+
+The repository already ignores `temp/`, so these caches must remain untracked. Keep this environment active for all commands below.
+
+Use the locally installed frontend executables directly. Do not invoke the equivalent scripts through `pnpm` inside the managed sandbox because pnpm resolves user-profile temporary paths before starting them:
+
+```powershell
+# Frontend diagnostics (known unrelated legacy diagnostics may still exist)
+& .\node_modules\.bin\svelte-kit.cmd sync
+& .\node_modules\.bin\svelte-check.cmd --tsconfig .\tsconfig.json
+
+# Production frontend build
+& .\node_modules\.bin\vite.cmd build
+```
+
+Run Go commands with the workspace-local `GOCACHE` and `GOTMPDIR` initialized above:
+
+```powershell
+Push-Location backend
+go test ./...
+go build -o ..\src-tauri\binaries\cs2-parser-x86_64-pc-windows-msvc.exe .
+Pop-Location
+```
+
+Generate protobuf code with both repository and Go plugin directories on `PATH`, while retaining the workspace-local temporary environment:
+
+```powershell
+$env:PATH = "$PWD\node_modules\.bin;$env:USERPROFILE\go\bin;$env:PATH"
+Push-Location proto
+buf generate
+Pop-Location
+```
+
+Rust already writes its project output inside the workspace and can be checked normally:
+
+```powershell
+Push-Location src-tauri
+cargo check
+Pop-Location
+```
+
+These are the default agent commands for this repository. Request elevated sandbox access only if one of these workspace-local commands itself fails with a genuine permission error; do not use escalation pre-emptively.
 
 ---
 
@@ -508,7 +561,7 @@ The active UI uses stacked `<canvas>` elements organized into logical layers. `P
 | Player base | `PlayerLayer.svelte` | Draws player dots, weapon labels, health bars, trails, flash indicators, noise, and bomb state |
 | Player sight | `PlayerLayer.svelte` | Draws sight cones and line-of-sight rays independently from the heavier player base |
 | Nade | `NadeLayer.svelte` | Draws nade trajectories, active smoke/fire zones, and fading Flashbang/HE/Decoy destination icons with map hit testing |
-| Dropped equipment | `DroppedEquipmentLayer.svelte` | Draws non-interactive icons for unowned weapons and utilities while their recorded ground-position segment is active |
+| Dropped equipment | `DroppedEquipmentLayer.svelte` | Draws non-interactive icons for unowned weapons, utilities, and C4 while their recorded ground-position segment is active |
 | Kill | `KillLayer.svelte` | Draws death markers (X on victim position) and the clickable, icon-based kill feed overlay |
 | Drawing | `DrawingLayer.svelte` | Stores and draws Shift-activated freehand tactical annotations |
 
@@ -634,11 +687,11 @@ The `Player Selection` section below the sight controls contains only a zoom per
 
 When no player is selected, the replay viewport supports independent mouse-wheel zoom over the canvas. It starts at the unzoomed view (`0%` additional zoom / `1×` scale), is capped at `500%` (`5×` scale), and keeps the point under the mouse fixed while zooming. Holding the left mouse button and dragging pans the viewport at every zoom level, including the fitted `1×` view and after a selected player is deselected. Wheel, pointer, and click interactions are attached directly to the replay container instead of `window`; the wheel listener is explicitly non-passive so it can prevent browser scrolling without Chromium intervention warnings. The pan boundary combines 50% of the viewport dimension with 25% of the scaled map dimension, allowing substantial movement in every direction at both low and high zoom without losing the map completely. Loading a different replay resets this mouse viewport zoom and pan.
 
-The `Noise` section below `Player Selection` contains `Show Noice Circle` (unchecked by default), `Noise for Selected Player` (unchecked by default), and per-source checkboxes for the distinguishable sources `Running Noise`, `Jump Noise`, `Shooting Noise`, and `Falling Noise` (checked by default). `Show Noice Circle` is the master visibility toggle for red noise circles. `Noise for Selected Player` limits noise rendering to the selected Steam ID. Unknown noise types are not exposed as a separate UI option.
+The `Noise` section below `Player Selection` contains `Show Noise Circle` (unchecked by default), `Noise for Selected Player` (unchecked by default), and per-source checkboxes for `Running Noise`, `Jump Noise`, `Shooting Noise`, `Falling Noise`, `Weapon Drop Noise`, `Utility Drop Noise`, `C4 Drop Noise`, and `Weapon Reload Noise` (checked by default). `Show Noise Circle` is the master visibility toggle for red noise circles, so enabled source checkboxes do not render anything while it is unchecked. `Noise for Selected Player` limits noise rendering to the selected Steam ID. Unknown noise types are not exposed as a separate UI option.
 
 The `Timeline` section below `Noise` controls timeline marker visibility only; it does not change utility rendering on the map. `Show Kills` and `Show Deaths` are checked by default and control the domination/death icon markers. `Show all Utilities` is unchecked by default. `Show Smokes`, `Show Flashes`, `Show HE Nades`, `Show Molotovs`, and `Show Decoys` are checked by default. When `Show all Utilities` is off, kill/death and utility markers are limited to the selected player and respect their filters. When `Show all Utilities` is on, the timeline shows all checked utility types plus all checked kill/death markers that happened during the current round. Bomb plant, explosion, defuse, and time-expiry markers remain visible regardless of filter settings.
 
-The `Dropped Equipment` section immediately above `Drawing` contains `Show Dropped Weapons` and `Show Dropped Utility`, both checked by default. Each checkbox independently filters the matching icon category. `DroppedEquipmentLayer.svelte` renders only parser-reported unowned weapon entities that include an exact world position and active tick range; no player-position, death-position, inventory, or synthetic fallback is allowed. A real entity-backed visibility segment ends when the item is picked up, moves more than four world units, disappears, or the round's seven-second post-win display window finishes. Movement begins a new segment at the entity's newly reported position. When the round-end event removes world entities, their last exact positions are retained through `RoundData.EndTick`, which is the event tick plus seven seconds. Grenade projectiles/effects remain owned by `NadeLayer.svelte` and are independent of ground-item parsing.
+The `Dropped Equipment` section immediately above `Drawing` contains `Show Dropped Weapons`, `Show Dropped Utility`, and `Dropped C4`, all checked by default. Each checkbox independently filters the matching icon category. `DroppedEquipmentLayer.svelte` renders only parser-reported unowned equipment entities that include an exact world position and active tick range; no player-position, death-position, inventory, or synthetic fallback is allowed. Ownerless C4 uses `c4.svg` and is excluded as soon as it is planted, exploded, or defused. A real entity-backed visibility segment ends when the item is picked up, moves more than four world units, disappears, or the round's seven-second post-win display window finishes. Movement begins a new segment at the entity's newly reported position. When the round-end event removes world entities, their last exact positions are retained through `RoundData.EndTick`, which is the event tick plus seven seconds. Grenade projectiles/effects remain owned by `NadeLayer.svelte` and are independent of ground-item parsing.
 
 The `Drawing` section controls a separate freehand drawing overlay. `Left Mouse Color` defaults to CT blue (`#3b82f6`) and `Right Mouse Color` defaults to T orange (`#f97316`). Hold <kbd>Shift</kbd> and drag with either mouse button to draw with its assigned color; the right-button context menu is suppressed during Shift drawing. `Stroke Width` ranges from 1 to 10. `Permanent` retains strokes until `Clear all Drawings` is clicked or another round is selected. `Fade` reveals a `Fade in s` slider from 1 to 6 seconds; completed strokes then fade smoothly to transparent over the selected duration. Releasing Shift immediately finalizes the active stroke and releases pointer capture so normal player selection and mouse-zoom panning resume.
 
@@ -664,11 +717,13 @@ Player selection no longer rebuilds the full replay frame index. Replay frame an
 
 ### 11.11 Flash, Noise, and Bomb Event Rendering
 
-The Go parser records `events.PlayerFlashed`, `events.Footstep`, `events.PlayerJump`, `events.PlayerSound`, `events.WeaponFire`, fall-damage `events.PlayerHurt`, `events.InfernoStart`, `events.InfernoExpired`, `events.BombPlantBegin`, `events.BombPlantAborted`, `events.BombPlanted`, `events.BombExplode`, `events.BombDefuseStart`, `events.BombDefuseAborted`, and `events.BombDefused` into protobuf event arrays. Inferno lifecycle events are represented as matched `NadeEvent` records with their observed fade tick. Existing parsed protobuf files may not contain these arrays, typed noise values, inferno expiry timings, or expanded kill flags; load and parse the original `.dem` again to see parser-backed behavior.
+The Go parser records `events.PlayerFlashed`, `events.Footstep`, `events.PlayerJump`, `events.PlayerSound`, `events.WeaponFire`, `events.WeaponReload`, `events.ItemDrop`, fall-damage `events.PlayerHurt`, `events.InfernoStart`, `events.InfernoExpired`, `events.BombPlantBegin`, `events.BombPlantAborted`, `events.BombPlanted`, `events.BombExplode`, `events.BombDefuseStart`, `events.BombDefuseAborted`, and `events.BombDefused` into protobuf event arrays. Item drops are classified from the parser's equipment value into weapon, utility, or C4 noise. Inferno lifecycle events are represented as matched `NadeEvent` records with their observed fade tick. Existing parsed protobuf files may not contain these arrays, typed noise values, utility inventories, inferno expiry timings, or expanded kill flags; load and parse the original `.dem` again to see parser-backed behavior.
 
 `PlayerLayer.svelte` renders a grey filled circle around flashed players while the flash is active. Opacity now scales with both parsed flash duration and remaining duration, using a full-flash reference of five seconds and a low `0.06` opacity floor. Minimally flashed players therefore receive a much more transparent indicator instead of the former minimum `0.6` opacity, while strong flashes remain prominent and fade over time.
 
-Noise events render as red stroked circles around alive players when `Show Noice Circle` is enabled. The radius is converted through the same radar/world transform as other overlays. Jump and falling noise events render at the event origin and fade with remaining event lifetime. Shooting noise renders around the shooter's current position during its short lifetime. Running noise uses one persistent circle per running player, follows the player's current position, holds briefly while running continues, and fades quickly after running stops.
+Noise events render as red stroked circles around alive players when `Show Noise Circle` is enabled. The radius is converted through the same radar/world transform as other overlays. Jump, falling, and equipment-drop noise events render at the event origin and fade with remaining event lifetime. Shooting and reload noise render around the player's current position during their short lifetime. Running noise uses one persistent circle per running player, follows the player's current position, holds briefly while running continues, and fades quickly after running stops.
+
+Every `PlayerFrame` samples `Player.Weapons()`, stores remaining grenade utility sorted by equipment name, and records whether the player owns C4. `PlayerLayer.svelte` draws the corresponding white SVGs above the player name in fixed-width slots and appends `c4.svg` while `has_bomb` is true. Every carried Flashbang produces its own icon, so throwing one of two Flashbangs removes exactly one icon on the next sampled frame; all other utility types naturally appear at most once under CS2 inventory rules. The inventory row renders only for alive players.
 
 `PlayerLayer.svelte` also draws a static red `Bomb` dot after a successful plant. The dot uses the planter's position at the completed plant tick, labels it `Bomb`, never moves after planting, and does not emit noise.
 
