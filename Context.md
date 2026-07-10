@@ -8,6 +8,8 @@
 >
 > **Project workflow constraints:** Do not run `pnpm tauri dev`. Do not start or host a Vite dev server automatically; the user wants to run and verify manually. Never run `npx @sveltejs/mcp svelte-autofixer` or any other Svelte autofixer command in this repository.
 
+> **Release notes structure:** Write release notes as GitHub-ready Markdown with changes grouped by type so additions, adjustments, removals, performance work, and fixes are immediately distinguishable. Start with a short release summary and a **Change Overview** legend, then use these top-level sections when applicable: 🚀 **New Features**, 🔧 **Adjusted Features**, 🗑️ **Removed Controls/Features**, ⚡ **Performance Improvements**, 🐛 **Bug Fixes**, and 📦 **Version and Documentation**. Use descriptive subsections for related features and concise user-facing bullet points. Keep exact values such as dimensions, durations, defaults, and keyboard controls where they help users understand what changed. Do not mix removed or adjusted behavior into the new-feature section.
+
 ---
 
 ## 1. CS2 Demo File Format (.dem)
