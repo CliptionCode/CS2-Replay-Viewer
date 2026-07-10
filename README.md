@@ -57,15 +57,17 @@ Draw routes, callouts, and tactical plans directly on the map.
 
 ### Tactical information
 
-- Adjust player sight cones and line-of-sight controls.
+- Adjust responsive player sight-cone and line-of-sight overlays without redrawing the full player layer.
 - Show noise circles for running, shooting, jumping, and falling.
-- Review grenade and utility activity directly on the map.
+- Review grenade and utility activity directly on the map, including smoke/fire center icons and countdowns.
+- Track player health accurately, with dead players shown at zero health.
 
 ### Map interaction and drawing
 
 - Zoom toward the current mouse position with the mouse wheel.
 - Hold the left mouse button and drag to move around the zoomed map.
-- Create simple drawings: choose a line color, start drawing, and clear all drawings.
+- Select a player dot or roster name to automatically zoom and center the player at the configured zoom level.
+- Create simple drawings by holding <kbd>Shift</kbd> and dragging with the left mouse button; choose the color and stroke width or clear all drawings from the controls.
 
 ## Libraries and tools
 
@@ -76,7 +78,7 @@ Draw routes, callouts, and tactical plans directly on the map.
 - [Svelte](https://github.com/sveltejs/svelte) and [SvelteKit](https://github.com/sveltejs/kit) — power the interactive TypeScript user interface.
 - [Vite](https://github.com/vitejs/vite) — builds and bundles the frontend.
 - [cs2-map-icons](https://github.com/MurkyYT/cs2-map-icons) — supplies the radar images and overview metadata used to place replay data accurately on each supported map.
-- [counter-strike-icons](https://github.com/Juknum/counter-strike-icons/tree/main/cs2/panorama/images/icons/equipment) — supplies the CS2 equipment SVGs used by the kill feed and timeline markers from `static/equipment-icons`. The empty `world.svg` and `worldent.svg` source files are intentionally excluded.
+- [counter-strike-icons](https://github.com/Juknum/counter-strike-icons/tree/main/cs2/panorama/images/icons/equipment) — supplies the CS2 equipment SVGs used by the kill feed, timeline markers, and utility effect centers from `static/equipment-icons`. The empty `world.svg` and `worldent.svg` source files are intentionally excluded.
 
 ## Supported maps
 

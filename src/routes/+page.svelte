@@ -92,11 +92,11 @@ const TEAM_CT = 3;
 const TEAM_T_COLOR = '#f97316';
 const TEAM_CT_COLOR = '#3b82f6';
 const DEAD_PLAYER_COLOR = '#6b7280';
-const DEFAULT_SIGHT_CONE_LENGTH = 34;
-const DEFAULT_SIGHT_CONE_HALF_ANGLE = 0.32;
+const DEFAULT_SIGHT_CONE_LENGTH = 75;
+const DEFAULT_SIGHT_CONE_HALF_ANGLE = 0.68;
 const EVENT_SEEK_LEAD_SECONDS = 2;
 const DEFAULT_LINE_OF_SIGHT_LENGTH = 300;
-const DEFAULT_LINE_OF_SIGHT_WIDTH = 2;
+const DEFAULT_LINE_OF_SIGHT_WIDTH = 1.6;
 const DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT = 250;
 const MAX_MOUSE_VIEWPORT_ZOOM_SCALE = 5;
 const MAP_PAN_BOUNDARY_PADDING = 0.1;
@@ -155,7 +155,6 @@ let sightConeForSelectedPlayer = false;
 let showLineOfSight = false;
 let lineOfSightLength = DEFAULT_LINE_OF_SIGHT_LENGTH;
 let lineOfSightWidth = DEFAULT_LINE_OF_SIGHT_WIDTH;
-let zoomSelectedPlayer = false;
 let selectedPlayerZoomPercent = DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT;
 let mouseViewportZoomScale = 1;
 let mouseViewportTranslateX = 0;
@@ -171,7 +170,7 @@ let mouseViewportDrag: {
 let ignoreNextCanvasClick = false;
 let drawingColor = DEFAULT_DRAWING_COLOR;
 let drawingStrokeWidth = DEFAULT_DRAWING_STROKE_WIDTH;
-let isDrawingEnabled = false;
+let isShiftDrawingActive = false;
 let drawingClearSignal = 0;
 let selectedPlayerSteamId: bigint | null = null;
 let showNoiseCircle = false;
@@ -273,6 +272,7 @@ function resetLoadedReplayState(clearReplayData = false): void {
     }
 
     selectedPlayerSteamId = null;
+    isShiftDrawingActive = false;
     mapVariant = 'default';
     hasLowerMapVariant = false;
     playablePlayers = [];
@@ -298,6 +298,7 @@ function applyLoadedReplay(data: ReplayData): void {
     replayData = data;
     mapMetadata = fillMapMetadata(data.map, data.header?.mapName);
     selectedPlayerSteamId = null;
+    isShiftDrawingActive = false;
     mapVariant = 'default';
     timelineEvents = [];
     timelineEventsKey = '';
@@ -1044,7 +1045,19 @@ function getBombStatus(tick: number): BombStatus {
 }
 
 function selectPlayer(steamId: bigint): void {
-    selectedPlayerSteamId = selectedPlayerSteamId === steamId ? null : steamId;
+    if (selectedPlayerSteamId === steamId) {
+        selectedPlayerSteamId = null;
+    } else {
+        selectedPlayerSteamId = steamId;
+        resetMouseViewportZoom();
+    }
+    timelineEventsKey = '';
+    updateReplayViewportTransform();
+}
+
+function focusPlayer(steamId: bigint): void {
+    selectedPlayerSteamId = steamId;
+    resetMouseViewportZoom();
     timelineEventsKey = '';
     updateReplayViewportTransform();
 }
@@ -1080,10 +1093,6 @@ function clearAllDrawings(): void {
     drawingClearSignal += 1;
 }
 
-function toggleDrawingMode(): void {
-    isDrawingEnabled = !isDrawingEnabled;
-}
-
 function handleTimelineEventClick(event: PlayerTimelineEvent): void {
     const eventPlayerSteamId = event.playerSteamId;
     if (
@@ -1091,9 +1100,7 @@ function handleTimelineEventClick(event: PlayerTimelineEvent): void {
         eventPlayerSteamId !== 0n &&
         (isTimelineUtilityType(event.type) || event.type === 'kill' || event.type === 'death' || event.type === 'bomb_planted' || event.type === 'bomb_defused')
     ) {
-        selectedPlayerSteamId = eventPlayerSteamId;
-        timelineEventsKey = '';
-        updateReplayViewportTransform();
+        focusPlayer(eventPlayerSteamId);
     }
 
     seekToPlayerEvent(event.tick);
@@ -1125,8 +1132,7 @@ function seekToPlayerEvent(eventTick: number): void {
 
 function handleKillFeedSelect(kill: KillEvent): void {
     if (kill.killerSteamId !== 0n) {
-        selectedPlayerSteamId = kill.killerSteamId;
-        timelineEventsKey = '';
+        focusPlayer(kill.killerSteamId);
     }
     seekToPlayerEvent(kill.tick);
 }
@@ -1158,7 +1164,7 @@ function getSelectedPlayerZoomScale(): number {
 }
 
 function getSelectedPlayerViewportTransform(tick = getPlaybackTick()): ViewportTransform {
-    if (!zoomSelectedPlayer || selectedPlayerSteamId === null || !replayData || !replayContainer) {
+    if (selectedPlayerSteamId === null || !replayData || !replayContainer) {
         return { scale: 1, translateX: 0, translateY: 0 };
     }
 
@@ -1331,7 +1337,8 @@ function handleViewportPointerDown(event: PointerEvent): void {
     }
 
     if (
-        isDrawingEnabled ||
+        isShiftDrawingActive ||
+        event.shiftKey ||
         event.button !== 0 ||
         mouseViewportZoomScale <= 1 ||
         !(event.target instanceof HTMLCanvasElement)
@@ -1379,7 +1386,7 @@ function handleReplayCanvasClick(event: MouseEvent): void {
         ignoreNextCanvasClick = false;
         return;
     }
-    if (isDrawingEnabled || !(event.target instanceof HTMLCanvasElement) || !replayContainer) return;
+    if (isShiftDrawingActive || event.shiftKey || !(event.target instanceof HTMLCanvasElement) || !replayContainer) return;
 
     const rect = replayContainer.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
@@ -1494,7 +1501,7 @@ $: {
 }
 
 $: {
-    void zoomSelectedPlayer, selectedPlayerZoomPercent, selectedPlayerSteamId, mouseViewportZoomScale, mouseViewportTranslateX, mouseViewportTranslateY, replayData, mapMetadata;
+    void selectedPlayerZoomPercent, selectedPlayerSteamId, mouseViewportZoomScale, mouseViewportTranslateX, mouseViewportTranslateY, replayData, mapMetadata;
     updateReplayViewportTransform();
 }
 
@@ -1585,10 +1592,24 @@ function seekToRound(round: RoundData) {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Shift') {
+        isShiftDrawingActive = true;
+        return;
+    }
     if (e.key === ' ') {
         e.preventDefault();
         setPlaying(!isPlaying);
     }
+}
+
+function handleKeyup(e: KeyboardEvent) {
+    if (e.key === 'Shift') {
+        isShiftDrawingActive = false;
+    }
+}
+
+function handleWindowBlur() {
+    isShiftDrawingActive = false;
 }
 
 function handleViewportResize() {
@@ -1602,10 +1623,14 @@ function handleViewportResize() {
 onMount(() => {
     if (!browser) return;
     window.addEventListener('keydown', handleKeydown);
+    window.addEventListener('keyup', handleKeyup);
+    window.addEventListener('blur', handleWindowBlur);
     window.addEventListener('resize', handleViewportResize);
     updateReplayViewportTransform();
     return () => {
         window.removeEventListener('keydown', handleKeydown);
+        window.removeEventListener('keyup', handleKeyup);
+        window.removeEventListener('blur', handleWindowBlur);
         window.removeEventListener('resize', handleViewportResize);
         if (rafId) cancelAnimationFrame(rafId);
         if (toastTimeout) clearTimeout(toastTimeout);
@@ -1922,6 +1947,13 @@ onMount(() => {
     margin-top: 10px;
 }
 
+.drawing-hint {
+    margin: 0 0 8px;
+    color: #94a3b8;
+    font-size: 11px;
+    line-height: 1.35;
+}
+
 .panel-button {
     width: 100%;
     min-height: 30px;
@@ -1940,12 +1972,6 @@ onMount(() => {
 .panel-button:hover {
     background: #3a3a50;
     border-color: #475569;
-}
-
-.panel-button.drawing-toggle.active {
-    border-color: #22c55e;
-    background: #15803d;
-    color: #ffffff;
 }
 
 .checkbox-control {
@@ -2217,7 +2243,7 @@ onMount(() => {
         onselectkillfeed={handleKillFeedSelect}
     />
     <DrawingLayer
-        {isDrawingEnabled}
+        {isShiftDrawingActive}
         {drawingColor}
         strokeWidth={drawingStrokeWidth}
         clearSignal={drawingClearSignal}
@@ -2282,17 +2308,6 @@ onMount(() => {
                 <span>Show Line of Sight</span>
             </label>
             <label class="sight-control">
-                <span>LOS Len</span>
-                <input
-                    type="range"
-                    min="18"
-                    max="800"
-                    step="1"
-                    bind:value={lineOfSightLength}
-                />
-                <span class="sight-control-value">{Math.round(lineOfSightLength)}</span>
-            </label>
-            <label class="sight-control">
                 <span>LOS Width</span>
                 <input
                     type="range"
@@ -2303,13 +2318,20 @@ onMount(() => {
                 />
                 <span class="sight-control-value">{lineOfSightWidth.toFixed(1)}</span>
             </label>
+            <label class="sight-control">
+                <span>LOS Len</span>
+                <input
+                    type="range"
+                    min="18"
+                    max="800"
+                    step="1"
+                    bind:value={lineOfSightLength}
+                />
+                <span class="sight-control-value">{Math.round(lineOfSightLength)}</span>
+            </label>
         </section>
         <section class="control-section">
             <div class="controls-heading">Player Selection</div>
-            <label class="checkbox-control">
-                <input type="checkbox" bind:checked={zoomSelectedPlayer} />
-                <span>Zoom Selected Player</span>
-            </label>
             <label class="sight-control">
                 <span>Zoom</span>
                 <input
@@ -2318,7 +2340,6 @@ onMount(() => {
                     max="500"
                     step="25"
                     bind:value={selectedPlayerZoomPercent}
-                    disabled={!zoomSelectedPlayer}
                 />
                 <span class="sight-control-value">{Math.round(selectedPlayerZoomPercent)}%</span>
             </label>
@@ -2378,6 +2399,7 @@ onMount(() => {
         </section>
         <section class="control-section">
             <div class="controls-heading">Drawing</div>
+            <p class="drawing-hint">Hold Shift and drag with the left mouse button to draw.</p>
             <label class="drawing-color-control">
                 <span>Color</span>
                 <input type="color" bind:value={drawingColor} />
@@ -2396,14 +2418,6 @@ onMount(() => {
             <div class="drawing-actions">
                 <button type="button" class="panel-button" onclick={clearAllDrawings}>
                     Clear all Drawings
-                </button>
-                <button
-                    type="button"
-                    class="panel-button drawing-toggle"
-                    class:active={isDrawingEnabled}
-                    onclick={toggleDrawingMode}
-                >
-                    {isDrawingEnabled ? 'Stop Drawing' : 'Start Drawing'}
                 </button>
             </div>
         </section>

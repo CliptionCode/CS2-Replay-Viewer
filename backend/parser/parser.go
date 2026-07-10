@@ -11,6 +11,10 @@ import (
 	"github.com/markus-wa/demoinfocs-golang/v5/pkg/demoinfocs/msg"
 )
 
+const (
+	smokeDurationTicks = 18 * 64
+)
+
 type ReplayData struct {
 	Header       DemoHeader
 	Players      []PlayerInfo
@@ -182,9 +186,6 @@ func ParseFile(path string) (*ReplayData, error) {
 	})
 	p.RegisterEventHandler(func(e events.SmokeStart) {
 		recorder.recordSmokeStart(e, p)
-	})
-	p.RegisterEventHandler(func(e events.SmokeExpired) {
-		recorder.recordSmokeExpired(p)
 	})
 	p.RegisterEventHandler(func(e events.FlashExplode) {
 		recorder.recordFlashExplode(e, p)
@@ -583,7 +584,7 @@ func (r *frameRecorder) recordSmokeStart(e events.SmokeStart, p demoinfocs.Parse
 		Tick:           tick,
 		NadeType:       "smoke",
 		DetonationTick: tick,
-		FadeTick:       tick + 1152,
+		FadeTick:       tick + smokeDurationTicks,
 		EndX:           float32(e.Position.X),
 		EndY:           float32(e.Position.Y),
 		EndZ:           float32(e.Position.Z),
@@ -593,16 +594,6 @@ func (r *frameRecorder) recordSmokeStart(e events.SmokeStart, p demoinfocs.Parse
 		nade.ThrowerSteamID = e.Thrower.SteamID64
 	}
 	r.nades = append(r.nades, nade)
-}
-
-func (r *frameRecorder) recordSmokeExpired(p demoinfocs.Parser) {
-	tick := p.CurrentFrame()
-	for i := len(r.nades) - 1; i >= 0; i-- {
-		if r.nades[i].NadeType == "smoke" && tick-r.nades[i].FadeTick < 64 {
-			r.nades[i].FadeTick = tick
-			break
-		}
-	}
 }
 
 func (r *frameRecorder) recordFlashExplode(e events.FlashExplode, p demoinfocs.Parser) {
@@ -980,7 +971,7 @@ func durationToTicks(duration time.Duration, p demoinfocs.Parser) int {
 func getNadeFadeTick(nadeType string, detTick int) int {
 	switch nadeType {
 	case "smoke":
-		return detTick + 1152
+		return detTick + smokeDurationTicks
 	case "hegrenade":
 		return detTick + 5
 	case "flashbang":

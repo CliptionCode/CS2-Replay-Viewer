@@ -2,7 +2,7 @@
 import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
 
-export let isDrawingEnabled = false;
+export let isShiftDrawingActive = false;
 export let drawingColor = '#22c55e';
 export let strokeWidth = 4;
 export let clearSignal = 0;
@@ -22,6 +22,7 @@ let canvas: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
 let strokes: DrawingStroke[] = [];
 let activeStroke: DrawingStroke | null = null;
+let activePointerId: number | null = null;
 let lastClearSignal = clearSignal;
 let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
 
@@ -100,13 +101,14 @@ function getCanvasPoint(event: PointerEvent): DrawingPoint | null {
 }
 
 function startStroke(event: PointerEvent): void {
-    if (!isDrawingEnabled || event.button !== 0) return;
+    if (!isShiftDrawingActive || !event.shiftKey || event.button !== 0) return;
 
     const point = getCanvasPoint(event);
     if (!point || !canvas) return;
 
     event.preventDefault();
     canvas.setPointerCapture(event.pointerId);
+    activePointerId = event.pointerId;
     activeStroke = {
         color: drawingColor,
         width: clampStrokeWidth(strokeWidth),
@@ -132,6 +134,7 @@ function finishStroke(event: PointerEvent): void {
 
     event.preventDefault();
     activeStroke = null;
+    activePointerId = null;
     if (canvas?.hasPointerCapture(event.pointerId)) {
         canvas.releasePointerCapture(event.pointerId);
     }
@@ -139,6 +142,7 @@ function finishStroke(event: PointerEvent): void {
 
 function clearDrawings(): void {
     activeStroke = null;
+    activePointerId = null;
     strokes = [];
     render();
 }
@@ -165,9 +169,13 @@ $: {
 }
 
 $: {
-    void isDrawingEnabled;
-    if (!isDrawingEnabled) {
+    void isShiftDrawingActive;
+    if (!isShiftDrawingActive) {
         activeStroke = null;
+        if (canvas && activePointerId !== null && canvas.hasPointerCapture(activePointerId)) {
+            canvas.releasePointerCapture(activePointerId);
+        }
+        activePointerId = null;
     }
 }
 
@@ -206,7 +214,7 @@ onDestroy(() => {
 <canvas
     bind:this={canvas}
     class="drawing-layer"
-    class:active={isDrawingEnabled}
+    class:active={isShiftDrawingActive}
     onpointerdown={startStroke}
     onpointermove={extendStroke}
     onpointerup={finishStroke}

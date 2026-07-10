@@ -2,6 +2,7 @@
 import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
 import { worldToCanvas } from '$lib/canvas/transforms';
+import { equipmentIconPath } from '$lib/equipment-icons';
 import { getPlaybackTick, subscribePlaybackTick } from '$lib/playback-state';
 import type { ReplayData, NadeEvent, NadeTrajectoryPoint, MapData as MapMetadata } from '$lib/types/replay/replay_pb';
 
@@ -20,18 +21,66 @@ const MAX_TRUSTED_RAW_FLIGHT_TICKS = 256;
 const MAX_TRUSTED_SMOKE_RAW_FLIGHT_TICKS = 640;
 const MATCH_DISTANCE_UNITS = 240;
 const MATCH_TICK_WINDOW = 768;
-const SMOKE_MATCH_TICK_WINDOW = 1536;
+const SMOKE_MATCH_TICK_TOLERANCE = 384;
+const DECOY_MATCH_TICK_WINDOW = 1536;
 const DECOY_COLOR = '#92400e';
 const DECOY_EFFECT_TICKS = 960;
 const DECOY_EXPIRE_INFERENCE_TICKS = 480;
 const STATIONARY_ENDPOINT_DISTANCE_SQUARED = 16;
 const TICKS_PER_SECOND = 64;
+const SMOKE_EFFECT_TICKS = 18 * TICKS_PER_SECOND;
 const SMOKE_COUNTDOWN_COLOR = '#86efac';
 const FIRE_COUNTDOWN_COLOR = '#9ca3af';
+const BASE_EFFECT_ICON_SIZE = 28;
+const SMOKE_EFFECT_ICON_SIZE = BASE_EFFECT_ICON_SIZE * 2;
+const FIRE_EFFECT_ICON_SIZE = BASE_EFFECT_ICON_SIZE * 1.5;
+const FIRE_EFFECT_ICON_OPACITY = 0.5;
+const SMOKE_EFFECT_ICON_PATH = equipmentIconPath('map_smoke.svg');
+const FIRE_EFFECT_ICON_PATH = equipmentIconPath('inferno.svg');
 
 type NadePathPoint = Pick<NadeTrajectoryPoint, 'tick' | 'x' | 'y' | 'z'>;
 
 let matchingEffectCache = new WeakMap<NadeEvent, NadeEvent | null>();
+const effectIconCache = new Map<string, HTMLImageElement>();
+
+function getEffectIconPath(nadeType: string): string | null {
+    if (nadeType === 'smoke') return SMOKE_EFFECT_ICON_PATH;
+    if (nadeType === 'molotov' || nadeType === 'incendiary') return FIRE_EFFECT_ICON_PATH;
+    return null;
+}
+
+function getEffectIcon(path: string): HTMLImageElement | null {
+    const cached = effectIconCache.get(path);
+    if (cached) return cached;
+    if (!browser) return null;
+
+    const image = new Image();
+    image.decoding = 'async';
+    image.onload = scheduleRender;
+    image.onerror = scheduleRender;
+    image.src = path;
+    effectIconCache.set(path, image);
+    return image;
+}
+
+function drawEffectIcon(context: CanvasRenderingContext2D, nadeType: string, x: number, y: number): void {
+    const path = getEffectIconPath(nadeType);
+    if (!path) return;
+
+    const image = getEffectIcon(path);
+    if (!image?.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
+
+    const iconSize = nadeType === 'smoke' ? SMOKE_EFFECT_ICON_SIZE : FIRE_EFFECT_ICON_SIZE;
+    const scale = Math.min(iconSize / image.naturalWidth, iconSize / image.naturalHeight);
+    const width = image.naturalWidth * scale;
+    const height = image.naturalHeight * scale;
+    context.save();
+    if (nadeType === 'molotov' || nadeType === 'incendiary') {
+        context.globalAlpha *= FIRE_EFFECT_ICON_OPACITY;
+    }
+    context.drawImage(image, x - width / 2, y - height / 2, width, height);
+    context.restore();
+}
 
 function getNadeColor(nadeType: string): string {
     if (nadeType === 'smoke') return '#9ca3af';
@@ -89,6 +138,9 @@ function getCanonicalDetonationTick(nade: NadeEvent): number {
 
 function getCanonicalFadeTick(nade: NadeEvent): number {
     const effect = getMatchingEffectEvent(nade);
+    if (nade.nadeType === 'smoke') {
+        return getDetonationTick(effect ?? nade) + SMOKE_EFFECT_TICKS;
+    }
     if (effect) return effect.fadeTick || nade.fadeTick;
     if (isDecoyNade(nade)) return getDecoyExpiryTick(nade);
     return nade.fadeTick;
@@ -364,6 +416,8 @@ function drawNadeEffect(
     ctx.arc(pos.x, pos.y, getNadeEffectRadius(nade.nadeType), 0, Math.PI * 2);
     ctx.fill();
 
+    drawEffectIcon(ctx, nade.nadeType, pos.x, pos.y);
+
     const countdownColor = getNadeCountdownColor(nade.nadeType);
     if (countdownColor) {
         ctx.textAlign = 'center';
@@ -516,7 +570,11 @@ function getMatchingEffectEvent(nade: NadeEvent): NadeEvent | null {
             continue;
         }
 
-        const tickDelta = Math.abs(getDetonationTick(candidate) - getDetonationTick(nade));
+        const recordedTickDelta = getDetonationTick(nade) - getDetonationTick(candidate);
+        const tickDelta = nade.nadeType === 'smoke'
+            ? Math.abs(recordedTickDelta - SMOKE_EFFECT_TICKS)
+            : Math.abs(recordedTickDelta);
+        if (nade.nadeType === 'smoke' && recordedTickDelta < 0) continue;
         if (tickDelta > getMatchTickWindow(nade.nadeType)) continue;
 
         const trajectoryEnd = getTrajectoryEndPoint(nade);
@@ -560,7 +618,9 @@ function isMatchingNadeType(a: string, b: string): boolean {
 }
 
 function getMatchTickWindow(nadeType: string): number {
-    return nadeType === 'smoke' || nadeType === 'decoy' ? SMOKE_MATCH_TICK_WINDOW : MATCH_TICK_WINDOW;
+    if (nadeType === 'smoke') return SMOKE_MATCH_TICK_TOLERANCE;
+    if (nadeType === 'decoy') return DECOY_MATCH_TICK_WINDOW;
+    return MATCH_TICK_WINDOW;
 }
 
 function getNadeTimelineStartTick(nade: NadeEvent): number {

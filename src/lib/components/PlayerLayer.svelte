@@ -9,13 +9,13 @@ import type { FlashEvent, NoiseEvent, ReplayData, PlayerFrame, MapData as MapMet
 export let replayData: ReplayData | null = null;
 export let mapMetadata: MapMetadata;
 export let isPlaying: boolean = false;
-export let sightConeLength: number = 34;
-export let sightConeHalfAngle: number = 0.32;
+export let sightConeLength: number = 75;
+export let sightConeHalfAngle: number = 0.68;
 export let showSightCone = true;
 export let sightConeForSelectedPlayer = false;
 export let showLineOfSight = false;
-export let lineOfSightLength = 160;
-export let lineOfSightWidth = 2;
+export let lineOfSightLength = 300;
+export let lineOfSightWidth = 1.6;
 export let selectedPlayerSteamId: bigint | null = null;
 export let showNoiseCircle = false;
 export let noiseForSelectedPlayer = false;
@@ -28,6 +28,8 @@ export let enabledNoiseSources: Record<string, boolean> = {
 
 let container: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
+let sightCanvas: HTMLCanvasElement | null = null;
+let sightCtx: CanvasRenderingContext2D | null = null;
 
 let playerFrames = new Map<string, PlayerFrame>();
 let trails: Map<string, PlayerFrame[]> = new Map();
@@ -47,6 +49,8 @@ const TEAM_CT = 3;
 const HIGHLIGHT_COLOR = '#22c55e';
 const RUNNING_NOISE_HOLD_TICKS = 28;
 const RUNNING_NOISE_FADE_TICKS = 14;
+const MAX_FULL_FLASH_DURATION_SECONDS = 5;
+const MIN_FLASH_ALPHA = 0.06;
 
 function lerp(start: number, end: number, alpha: number): number {
     return start + (end - start) * alpha;
@@ -418,7 +422,8 @@ function drawFlashCircle(
 
     const totalTicks = Math.max(1, flash.endTick - flash.tick);
     const remainingRatio = Math.max(0, Math.min(1, (flash.endTick - tick) / totalTicks));
-    const alpha = 0.6 + 0.4 * remainingRatio;
+    const flashIntensity = Math.max(0, Math.min(1, flash.durationSeconds / MAX_FULL_FLASH_DURATION_SECONDS));
+    const alpha = Math.max(MIN_FLASH_ALPHA, flashIntensity * remainingRatio);
     if (alpha <= 0) return;
 
     ctx.save();
@@ -574,15 +579,6 @@ function drawPlayer(
     const isSelected = isSelectedPlayer(steamId);
     const playerColor = isSelected && isAlive ? HIGHLIGHT_COLOR : teamColor;
 
-    if (isAlive) {
-        if (shouldDrawSightCone(steamId)) {
-            drawPlayerSightCone(ctx, frame, pos, mapMetadata, canvasSize, playerColor);
-        }
-        if (showLineOfSight) {
-            drawPlayerLineOfSight(ctx, frame, pos, mapMetadata, canvasSize, playerColor);
-        }
-    }
-
     drawFlashCircle(ctx, getActiveFlash(steamId, tick), tick, pos);
     
     ctx.beginPath();
@@ -624,9 +620,37 @@ function drawPlayer(
         }
     }
     
-    const healthColor = frame.health && frame.health < 50 ? '#ef4444' : '#4ade80';
+    const health = isAlive ? Math.max(0, Math.min(100, frame.health ?? 0)) : 0;
+    const healthColor = health < 50 ? '#ef4444' : '#4ade80';
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+    ctx.fillRect(pos.x - 10, pos.y + 8, 20, 3);
     ctx.fillStyle = healthColor;
-    ctx.fillRect(pos.x - 10, pos.y + 8, 20 * (frame.health || 100) / 100, 3);
+    ctx.fillRect(pos.x - 10, pos.y + 8, 20 * health / 100, 3);
+}
+
+function drawPlayerSightOverlay(
+    context: CanvasRenderingContext2D,
+    frame: PlayerFrame,
+    steamId: string,
+    mapMetadata: MapMetadata,
+    canvasSize: { width: number; height: number },
+    tick: number
+): void {
+    if (!(frame.isAlive ?? true)) return;
+
+    const team = getPlayerTeam(steamId, tick);
+    if (team !== TEAM_T && team !== TEAM_CT) return;
+
+    const pos = worldToCanvas(frame.x, frame.y, mapMetadata, canvasSize);
+    const teamColor = team === TEAM_T ? '#f97316' : '#3b82f6';
+    const playerColor = isSelectedPlayer(steamId) ? HIGHLIGHT_COLOR : teamColor;
+
+    if (shouldDrawSightCone(steamId)) {
+        drawPlayerSightCone(context, frame, pos, mapMetadata, canvasSize, playerColor);
+    }
+    if (showLineOfSight) {
+        drawPlayerLineOfSight(context, frame, pos, mapMetadata, canvasSize, playerColor);
+    }
 }
 
 function drawPlayerTrail(
@@ -699,6 +723,7 @@ function drawKillMarkers(
 }
 
 let rafId: number | null = null;
+let sightRafId: number | null = null;
 let renderLoopId: number | null = null;
 
 function scheduleRender() {
@@ -706,6 +731,14 @@ function scheduleRender() {
     rafId = requestAnimationFrame(() => {
         rafId = null;
         render();
+    });
+}
+
+function scheduleSightRender() {
+    if (sightRafId !== null) return;
+    sightRafId = requestAnimationFrame(() => {
+        sightRafId = null;
+        renderSightOnly();
     });
 }
 
@@ -726,26 +759,50 @@ function stopRenderLoop() {
     renderLoopId = null;
 }
 
-function resizeCanvas(container: HTMLCanvasElement): { width: number; height: number } {
-    const rect = container.getBoundingClientRect();
+function resizeCanvas(canvas: HTMLCanvasElement, context: CanvasRenderingContext2D | null): void {
+    const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
 
     const width = Math.floor(rect.width * dpr);
     const height = Math.floor(rect.height * dpr);
 
-    if (ctx) {
-        ctx.canvas.width = width;
-        ctx.canvas.height = height;
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (context) {
+        context.canvas.width = width;
+        context.canvas.height = height;
+        context.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
+}
 
-    return { width, height };
+function renderSightLayer(tick: number, canvasSize: { width: number; height: number }): void {
+    if (!sightCtx) return;
+
+    sightCtx.clearRect(0, 0, canvasSize.width, canvasSize.height);
+    sightCtx.save();
+    for (const [steamId, frame] of playerFrames) {
+        drawPlayerSightOverlay(sightCtx, frame, steamId, mapMetadata, canvasSize, tick);
+    }
+    sightCtx.restore();
+}
+
+function renderSightOnly(): void {
+    if (!browser || !sightCtx || !sightCanvas || !replayData) return;
+
+    const playbackTick = getPlaybackTick();
+    updatePlayerFrames(playbackTick);
+    renderSightLayer(Math.floor(playbackTick), {
+        width: sightCanvas.clientWidth,
+        height: sightCanvas.clientHeight,
+    });
 }
 
 function render() {
     if (!browser || !ctx || !container || !replayData) return;
 
     try {
+        if (sightRafId !== null) {
+            cancelAnimationFrame(sightRafId);
+            sightRafId = null;
+        }
         const playbackTick = getPlaybackTick();
         const tick = Math.floor(playbackTick);
         updatePlayerFrames(playbackTick);
@@ -773,6 +830,7 @@ function render() {
             drawPlayer(ctx, frame, steamId, mapMetadata, canvasSize, tick);
         }
         ctx.restore();
+        renderSightLayer(tick, canvasSize);
     } catch (error) {
         console.error('Error rendering player layer:', error);
     }
@@ -783,7 +841,11 @@ onMount(() => {
 
     if (container) {
         ctx = container.getContext('2d')!;
-        resizeCanvas(container);
+        resizeCanvas(container, ctx);
+    }
+    if (sightCanvas) {
+        sightCtx = sightCanvas.getContext('2d')!;
+        resizeCanvas(sightCanvas, sightCtx);
     }
 
     try {
@@ -829,7 +891,14 @@ $: {
 }
 
 $: {
-    void sightConeLength, sightConeHalfAngle, showSightCone, sightConeForSelectedPlayer, showLineOfSight, lineOfSightLength, lineOfSightWidth, selectedPlayerSteamId, showNoiseCircle, noiseForSelectedPlayer, enabledNoiseSources;
+    void sightConeLength, sightConeHalfAngle, showSightCone, sightConeForSelectedPlayer, showLineOfSight, lineOfSightLength, lineOfSightWidth;
+    if (browser && sightCtx) {
+        scheduleSightRender();
+    }
+}
+
+$: {
+    void selectedPlayerSteamId, showNoiseCircle, noiseForSelectedPlayer, enabledNoiseSources;
     if (browser && ctx) {
         scheduleRender();
     }
@@ -840,9 +909,12 @@ function handleResize() {
     clearTimeout(resizeTimeout);
     resizeTimeout = setTimeout(() => {
         if (container) {
-            resizeCanvas(container);
-            render();
+            resizeCanvas(container, ctx);
         }
+        if (sightCanvas) {
+            resizeCanvas(sightCanvas, sightCtx);
+        }
+        render();
     }, 150);
 }
 
@@ -859,6 +931,7 @@ onDestroy(() => {
     }
     if (resizeTimeout) clearTimeout(resizeTimeout);
     if (rafId !== null) cancelAnimationFrame(rafId);
+    if (sightRafId !== null) cancelAnimationFrame(sightRafId);
     stopRenderLoop();
     unsubscribeTick?.();
 });
@@ -884,10 +957,20 @@ onDestroy(() => {
     image-rendering: -webkit-crisp-edges;
     image-rendering: -moz-crisp-edges;
 }
+
+.sight-layer {
+    pointer-events: none;
+}
 </style>
 
 <canvas 
     bind:this={container}
     class="player-layer canvas"
+    style="width: 100%; height: 100%;"
+></canvas>
+
+<canvas
+    bind:this={sightCanvas}
+    class="player-layer sight-layer canvas"
     style="width: 100%; height: 100%;"
 ></canvas>

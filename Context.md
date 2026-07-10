@@ -2,7 +2,7 @@
 
 > Supplementary information for an AI implementing this project. Contains background knowledge, gotchas, library deep-dives, and reference material not covered in the implementation plan.
 
-> **Application version:** `0.1.3`. This version includes the icon-based kill feed and timeline markers, improved marker packing and highlighting, and dynamic timeline sizing. Keep `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` on the same version when releasing later changes.
+> **Application version:** `0.1.4`. This version includes the icon-based event UI, improved marker packing, Shift-held drawing, automatic player-focus zoom, optimized sight controls, utility effect-center icons, and corrected independent 18-second smoke lifecycles. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application package entry in `src-tauri/Cargo.lock` on the same version when releasing later changes.
 
 > **IMPORTANT:** Whenever writing or modifying **Svelte** code, always load the `svelte-core-bestpractices` and `svelte-code-writer` skills first. Whenever writing or modifying **Rust** code, always load the `rust-best-practices` skill first.
 >
@@ -212,13 +212,15 @@ Approximate durations (at 64 tick/sec = 1 tick = 15.625ms):
 
 | Nade | Flight time (max) | Effect duration | Duration in ticks | Notes |
 |---|---|---|---|---|
-| Smoke | ~2-3 seconds | ~15-17 seconds | 1152 | Expands 3s, static 12s, fades 2s |
+| Smoke | ~2-3 seconds | 18 seconds | 1152 | Each deployed smoke has its own full 18-second lifecycle |
 | HE Grenade | ~2-3 seconds | Instant | 5 | Blast radius ~250 units |
 | Flashbang | ~2-3 seconds | ~2-3 seconds flash effect | 3 | Affects based on facing/range |
 | Molotov/Incendiary | ~1-2 seconds | ~7 seconds | 448 | Spreads on impact |
 | Decoy | ~2-3 seconds | ~15 seconds | 960 | Mimics gunfire sounds |
 
 **Used in:** `recordSmokeStart`, `recordFlashExplode`, `recordHeExplode`, and `recordNadeDestroyed` (backend `parser.go`). The tick durations above are added to `DetonationTick` to compute `FadeTick`.
+
+Every `SmokeStart` record owns an immutable 18-second lifetime (`DetonationTick + 1152`). `SmokeExpired` events do not mutate smoke fade ticks, so one smoke expiring can never shorten another smoke deployed by the same player. `NadeLayer.svelte` independently enforces the same canonical fade calculation, which also repairs countdowns from older parser output containing an incorrect early `FadeTick`. Smoke trajectory matching scores candidates against the expected 18-second start-to-destruction offset instead of preferring whichever smoke event happens to have the nearest raw tick.
 
 Your nade effect rendering: **Binary** — circles visible for active smokes, HEs, flashes, and fire nades (between detonation tick and fade tick). Decoys are the exception: they render only a brown endpoint dot with a `Decoy` label while active. Expansion/fade ignored for v1.
 
@@ -232,7 +234,7 @@ Nade trajectories are drawn progressively in `NadeLayer.svelte`. The full trajec
 - Before detonation, only the recent rolling path window is drawn; older dashed segments disappear.
 - After detonation, the remaining dashed trail fades out within about 0.6 seconds while the active effect zone is drawn between `DetonationTick` and `FadeTick`. Decoys draw only their active labeled endpoint dot, with no surrounding effect zone.
 - Nearby no-trajectory pop/explosion events are matched against trajectory-backed nades and used as the canonical `DetonationTick`, `FadeTick`, and endpoint.
-- Smoke matching uses a wider `SMOKE_MATCH_TICK_WINDOW = 1536` because trajectory-backed smoke records can arrive when the smoke entity is removed, much later than `SmokeStart`.
+- Smoke matching expects a trajectory-backed destruction record approximately `SMOKE_EFFECT_TICKS = 1152` ticks after its `SmokeStart` event and allows a `SMOKE_MATCH_TICK_TOLERANCE = 384` deviation around that expected offset. This prevents a later smoke from being preferred merely because its start tick is numerically closer to an older smoke's destruction tick.
 - Decoy matching uses the wider smoke-style tick window because the lifecycle event starts when the decoy begins and the projectile-destroyed trajectory can arrive when it expires. `DecoyStart`/`DecoyExpired` define the active brown endpoint dot; older parsed data can infer the landing tick from the stationary end of the trajectory.
 - Trajectory-backed duplicate effect zones are skipped when a matched pop/explosion event exists, preventing HE explosions from appearing once at the event tick and again later from the projectile-destroyed record.
 - Event-only nades without a usable start position do not draw a fake origin-to-end path.
@@ -487,20 +489,22 @@ If these questions arise during implementation, escalate to the human:
 
 ### 11.1 Data Flow
 
-`.dem` file → Go sidecar parses it → base64 stdout → Rust Tauri command decodes and writes temp file → Frontend reads file → deserializes protobuf → 4 Canvas 2D layers render via reactive Svelte blocks
+`.dem` file → Go sidecar parses it → base64 stdout → Rust Tauri command decodes and writes temp file → Frontend reads file → deserializes protobuf → layered Canvas 2D renderers display the replay
 
 ### 11.2 Layered Canvas Architecture
 
-The UI uses 4 stacked `<canvas>` elements, each rendered by its own Svelte component:
+The active UI uses stacked `<canvas>` elements organized into logical layers. `PlayerLayer.svelte` owns separate base and sight canvases so sight-control changes remain cheap:
 
 | Layer | Component | Responsibility |
 |---|---|---|
 | Map | `MapLayer.svelte` | Loads radar PNG, draws background/grid, applies `worldToCanvas()` transform |
-| Player | `PlayerLayer.svelte` | Draws player dots + direction indicators, weapon labels, health bars, trails |
+| Player base | `PlayerLayer.svelte` | Draws player dots, weapon labels, health bars, trails, flash indicators, noise, and bomb state |
+| Player sight | `PlayerLayer.svelte` | Draws sight cones and line-of-sight rays independently from the heavier player base |
 | Nade | `NadeLayer.svelte` | Draws nade trajectories (arcs), active effect zones for damaging/vision-blocking nades, and labeled active decoy endpoint dots, color-coded by type |
 | Kill | `KillLayer.svelte` | Draws death markers (X on victim position) and the clickable, icon-based kill feed overlay |
+| Drawing | `DrawingLayer.svelte` | Stores and draws Shift-activated freehand tactical annotations |
 
-*Note: `ReplayCanvas.svelte` and `renderer.ts` are legacy from an earlier single-canvas approach. The active rendering is done by the 4 individual layer components.*
+*Note: `ReplayCanvas.svelte` and `renderer.ts` are legacy from an earlier single-canvas approach. Active rendering is done by the dedicated layer components above.*
 
 ### 11.2.1 Round-Specific Player Trails
 
@@ -518,7 +522,7 @@ Nade effect zones and projectile indicators were reduced to **1/4 of original si
 
 Smoke effect-zone fill opacity is **45%** (was 35%), making it 10 percentage points less transparent.
 
-Active smoke and Molotov/incendiary effect zones display a centered whole-second countdown in `NadeLayer.svelte`. The text is derived from the canonical fade tick at 64 ticks per second and is shown as `XXs` until the effect is removed. Smoke countdown labels are light green (`#86efac`); Molotov/incendiary countdown labels are gray (`#9ca3af`). Both labels use a dark outline to remain legible over the effect fill and radar background.
+Active smoke and Molotov/incendiary effect zones display a centered SVG plus a whole-second countdown in `NadeLayer.svelte`. Smoke uses `map_smoke.svg` at 56px (twice the original 28px); both Molotov and incendiary use `inferno.svg` at 42px (approximately 50% larger) and 50% opacity. The text is derived from the canonical fade tick at 64 ticks per second and is drawn over the icon as `XXs` until the effect is removed. Smoke countdown labels are light green (`#86efac`); Molotov/incendiary countdown labels are gray (`#9ca3af`). Both labels use a dark outline to remain legible over the icon, effect fill, and radar background. SVG images are cached after browser decoding and trigger a redraw when ready.
 
 ### 11.2.3 Kill Feed Position
 
@@ -569,7 +573,7 @@ For maps with lower radar variants (`de_nuke`, `de_train`, `de_vertigo`), the bo
 
 ### 11.6.1 Equipment Icon Assets
 
-CS2 equipment SVGs are stored in `static/equipment-icons` and are used by the kill feed and timeline markers. They come from the `cs2/panorama/images/icons/equipment` directory of [Juknum/counter-strike-icons](https://github.com/Juknum/counter-strike-icons/tree/main/cs2/panorama/images/icons/equipment). The empty source files `world.svg` and `worldent.svg` are intentionally not bundled. Shared asset paths and the demoinfocs weapon-name mapping live in `src/lib/equipment-icons.ts`.
+CS2 equipment SVGs are stored in `static/equipment-icons` and are used by the kill feed, timeline markers, and utility effect centers. They come from the `cs2/panorama/images/icons/equipment` directory of [Juknum/counter-strike-icons](https://github.com/Juknum/counter-strike-icons/tree/main/cs2/panorama/images/icons/equipment). The empty source files `world.svg` and `worldent.svg` are intentionally not bundled. Shared asset paths and the demoinfocs weapon-name mapping live in `src/lib/equipment-icons.ts`.
 
 ### 11.7 Playback Speed Controls
 
@@ -614,9 +618,9 @@ Kill feed player names are color-coded by team at that round: CT names are blue 
 
 `PlayerLayer.svelte` only indexes and renders Steam IDs present in `ReplayData.players` whose stored team is T or CT. Observer/admin/spectator frame samples are ignored, so only real player dots are drawn.
 
-The player sight cone defaults remain `34` canvas pixels long and `0.32` radians wide. `+page.svelte` exposes a compact top-left `Sight` panel below the time display. It includes `Show Sight Cone` (checked by default), `Show for selected Player` (unchecked by default), a width slider, a sight cone length slider with max `240`, a `Show Line of Sight` checkbox, a separate `LOS Len` slider with range `18` to `800`, and a `LOS Width` slider directly below it. Sight cone controls are independent from line-of-sight controls. `LOS Len` defaults to `300`; `LOS Width` defaults to `2.0px` (the former fixed line width), ranges from `0.3` to `3.0`, and steps by `0.1`. The panel scrolls vertically within the viewport so it does not collide with the bottom toolbar.
+The player sight cone defaults to `75` canvas pixels long and `0.68` radians wide. `+page.svelte` exposes a compact top-left `Sight` panel below the time display. It includes `Show Sight Cone` (checked by default), `Show for selected Player` (unchecked by default), a width slider, a sight cone length slider with max `240`, and a `Show Line of Sight` checkbox. Line-of-sight controls follow the same order as sight-cone controls: `LOS Width` first, then `LOS Len`. `LOS Width` defaults to `1.6px`, ranges from `0.3` to `3.0`, and steps by `0.1`; `LOS Len` defaults to `300` and ranges from `18` to `800`. The panel scrolls vertically within the viewport so it does not collide with the bottom toolbar.
 
-The `Player Selection` section below the sight controls contains `Zoom Selected Player` plus a zoom percentage slider capped at `500%`. This is a visual viewport transform centered on the selected player's current world position. The page writes `--replay-viewport-transform` directly on the replay container from the playback tick, and map/player/nade/death-marker canvases inherit that CSS transform. Layer drawing, trajectories, map calibration, and world coordinate transforms stay unchanged. If no player is selected, this selection-follow zoom has no effect.
+The `Player Selection` section below the sight controls contains only a zoom percentage slider capped at `500%`; there is no enable checkbox. Clicking a player dot, roster name, kill-feed row, or player-backed timeline marker automatically selects and focuses that player at the configured zoom. A new selection first resets independent mouse-wheel zoom and pan, then applies the selected-player transform, guaranteeing that the player dot is centered instead of inheriting a stale mouse translation. The page writes `--replay-viewport-transform` directly on the replay container from the playback tick, and map/player/nade/death-marker/drawing canvases inherit that CSS transform. Layer drawing, trajectories, map calibration, and world coordinate transforms stay unchanged. Clearing the selection returns to the unselected view.
 
 The replay viewport also supports independent mouse-wheel zoom over the canvas. It starts at the unzoomed view (`0%` additional zoom / `1×` scale), is capped at `500%` (`5×` scale), and keeps the point under the mouse fixed while zooming. While this mouse zoom is active, holding the left mouse button and dragging pans the viewport. Panning is constrained to the fitted radar rectangle: at low zoom it stays centered, and once the map is larger than the viewport, its edges can extend up to 10% of the scaled map size beyond the viewport for extra room. Its transform is composed with the optional selected-player camera, so it does not mutate any canvas data or rendering coordinates; it only changes the viewport. Loading a different replay resets this mouse viewport zoom.
 
@@ -624,13 +628,15 @@ The `Noise` section below `Player Selection` contains `Show Noice Circle` (unche
 
 The `Timeline` section below `Noise` controls timeline marker visibility only; it does not change utility rendering on the map. `Show Kills` and `Show Deaths` are checked by default and control the domination/death icon markers. `Show all Utilities` is unchecked by default. `Show Smokes`, `Show Flashes`, `Show HE Nades`, `Show Molotovs`, and `Show Decoys` are checked by default. When `Show all Utilities` is off, kill/death and utility markers are limited to the selected player and respect their filters. When `Show all Utilities` is on, the timeline shows all checked utility types plus all checked kill/death markers that happened during the current round. Bomb plant, explosion, defuse, and time-expiry markers remain visible regardless of filter settings.
 
-The `Drawing` section below `Timeline` controls a separate freehand drawing overlay. It has a color picker, a `Stroke Width` slider from 1 to 10, a `Clear all Drawings` button, and a `Start Drawing` / `Stop Drawing` toggle. `DrawingLayer.svelte` owns the drawing canvas and stroke storage, sits above replay canvas overlays but below the UI panels, and only captures pointer input while drawing mode is active. It inherits the replay viewport transform so drawings stay aligned with the radar when selected-player zoom is active. Clearing drawings only clears this layer and does not affect map, player, nade, kill feed, or timeline rendering.
+The `Drawing` section below `Timeline` controls a separate freehand drawing overlay. It has a color picker, a `Stroke Width` slider from 1 to 10, and a `Clear all Drawings` button; the old `Start Drawing` / `Stop Drawing` toggle is removed. Hold <kbd>Shift</kbd> and drag with the left mouse button to draw. Releasing Shift immediately disables pointer capture and drawing so normal player selection and mouse-zoom panning resume. `DrawingLayer.svelte` owns the drawing canvas and stroke storage, sits above replay canvas overlays but below the UI panels, and only captures pointer input while Shift is held. It inherits the replay viewport transform so drawings stay aligned with the radar when selected-player zoom is active. Clearing drawings only clears this layer and does not affect map, player, nade, kill feed, or timeline rendering.
 
 The top-right roster panel shows two current-round side columns, CT and T, with alive/total counts in the headers. It uses the same stored-team side-switch logic as the canvas renderers, so the columns flip after halftime and every overtime half. Player names are side-colored while alive and greyed out when dead at the current tick. Hovered or keyboard-focused roster buttons use the same white outline, brightness increase, player-color glow, and scale treatment as timeline markers.
 
 The top-center match score label is formatted as `Team <playerName> (XX) vs Team <playerName> (XX)`. The representative names are selected from the two sides in the first visible round and remain stable after side switches. Round wins are counted by mapping each completed round winner back to that first-round team identity, so users do not have to manually add T-side wins before halftime and CT-side wins after halftime. Each `Team <playerName> (XX)` segment is colored by that team's current side in the shown round: blue for CT and orange for T. Its top position follows the computed timeline height, preventing vertically stacked event markers from overlapping the score.
 
-Clicking a player name or a player dot selects that player; clicking the currently selected player again clears the selection. Player-dot hit testing uses the current playback tick and the inverse viewport transform, so it remains available while playback is running and while either viewport zoom is active. Kill-feed hitboxes continue to take precedence over dot selection. Selected alive players use green (`#22c55e`) for the dot, sight cone, and line-of-sight ray; selected dead players keep the dead grey fill but receive a green selection ring.
+Clicking a player name or a player dot selects and automatically centers that player; clicking the currently selected player again clears the selection. Player-dot hit testing uses the current playback tick and the inverse viewport transform, so it remains available while playback is running and while either viewport zoom is active. Kill-feed hitboxes continue to take precedence over dot selection. Selected alive players use green (`#22c55e`) for the dot, sight cone, and line-of-sight ray; selected dead players keep the dead grey fill but receive a green selection ring. Health bars now use an explicit clamped health value; dead players always render at `0` health rather than triggering the former `frame.health || 100` fallback and appearing full.
+
+Sight-cone and line-of-sight geometry render on a dedicated transparent canvas inside `PlayerLayer.svelte`. Slider changes schedule only this lightweight overlay instead of redrawing trails, kill markers, noise, bomb state, labels, health bars, and player dots. Playback still updates the base player canvas and sight overlay from the same interpolated frame lookup, preserving alignment while removing the heavy slider-drag lag.
 
 Selecting a player shows round event markers under the timeline for that player's enabled kills, deaths, and grenade throws. Markers use CSS-masked SVGs from `static/equipment-icons`, allowing exact side coloring: T events are orange (`#f97316`) and CT events are blue (`#3b82f6`). Kill markers use the general `domination.svg` icon. Normal deaths use `icon-death.svg`; headshot deaths use `kill_headshot.svg`; both are colored for the victim's side. Utility markers use `smokegrenade.svg`, `flashbang.svg`, `decoy.svg`, `hegrenade.svg`, or `inferno.svg` and are colored for the thrower's side. Both Molotov and incendiary markers use `inferno.svg` for better legibility. Bomb plant, explosion, and defuse markers use orange `c4.svg`, orange `exploded_c4.svg`, and blue `defuser.svg`, respectively. A round won because time expired (`target_saved`, with `time_ran_out` accepted for compatibility) always adds `time_exp.svg` at the actual round-ending tick; it is orange for a T win and blue for a CT win. Plant timing prefers the parsed completed-plant event, falls back to `plant_begin + plant duration` when available, and finally falls back to `objective end - bomb timer`; explosion and defuse use parsed events when available and otherwise fall back to round win reason.
 
@@ -644,7 +650,7 @@ Kill feed rows in `KillLayer.svelte` are clickable canvas hitboxes. Clicking a r
 
 The Go parser records `events.PlayerFlashed`, `events.Footstep`, `events.PlayerJump`, `events.PlayerSound`, `events.WeaponFire`, fall-damage `events.PlayerHurt`, `events.BombPlantBegin`, `events.BombPlantAborted`, `events.BombPlanted`, `events.BombExplode`, `events.BombDefuseStart`, `events.BombDefuseAborted`, and `events.BombDefused` into protobuf event arrays. Existing parsed protobuf files may not contain these arrays or typed noise values; load and parse the original `.dem` again to see parser-backed behavior.
 
-`PlayerLayer.svelte` renders a grey filled circle around flashed players while the flash is active. Its transparency ranges from 0% at the start of the flash to no more than 40% near the end (opacity ranges from 100% down to 60%), so the indicator remains readable for the full flash duration.
+`PlayerLayer.svelte` renders a grey filled circle around flashed players while the flash is active. Opacity now scales with both parsed flash duration and remaining duration, using a full-flash reference of five seconds and a low `0.06` opacity floor. Minimally flashed players therefore receive a much more transparent indicator instead of the former minimum `0.6` opacity, while strong flashes remain prominent and fade over time.
 
 Noise events render as red stroked circles around alive players when `Show Noice Circle` is enabled. The radius is converted through the same radar/world transform as other overlays. Jump and falling noise events render at the event origin and fade with remaining event lifetime. Shooting noise renders around the shooter's current position during its short lifetime. Running noise uses one persistent circle per running player, follows the player's current position, holds briefly while running continues, and fades quickly after running stops.
 
