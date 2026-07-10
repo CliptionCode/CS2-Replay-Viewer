@@ -183,6 +183,8 @@ let drawingMode: 'permanent' | 'fade' = 'permanent';
 let drawingFadeSeconds = DEFAULT_DRAWING_FADE_SECONDS;
 let isShiftDrawingActive = false;
 let drawingClearSignal = 0;
+let showDroppedWeapons = true;
+let showDroppedUtility = true;
 let selectedPlayerSteamId: bigint | null = null;
 let showNoiseCircle = false;
 let noiseForSelectedPlayer = false;
@@ -2615,6 +2617,8 @@ onMount(() => {
         bind:replayData={replayData}
         bind:mapMetadata={mapMetadata}
         bind:isPlaying={isPlaying}
+        {showDroppedWeapons}
+        {showDroppedUtility}
     />
     <PlayerLayer 
         bind:replayData={replayData}
@@ -2802,6 +2806,17 @@ onMount(() => {
                     <span>{utility.label}</span>
                 </label>
             {/each}
+        </section>
+        <section class="control-section">
+            <div class="controls-heading">Dropped Equipment</div>
+            <label class="checkbox-control">
+                <input type="checkbox" bind:checked={showDroppedWeapons} />
+                <span>Show Dropped Weapons</span>
+            </label>
+            <label class="checkbox-control">
+                <input type="checkbox" bind:checked={showDroppedUtility} />
+                <span>Show Dropped Utility</span>
+            </label>
         </section>
         <section class="control-section">
             <div class="controls-heading">Drawing</div>

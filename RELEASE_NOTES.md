@@ -6,7 +6,6 @@ Version 0.1.8 expands tactical review with interactive grenade destinations, fle
 
 - 🚀 **New:** Newly added features
 - 🔧 **Adjusted:** Improvements to existing behavior
-- 🗑️ **Removed:** Controls or features no longer shown
 - 🐛 **Fixed:** Corrected behavior
 - 📦 **Version and Documentation:** Release and guide updates
 
@@ -19,6 +18,12 @@ Version 0.1.8 expands tactical review with interactive grenade destinations, fle
 - Flashbang, HE grenade, and Decoy destinations now show color-coded equipment icons for five seconds after landing.
 - Destination equipment icons use a compact size, begin at 50% opacity, and gradually fade away.
 - Single-clicking a destination icon copies the throw's lead-in command, while double-clicking selects the thrower and seeks to the throw.
+
+### Dropped Equipment
+
+- Parser-reported dropped weapons and utilities appear as small equipment icons at their exact ground positions.
+- Dropped items remain visible through the complete seven-second post-round window.
+- The `Dropped Equipment` section provides separate `Show Dropped Weapons` and `Show Dropped Utility` checkboxes, both enabled by default.
 
 ### Dual-Color and Fading Drawings
 
@@ -52,13 +57,6 @@ Version 0.1.8 expands tactical review with interactive grenade destinations, fle
 
 - Changing rounds clears all drawings automatically.
 - Permanent drawings otherwise remain until `Clear all Drawings` is used.
-
-## 🗑️ Removed Controls/Features
-
-### Dropped Equipment Controls
-
-- Removed the `Dropped Equipment` settings section and its weapon and utility checkboxes.
-- The viewer no longer creates estimated death drops or positions from player data; only exact dropped-item positions supplied by a replay can be rendered.
 
 ## 🐛 Bug Fixes
 

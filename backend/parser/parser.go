@@ -506,11 +506,11 @@ func (r *frameRecorder) recordRoundEnd(e events.RoundEnd, p demoinfocs.Parser) {
 		r.maxTick = tick
 	}
 	r.observeInitialRoundInventory(p)
-	r.closeDroppedEquipment(tick)
 	if r.isRecordingInitialRound() {
 		r.currentRound.KnifeOnly = r.firstRoundKnifeOnlySeen && !r.firstRoundNonKnifeSeen
 	}
 	r.currentRound.EndTick = tick + secondsToTicks(7, p)
+	r.closeDroppedEquipment(r.currentRound.EndTick)
 	r.currentRound.WinnerTeam = int(e.Winner)
 	r.currentRound.WinReason = roundEndReasonString(e.Reason)
 	if r.currentRound.EndTick > r.maxTick {

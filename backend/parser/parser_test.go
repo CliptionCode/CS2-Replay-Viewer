@@ -87,3 +87,21 @@ func TestDroppedEquipmentPositionChangedUsesMovementThreshold(t *testing.T) {
 		t.Fatal("five-unit movement should start a new position segment")
 	}
 }
+
+func TestCloseDroppedEquipmentUsesFullRequestedEndTick(t *testing.T) {
+	recorder := frameRecorder{
+		droppedEquipment: []DroppedEquipment{{StartTick: 100, EndTick: 200}},
+		activeDroppedEquipment: map[int]activeDroppedEquipment{
+			42: {segmentIndex: 0, equipmentType: common.EqAK47, lastSeenTick: 200},
+		},
+	}
+
+	recorder.closeDroppedEquipment(648)
+
+	if got := recorder.droppedEquipment[0].EndTick; got != 648 {
+		t.Fatalf("dropped equipment end tick = %d, want full post-round end tick 648", got)
+	}
+	if len(recorder.activeDroppedEquipment) != 0 {
+		t.Fatal("closed dropped equipment should no longer remain active")
+	}
+}

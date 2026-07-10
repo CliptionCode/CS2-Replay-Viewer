@@ -67,6 +67,7 @@ Draw routes, callouts, and tactical plans directly on the map.
 - Show noise circles for running, shooting, jumping, and falling.
 - Review grenade and utility activity directly on the map, including smoke/fire center icons and countdowns; Molotovs and incendiaries are hard-capped at 7 seconds and disappear sooner at their actual smoke-extinguished expiry time.
 - Track living-player health accurately; dead CT players use a blue death icon, dead T players use an orange death icon, and neither shows a health bar.
+- Show exact parser-reported dropped weapon and utility icons through the full seven-second post-round window, with separate visibility checkboxes enabled by default.
 
 ### Map interaction and drawing
 

@@ -9,6 +9,8 @@ import type { DroppedEquipment, MapData as MapMetadata, ReplayData } from '$lib/
 export let replayData: ReplayData | null = null;
 export let mapMetadata: MapMetadata;
 export let isPlaying = false;
+export let showDroppedWeapons = true;
+export let showDroppedUtility = true;
 
 const ICON_SIZE = 18;
 
@@ -36,7 +38,10 @@ function getIcon(item: DroppedEquipment): HTMLImageElement | null {
 }
 
 function isVisible(item: DroppedEquipment, tick: number): boolean {
-    return item.startTick <= tick && item.endTick >= tick;
+    if (item.startTick > tick || item.endTick < tick) return false;
+    if (item.category === 'weapon') return showDroppedWeapons;
+    if (item.category === 'utility') return showDroppedUtility;
+    return false;
 }
 
 function drawItem(item: DroppedEquipment, canvasSize: { width: number; height: number }): void {
@@ -124,7 +129,7 @@ $: {
 }
 
 $: {
-    void replayData, mapMetadata;
+    void replayData, mapMetadata, showDroppedWeapons, showDroppedUtility;
     if (browser && ctx) scheduleRender();
 }
 
