@@ -75,6 +75,7 @@ Draw routes, callouts, and tactical plans directly on the map.
 - [Svelte](https://github.com/sveltejs/svelte) and [SvelteKit](https://github.com/sveltejs/kit) — power the interactive TypeScript user interface.
 - [Vite](https://github.com/vitejs/vite) — builds and bundles the frontend.
 - [cs2-map-icons](https://github.com/MurkyYT/cs2-map-icons) — supplies the radar images and overview metadata used to place replay data accurately on each supported map.
+- [counter-strike-icons](https://github.com/Juknum/counter-strike-icons/tree/main/cs2/panorama/images/icons/equipment) — supplies the CS2 equipment SVGs stored in `static/equipment-icons` for future UI use. The empty `world.svg` and `worldent.svg` source files are intentionally excluded.
 
 ## Supported maps
 

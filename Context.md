@@ -463,6 +463,7 @@ Development server commands are intentionally not run by the agent. Build protob
 
 ### Map Data Sources
 - cs2-map-icons: https://github.com/MurkyYT/cs2-map-icons
+- CS2 equipment SVG icons: https://github.com/Juknum/counter-strike-icons/tree/main/cs2/panorama/images/icons/equipment
 - Source 2 Viewer (VRF): https://github.com/ValveResourceFormat/ValveResourceFormat
 
 ### Projects Using demoinfocs-golang (Reference)
@@ -571,6 +572,10 @@ The old visual Map Alignment panel was removed. Player, nade, kill, and map laye
 `MapLayer.svelte` loads the radar image through `getRadarInfo(mapName).imagePath` and reloads it whenever the normalized map name changes. `worldToCanvas()` and `MapLayer.svelte` both use the shared `MAP_CANVAS_MARGIN` constant so the fitted radar rectangle and gameplay overlays stay aligned.
 
 For maps with lower radar variants (`de_nuke`, `de_train`, `de_vertigo`), the bottom controls bar shows `Normal` and `Lower` toggle buttons. `Normal` is selected by default. `Lower` only swaps the map background image to the lower PNG from `verticalSections.lower.imagePath`; player, nade, kill, and bomb overlays keep using the same world-to-radar transform.
+
+### 11.6.1 Equipment Icon Assets
+
+CS2 equipment SVGs for potential future UI use are stored in `static/equipment-icons`. They come from the `cs2/panorama/images/icons/equipment` directory of [Juknum/counter-strike-icons](https://github.com/Juknum/counter-strike-icons/tree/main/cs2/panorama/images/icons/equipment). The empty source files `world.svg` and `worldent.svg` are intentionally not bundled.
 
 ### 11.7 Playback Speed Controls
 
