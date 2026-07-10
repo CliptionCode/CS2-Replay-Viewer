@@ -162,34 +162,77 @@ function drawKillFeed(
     for (const kill of recentKills) {
         const killer = replayData?.players?.find(p => p.steamId === kill.killerSteamId);
         const victim = replayData?.players?.find(p => p.steamId === kill.victimSteamId);
+        const assister = replayData?.players?.find(p => p.steamId === kill.assisterSteamId);
         const killerName = killer?.name || 'BOT';
         const victimName = victim?.name || 'BOT';
         const killerColor = getTeamColor(getPlayerTeam(kill.killerSteamId, tick));
         const victimColor = getTeamColor(getPlayerTeam(kill.victimSteamId, tick));
 
         let x = feedLeftOffset;
+
+        if (kill.attackerBlind) {
+            x += drawKillFeedIcon(
+                ctx,
+                equipmentIconPath(KILL_FEED_ICON_FILES.blindKill),
+                x,
+                y,
+                18,
+                17,
+                18
+            ) + 5;
+        }
+
         ctx.fillStyle = killerColor;
         ctx.fillText(killerName, x, y);
         x += ctx.measureText(killerName).width + 8;
 
-        x += drawKillFeedIcon(ctx, getWeaponIconPath(kill.weapon), x, y, 48, 16, 32) + 6;
-
-        if (kill.isHeadshot) {
-            x += drawKillFeedIcon(
-                ctx,
-                equipmentIconPath(KILL_FEED_ICON_FILES.headshot),
-                x,
-                y,
-                17,
-                17,
-                17
-            ) + 5;
-        }
-
         if (kill.assistedByFlash) {
+            ctx.fillStyle = '#e2e8f0';
+            ctx.fillText('+', x, y);
+            x += ctx.measureText('+').width + 5;
             x += drawKillFeedIcon(
                 ctx,
                 equipmentIconPath(KILL_FEED_ICON_FILES.flashAssist),
+                x,
+                y,
+                18,
+                17,
+                18
+            ) + 5;
+
+            if (kill.assisterSteamId !== 0n) {
+                const assisterName = assister?.name || 'BOT';
+                ctx.fillStyle = getTeamColor(getPlayerTeam(kill.assisterSteamId, tick));
+                ctx.fillText(assisterName, x, y);
+                x += ctx.measureText(assisterName).width + 8;
+            }
+        }
+
+        if (kill.killerAirborne) {
+            x += drawKillFeedIcon(
+                ctx,
+                equipmentIconPath(KILL_FEED_ICON_FILES.inAirKill),
+                x,
+                y,
+                18,
+                17,
+                18
+            ) + 5;
+        }
+
+        x += drawKillFeedIcon(ctx, getWeaponIconPath(kill.weapon), x, y, 48, 16, 32) + 6;
+
+        const conditionalIcons = [
+            kill.noScope ? KILL_FEED_ICON_FILES.noScope : null,
+            kill.throughSmoke ? KILL_FEED_ICON_FILES.smokeKill : null,
+            kill.penetratedObjects > 0 ? KILL_FEED_ICON_FILES.penetration : null,
+            kill.isHeadshot ? KILL_FEED_ICON_FILES.headshot : null,
+        ];
+        for (const iconFile of conditionalIcons) {
+            if (!iconFile) continue;
+            x += drawKillFeedIcon(
+                ctx,
+                equipmentIconPath(iconFile),
                 x,
                 y,
                 18,

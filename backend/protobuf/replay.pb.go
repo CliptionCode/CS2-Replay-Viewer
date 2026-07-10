@@ -442,6 +442,11 @@ type KillEvent struct {
 	VictimX           float32                `protobuf:"fixed32,9,opt,name=victim_x,json=victimX,proto3" json:"victim_x,omitempty"`
 	VictimY           float32                `protobuf:"fixed32,10,opt,name=victim_y,json=victimY,proto3" json:"victim_y,omitempty"`
 	AssistedByFlash   bool                   `protobuf:"varint,11,opt,name=assisted_by_flash,json=assistedByFlash,proto3" json:"assisted_by_flash,omitempty"`
+	AssisterSteamId   uint64                 `protobuf:"varint,12,opt,name=assister_steam_id,json=assisterSteamId,proto3" json:"assister_steam_id,omitempty"`
+	AttackerBlind     bool                   `protobuf:"varint,13,opt,name=attacker_blind,json=attackerBlind,proto3" json:"attacker_blind,omitempty"`
+	KillerAirborne    bool                   `protobuf:"varint,14,opt,name=killer_airborne,json=killerAirborne,proto3" json:"killer_airborne,omitempty"`
+	NoScope           bool                   `protobuf:"varint,15,opt,name=no_scope,json=noScope,proto3" json:"no_scope,omitempty"`
+	ThroughSmoke      bool                   `protobuf:"varint,16,opt,name=through_smoke,json=throughSmoke,proto3" json:"through_smoke,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -549,6 +554,41 @@ func (x *KillEvent) GetVictimY() float32 {
 func (x *KillEvent) GetAssistedByFlash() bool {
 	if x != nil {
 		return x.AssistedByFlash
+	}
+	return false
+}
+
+func (x *KillEvent) GetAssisterSteamId() uint64 {
+	if x != nil {
+		return x.AssisterSteamId
+	}
+	return 0
+}
+
+func (x *KillEvent) GetAttackerBlind() bool {
+	if x != nil {
+		return x.AttackerBlind
+	}
+	return false
+}
+
+func (x *KillEvent) GetKillerAirborne() bool {
+	if x != nil {
+		return x.KillerAirborne
+	}
+	return false
+}
+
+func (x *KillEvent) GetNoScope() bool {
+	if x != nil {
+		return x.NoScope
+	}
+	return false
+}
+
+func (x *KillEvent) GetThroughSmoke() bool {
+	if x != nil {
+		return x.ThroughSmoke
 	}
 	return false
 }
@@ -1289,7 +1329,7 @@ const file_replay_proto_rawDesc = "" +
 	"win_reason\x18\x05 \x01(\tR\twinReason\x12\x1d\n" +
 	"\n" +
 	"kill_count\x18\x06 \x01(\x05R\tkillCount\x12.\n" +
-	"\x13freezetime_end_tick\x18\a \x01(\x05R\x11freezetimeEndTick\"\xef\x02\n" +
+	"\x13freezetime_end_tick\x18\a \x01(\x05R\x11freezetimeEndTick\"\xab\x04\n" +
 	"\tKillEvent\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12&\n" +
 	"\x0fkiller_steam_id\x18\x02 \x01(\x04R\rkillerSteamId\x12&\n" +
@@ -1303,7 +1343,12 @@ const file_replay_proto_rawDesc = "" +
 	"\bvictim_x\x18\t \x01(\x02R\avictimX\x12\x19\n" +
 	"\bvictim_y\x18\n" +
 	" \x01(\x02R\avictimY\x12*\n" +
-	"\x11assisted_by_flash\x18\v \x01(\bR\x0fassistedByFlash\"\x98\x03\n" +
+	"\x11assisted_by_flash\x18\v \x01(\bR\x0fassistedByFlash\x12*\n" +
+	"\x11assister_steam_id\x18\f \x01(\x04R\x0fassisterSteamId\x12%\n" +
+	"\x0eattacker_blind\x18\r \x01(\bR\rattackerBlind\x12'\n" +
+	"\x0fkiller_airborne\x18\x0e \x01(\bR\x0ekillerAirborne\x12\x19\n" +
+	"\bno_scope\x18\x0f \x01(\bR\anoScope\x12#\n" +
+	"\rthrough_smoke\x18\x10 \x01(\bR\fthroughSmoke\"\x98\x03\n" +
 	"\tNadeEvent\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12(\n" +
 	"\x10thrower_steam_id\x18\x02 \x01(\x04R\x0ethrowerSteamId\x12\x1b\n" +

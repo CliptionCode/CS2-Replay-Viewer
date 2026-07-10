@@ -159,6 +159,7 @@ let selectedPlayerZoomPercent = DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT;
 let mouseViewportZoomScale = 1;
 let mouseViewportTranslateX = 0;
 let mouseViewportTranslateY = 0;
+let preserveUnconstrainedViewport = false;
 let mouseViewportDrag: {
     pointerId: number;
     startClientX: number;
@@ -202,6 +203,7 @@ let ctAliveCount = 0;
 let tAliveCount = 0;
 let timelineEvents: PlayerTimelineEvent[] = [];
 let timelineEventsKey = '';
+let timelineEventsCache = new Map<string, { events: PlayerTimelineEvent[]; height: number }>();
 let timelineHeight = TIMELINE_MIN_HEIGHT;
 let matchScore: MatchScore | null = null;
 let toastMessage = '';
@@ -209,6 +211,10 @@ let toastTimeout: ReturnType<typeof setTimeout> | null = null;
 let bombStatus: BombStatus = { bombText: '', bombClass: '', defuseText: '', defuseClass: '' };
 let playerFrameTrails = new Map<string, PlayerFrame[]>();
 let playerFrameLookupIndices = new Map<string, number>();
+let timelineNadesByThrower = new Map<string, NadeEvent[]>();
+let timelineTrajectoryNadesByThrower = new Map<string, NadeEvent[]>();
+let timelineTrajectoryNades: NadeEvent[] = [];
+let timelineNadeMatchCache = new WeakMap<NadeEvent, boolean>();
 
 type RosterEntry = {
     player: PlayerInfo;
@@ -289,6 +295,11 @@ function resetLoadedReplayState(clearReplayData = false): void {
     roundProgressPct = 0;
     playerFrameTrails.clear();
     playerFrameLookupIndices.clear();
+    timelineNadesByThrower.clear();
+    timelineTrajectoryNadesByThrower.clear();
+    timelineTrajectoryNades = [];
+    timelineNadeMatchCache = new WeakMap<NadeEvent, boolean>();
+    timelineEventsCache.clear();
     resetMouseViewportZoom();
     resetReplayViewportTransform();
     setTick(0);
@@ -298,6 +309,11 @@ function applyLoadedReplay(data: ReplayData): void {
     replayData = data;
     mapMetadata = fillMapMetadata(data.map, data.header?.mapName);
     selectedPlayerSteamId = null;
+    timelineEventsCache.clear();
+    playablePlayers = getPlayablePlayers();
+    rebuildPlayerFrameIndex(playablePlayers);
+    rebuildTimelineNadeIndex();
+    warmTimelineEventsCache();
     isShiftDrawingActive = false;
     mapVariant = 'default';
     timelineEvents = [];
@@ -555,8 +571,8 @@ function getNadeDetonationTick(nade: NadeEvent): number {
     return nade.detonationTick || nade.tick;
 }
 
-function hasNadeTrajectory(nade: NadeEvent): boolean {
-    return (nade.trajectory?.length ?? 0) >= 2;
+function isTimelineProjectileRecord(nade: NadeEvent): boolean {
+    return (nade.trajectory?.length ?? 0) > 0 || nade.startX !== 0 || nade.startY !== 0 || nade.startZ !== 0;
 }
 
 function getNadeTrajectoryEndPoint(nade: NadeEvent): { x: number; y: number } | null {
@@ -583,13 +599,17 @@ function getNadeMatchTickWindow(nadeType: string): number {
 
 function hasMatchingTrajectoryNade(eventOnlyNade: NadeEvent, steamId: bigint): boolean {
     if (!replayData?.nades) return false;
+    const cachedMatch = timelineNadeMatchCache.get(eventOnlyNade);
+    if (cachedMatch !== undefined) return cachedMatch;
+
     const eventTick = getNadeDetonationTick(eventOnlyNade);
     const eventEnd = { x: eventOnlyNade.endX, y: eventOnlyNade.endY };
+    const candidates = steamId === 0n
+        ? timelineTrajectoryNades
+        : (timelineTrajectoryNadesByThrower.get(steamId.toString()) ?? []);
 
-    return replayData.nades.some(candidate => {
-        if (candidate === eventOnlyNade || candidate.throwerSteamId !== steamId || !hasNadeTrajectory(candidate)) {
-            return false;
-        }
+    const hasMatch = candidates.some(candidate => {
+        if (candidate === eventOnlyNade) return false;
         if (!areMatchingNadeTypes(candidate.nadeType, eventOnlyNade.nadeType)) return false;
         if (Math.abs(getNadeDetonationTick(candidate) - eventTick) > getNadeMatchTickWindow(eventOnlyNade.nadeType)) {
             return false;
@@ -600,10 +620,12 @@ function hasMatchingTrajectoryNade(eventOnlyNade: NadeEvent, steamId: bigint): b
         const dy = candidateEnd.y - eventEnd.y;
         return dx * dx + dy * dy <= NADE_MATCH_DISTANCE_UNITS * NADE_MATCH_DISTANCE_UNITS;
     });
+    timelineNadeMatchCache.set(eventOnlyNade, hasMatch);
+    return hasMatch;
 }
 
 function shouldShowNadeThrowMarker(nade: NadeEvent, steamId: bigint): boolean {
-    if (hasNadeTrajectory(nade)) return true;
+    if (isTimelineProjectileRecord(nade)) return true;
     return !hasMatchingTrajectoryNade(nade, steamId);
 }
 
@@ -651,6 +673,31 @@ function stackTimelineEvents(events: BasePlayerTimelineEvent[], round: RoundData
         });
 }
 
+function rebuildTimelineNadeIndex(): void {
+    timelineNadesByThrower.clear();
+    timelineTrajectoryNadesByThrower.clear();
+    timelineTrajectoryNades = [];
+    timelineNadeMatchCache = new WeakMap<NadeEvent, boolean>();
+
+    const nades = replayData?.nades ?? [];
+    for (const nade of nades) {
+        if (!isTimelineProjectileRecord(nade)) continue;
+        const throwerKey = nade.throwerSteamId.toString();
+        timelineTrajectoryNades.push(nade);
+        const trajectoryNades = timelineTrajectoryNadesByThrower.get(throwerKey) ?? [];
+        trajectoryNades.push(nade);
+        timelineTrajectoryNadesByThrower.set(throwerKey, trajectoryNades);
+    }
+
+    for (const nade of nades) {
+        if (!shouldShowNadeThrowMarker(nade, nade.throwerSteamId)) continue;
+        const throwerKey = nade.throwerSteamId.toString();
+        const throwerNades = timelineNadesByThrower.get(throwerKey) ?? [];
+        throwerNades.push(nade);
+        timelineNadesByThrower.set(throwerKey, throwerNades);
+    }
+}
+
 function getTimelineHeight(events: PlayerTimelineEvent[]): number {
     const laneCount = events.reduce((highestLane, event) => Math.max(highestLane, event.lane + 1), 0);
     if (laneCount === 0) return TIMELINE_MIN_HEIGHT;
@@ -664,7 +711,7 @@ function getTimelineHeight(events: PlayerTimelineEvent[]): number {
 
 function buildNadeTimelineEvent(nade: NadeEvent, round: RoundData): BasePlayerTimelineEvent | null {
     const meta = getNadeMeta(nade.nadeType);
-    if (!meta || !isTimelineUtilityEnabled(meta.type) || !shouldShowNadeThrowMarker(nade, nade.throwerSteamId)) {
+    if (!meta || !isTimelineUtilityEnabled(meta.type)) {
         return null;
     }
 
@@ -731,8 +778,7 @@ function buildSelectedPlayerBaseEvents(steamId: bigint, round: RoundData, includ
     const events: BasePlayerTimelineEvent[] = buildKillDeathTimelineEvents(round, steamId);
 
     if (includeUtilities) {
-        for (const nade of replayData.nades ?? []) {
-            if (nade.throwerSteamId !== steamId) continue;
+        for (const nade of timelineNadesByThrower.get(steamId.toString()) ?? []) {
             const event = buildNadeTimelineEvent(nade, round);
             if (event) events.push(event);
         }
@@ -745,9 +791,11 @@ function buildAllUtilityRoundEvents(round: RoundData): BasePlayerTimelineEvent[]
     if (!replayData) return [];
 
     const events: BasePlayerTimelineEvent[] = [];
-    for (const nade of replayData.nades ?? []) {
-        const event = buildNadeTimelineEvent(nade, round);
-        if (event) events.push(event);
+    for (const playerNades of timelineNadesByThrower.values()) {
+        for (const nade of playerNades) {
+            const event = buildNadeTimelineEvent(nade, round);
+            if (event) events.push(event);
+        }
     }
     return events;
 }
@@ -855,7 +903,9 @@ function getTimelineEventsKey(round: RoundData | null, selectedSteamId: bigint |
     const combatFilterKey = TIMELINE_COMBAT_EVENT_OPTIONS
         .map(option => `${option.key}:${enabledTimelineCombatEvents[option.key] ? 1 : 0}`)
         .join(',');
-    return `${round.roundNumber}:${round.startTick}:${getRoundDisplayEndTick(replayData, round)}:${selectedSteamId?.toString() ?? 'none'}:${showAllTimelineUtilities ? 'all-utils' : 'selected'}:${utilityFilterKey}:${combatFilterKey}`;
+    const layoutWidth = browser ? window.innerWidth : 1024;
+    const selectionKey = showAllTimelineUtilities ? 'all' : (selectedSteamId?.toString() ?? 'none');
+    return `${round.roundNumber}:${round.startTick}:${getRoundDisplayEndTick(replayData, round)}:${selectionKey}:${showAllTimelineUtilities ? 'all-utils' : 'selected'}:${utilityFilterKey}:${combatFilterKey}:${layoutWidth}`;
 }
 
 function updateTimelineEvents(round: RoundData | null): void {
@@ -863,8 +913,37 @@ function updateTimelineEvents(round: RoundData | null): void {
     if (nextKey === timelineEventsKey) return;
 
     timelineEventsKey = nextKey;
-    timelineEvents = round ? buildTimelineEvents(selectedPlayerSteamId, round) : [];
-    timelineHeight = getTimelineHeight(timelineEvents);
+    const cached = timelineEventsCache.get(nextKey);
+    if (cached) {
+        timelineEvents = cached.events;
+        timelineHeight = cached.height;
+        return;
+    }
+
+    const events = round ? buildTimelineEvents(selectedPlayerSteamId, round) : [];
+    const height = getTimelineHeight(events);
+    timelineEventsCache.set(nextKey, { events, height });
+    timelineEvents = events;
+    timelineHeight = height;
+}
+
+function warmTimelineEventsCache(): void {
+    if (!replayData) return;
+
+    const selectedPlayers = showAllTimelineUtilities
+        ? [null]
+        : playablePlayers.map(player => player.steamId);
+    for (const round of replayData.rounds ?? []) {
+        for (const selectedSteamId of selectedPlayers) {
+            const key = getTimelineEventsKey(round, selectedSteamId);
+            if (timelineEventsCache.has(key)) continue;
+            const events = buildTimelineEvents(selectedSteamId, round);
+            timelineEventsCache.set(key, {
+                events,
+                height: getTimelineHeight(events),
+            });
+        }
+    }
 }
 
 function emptyBombStatus(): BombStatus {
@@ -1046,7 +1125,14 @@ function getBombStatus(tick: number): BombStatus {
 
 function selectPlayer(steamId: bigint): void {
     if (selectedPlayerSteamId === steamId) {
+        const retainedTransform = getReplayViewportTransform();
         selectedPlayerSteamId = null;
+        mouseViewportZoomScale = Math.max(1, retainedTransform.scale);
+        mouseViewportTranslateX = retainedTransform.translateX;
+        mouseViewportTranslateY = retainedTransform.translateY;
+        mouseViewportDrag = null;
+        ignoreNextCanvasClick = false;
+        preserveUnconstrainedViewport = true;
     } else {
         selectedPlayerSteamId = steamId;
         resetMouseViewportZoom();
@@ -1203,7 +1289,7 @@ function getReplayViewportTransform(tick = getPlaybackTick()): ViewportTransform
         translateY: mouseViewportTranslateY + mouseViewportZoomScale * selectedTransform.translateY,
     };
 
-    if (mouseViewportZoomScale <= 1 || !replayContainer) return transform;
+    if (mouseViewportZoomScale <= 1 || preserveUnconstrainedViewport || !replayContainer) return transform;
 
     const rect = replayContainer.getBoundingClientRect();
     return constrainViewportTransformToMap(transform, rect);
@@ -1291,6 +1377,7 @@ function resetMouseViewportZoom(): void {
     mouseViewportTranslateY = 0;
     mouseViewportDrag = null;
     ignoreNextCanvasClick = false;
+    preserveUnconstrainedViewport = false;
 }
 
 function handleViewportWheel(event: WheelEvent): void {
@@ -1312,6 +1399,8 @@ function handleViewportWheel(event: WheelEvent): void {
     );
 
     if (nextZoomScale === mouseViewportZoomScale) return;
+
+    preserveUnconstrainedViewport = false;
 
     if (nextZoomScale <= 1) {
         resetMouseViewportZoom();
@@ -1365,6 +1454,7 @@ function handleViewportPointerMove(event: PointerEvent): void {
     if (!mouseViewportDrag.hasMoved && Math.hypot(deltaX, deltaY) < 2) return;
 
     mouseViewportDrag.hasMoved = true;
+    preserveUnconstrainedViewport = false;
     mouseViewportTranslateX = mouseViewportDrag.startTranslateX + deltaX;
     mouseViewportTranslateY = mouseViewportDrag.startTranslateY + deltaY;
     constrainMouseViewportTranslation();
@@ -1472,14 +1562,10 @@ $: {
 }
 
 $: {
-    void replayData;
-    const nextPlayablePlayers = getPlayablePlayers();
-    playablePlayers = nextPlayablePlayers;
-    rebuildPlayerFrameIndex(nextPlayablePlayers);
-
+    void selectedPlayerSteamId, playablePlayers;
     if (
         selectedPlayerSteamId !== null &&
-        !nextPlayablePlayers.some(player => player.steamId === selectedPlayerSteamId)
+        !playablePlayers.some(player => player.steamId === selectedPlayerSteamId)
     ) {
         selectedPlayerSteamId = null;
         timelineEventsKey = '';
@@ -1488,20 +1574,25 @@ $: {
 }
 
 $: {
-    void replayData, displayTick, playablePlayers, selectedPlayerSteamId, showAllTimelineUtilities, enabledTimelineUtilities, enabledTimelineCombatEvents;
+    void replayData, displayTick, playablePlayers;
     const round = getCurrentRoundData(displayTick) ?? getPlaybackStartRound(displayTick);
     const rosterEntries = buildRosterEntries(round, displayTick);
     ctRoster = rosterEntries.filter(entry => entry.side === TEAM_CT);
     tRoster = rosterEntries.filter(entry => entry.side === TEAM_T);
     ctAliveCount = ctRoster.filter(entry => entry.isAlive).length;
     tAliveCount = tRoster.filter(entry => entry.isAlive).length;
-    updateTimelineEvents(round);
     bombStatus = getBombStatus(displayTick);
     matchScore = buildMatchScore(displayTick, round);
 }
 
 $: {
-    void selectedPlayerZoomPercent, selectedPlayerSteamId, mouseViewportZoomScale, mouseViewportTranslateX, mouseViewportTranslateY, replayData, mapMetadata;
+    void replayData, displayTick, selectedPlayerSteamId, showAllTimelineUtilities, enabledTimelineUtilities, enabledTimelineCombatEvents;
+    const round = getCurrentRoundData(displayTick) ?? getPlaybackStartRound(displayTick);
+    updateTimelineEvents(round);
+}
+
+$: {
+    void selectedPlayerZoomPercent, selectedPlayerSteamId, mouseViewportZoomScale, mouseViewportTranslateX, mouseViewportTranslateY, preserveUnconstrainedViewport, replayData, mapMetadata;
     updateReplayViewportTransform();
 }
 
@@ -1773,6 +1864,8 @@ onMount(() => {
     transform: translateX(-50%);
     z-index: 112;
     pointer-events: none;
+    -webkit-user-select: none;
+    user-select: none;
 }
 
 .match-score-label {
@@ -1794,6 +1887,8 @@ onMount(() => {
     text-align: center;
     text-overflow: ellipsis;
     white-space: nowrap;
+    -webkit-user-select: none;
+    user-select: none;
 }
 
 .match-score-team.side-ct {
@@ -1848,6 +1943,8 @@ onMount(() => {
     font-size: 13px;
     font-weight: 700;
     pointer-events: none;
+    -webkit-user-select: none;
+    user-select: none;
 }
 
 .sight-controls {

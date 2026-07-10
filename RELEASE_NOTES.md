@@ -1,87 +1,68 @@
-# CS2 Replay Viewer v0.1.4
+# CS2 Replay Viewer v0.1.5
 
-Version 0.1.4 improves tactical map interaction, player-focused replay analysis, utility visibility, and rendering performance. It also fixes smoke lifetimes so every deployed smoke receives its own complete 18-second duration.
+Version 0.1.5 makes replays smoother to explore and adds more detail to the kill feed. It also improves how Molotovs, incendiary grenades, smoke extinguishing, player selection, and map dragging behave.
 
 ## Change Overview
 
-- 🚀 **New:** Newly added features or capabilities
-- 🔧 **Adjusted:** Existing behavior, visuals, or defaults that changed
-- 🗑️ **Removed:** Controls or workflows that are no longer present
-- ⚡ **Performance:** Responsiveness and rendering improvements
-- 🐛 **Fixed:** Incorrect or unreliable behavior that was corrected
+- 🚀 **New:** Newly added features
+- 🔧 **Adjusted:** Improvements to existing behavior
+- ⚡ **Performance:** Smoother and more responsive interactions
+- 🐛 **Fixed:** Corrected behavior
 
 ## 🚀 New Features
 
-### Automatic Player Focus
+### More Detailed Kill Feed
 
-- Selecting a player now automatically zooms to and centers that player using the configured player zoom level.
-- Player focus works when clicking a player dot, roster name, kill-feed entry, or player-backed timeline marker.
-- The player zoom slider remains available in the **Player Selection** section.
+- The kill feed can now indicate when the killer was blind or flashed.
+- Flash-assisted kills show the assisting player's name.
+- New indicators identify airborne, no-scope, through-smoke, and wallbang kills.
+- Weapon and headshot indicators remain available as before.
 
-### Utility Effect Icons and Countdowns
+### Smoke Can Extinguish Fire
 
-- Active smoke effects now display the `map_smoke.svg` icon in their center.
-- Active Molotov and incendiary effects now display the `inferno.svg` icon in their center.
-- Smoke, Molotov, and incendiary effects now display their remaining duration directly over the icon.
-- Smoke countdown text is light green; Molotov/incendiary countdown text is gray. Both use a dark outline for readability.
-
-### Shift-Held Tactical Drawing
-
-- Hold <kbd>Shift</kbd> and drag with the left mouse button to draw freely on the radar.
-- Releasing <kbd>Shift</kbd> immediately returns the mouse to normal player selection and map-panning behavior.
-- Drawing color, stroke-width, and clear-all controls remain available.
+- Smoke grenades now extinguish active Molotov and incendiary fire.
+- A Molotov or incendiary landing in an existing smoke can be extinguished immediately.
+- The fire effect and countdown disappear as soon as the fire is extinguished.
 
 ## 🔧 Adjusted Features
 
-### Sight and Line-of-Sight Defaults
+### Player Deselection
 
-- Sight-cone width now defaults to `0.68`.
-- Sight-cone length now defaults to `75`.
-- Line-of-sight width now defaults to `1.6`.
-- Line-of-sight length now defaults to `300`.
-- **LOS Width** is now displayed before **LOS Len**, matching the sight-cone control order.
+- Clicking an already selected player now only deselects that player and stops the camera from following them.
+- The current zoom level and map position remain unchanged after deselection.
+- You can continue panning or zooming from the same view.
 
-### Utility Effect Appearance
+### Easier Map Dragging
 
-- The smoke effect icon is now `56px`, twice its original 28px size.
-- The Molotov/incendiary effect icon is now approximately 50% larger at `42px`.
-- The Molotov/incendiary effect icon is rendered at 50% opacity so the radar underneath remains visible.
-
-### Flash Indicators
-
-- Flash-indicator opacity now accounts for both flash strength and remaining duration.
-- Minimally flashed players receive a much more transparent indicator.
-- Strong flashes remain clearly visible and fade naturally over their duration.
-
-## 🗑️ Removed Controls
-
-- Removed the **Zoom Selected Player** checkbox. Player focusing now happens automatically when a player is selected.
-- Removed the **Start Drawing / Stop Drawing** toggle. Drawing is now activated by holding <kbd>Shift</kbd>.
+- Match scores, bomb messages, round-win messages, and copy confirmations can no longer be accidentally selected as text.
+- Dragging across these messages no longer interferes with moving around the map.
 
 ## ⚡ Performance Improvements
 
-- Sight-cone and line-of-sight geometry now render on a dedicated lightweight canvas.
-- Dragging sight-cone or line-of-sight sliders no longer redraws the full player layer.
-- Adjusting sight width, sight length, LOS width, and LOS length is now substantially more responsive.
+### Smoother Player Selection
+
+- Selecting a player while the replay is playing is now much more responsive.
+- The camera switches to the selected player without the previous pause or canvas freeze.
+- Switching repeatedly between players is smoother.
 
 ## 🐛 Bug Fixes
 
-### Independent 18-Second Smoke Lifetimes
+### Correct Fire Duration
 
-- Every smoke now lasts exactly 18 seconds (`1,152` replay ticks) from its own detonation.
-- Smoke expiry events can no longer overwrite or shorten the lifetime of another smoke.
-- Multiple smokes thrown by the same player are tracked independently, including smokes acquired through weapon drops.
-- The frontend independently enforces the full 18-second smoke lifetime, protecting countdowns from older parsed data containing an incorrect early fade tick.
-- Smoke trajectory matching now pairs destruction records with the lifecycle that began approximately 18 seconds earlier instead of an unrelated newer smoke.
-- The bundled demo-parser sidecar was rebuilt with the corrected smoke-lifetime behavior.
+- Molotov and incendiary fire can never burn for longer than 7 seconds.
+- Fire extinguished by smoke ends sooner, at the correct moment.
+- Fixed cases where fire could remain visible with incorrect countdowns such as 12 or 20 seconds.
+- Fixed fire sometimes receiving an additional lifetime after it had already ended.
 
-### Player Focus and Health
+### Kill Feed Details
 
-- Fixed selected-player centering after previously zooming or panning with the mouse. Old mouse transforms are reset before player focus is applied.
-- Dead players now correctly display an empty health bar at `0 HP` instead of appearing to have full health.
+- Fixed special kill conditions and flash-assist information not appearing in the kill feed.
+
+### Copy Confirmation
+
+- The `Copied demo_goto <tick>` confirmation no longer interferes with mouse dragging.
 
 ## 📦 Version and Documentation
 
-- Updated the application version from `0.1.3` to `0.1.4` across the frontend and Tauri manifests.
-- Added regression coverage for independent smoke-duration calculations.
-- Updated the project documentation to reflect the new controls, defaults, utility visuals, performance improvements, and smoke behavior.
+- Updated CS2 Replay Viewer from version `0.1.4` to `0.1.5`.
+- Updated the included documentation to describe the new and adjusted behavior.

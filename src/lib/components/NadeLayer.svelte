@@ -29,6 +29,7 @@ const DECOY_EXPIRE_INFERENCE_TICKS = 480;
 const STATIONARY_ENDPOINT_DISTANCE_SQUARED = 16;
 const TICKS_PER_SECOND = 64;
 const SMOKE_EFFECT_TICKS = 18 * TICKS_PER_SECOND;
+const FIRE_EFFECT_TICKS = 7 * TICKS_PER_SECOND;
 const SMOKE_COUNTDOWN_COLOR = '#86efac';
 const FIRE_COUNTDOWN_COLOR = '#9ca3af';
 const BASE_EFFECT_ICON_SIZE = 28;
@@ -125,13 +126,37 @@ function isDecoyNade(nade: NadeEvent): boolean {
     return nade.nadeType === 'decoy';
 }
 
+function isFireNade(nade: NadeEvent): boolean {
+    return nade.nadeType === 'molotov' || nade.nadeType === 'incendiary';
+}
+
 function hasTrajectory(nade: NadeEvent): boolean {
     return (nade.trajectory?.length ?? 0) >= 2;
+}
+
+function isProjectileNadeRecord(nade: NadeEvent): boolean {
+    return hasTrajectory(nade) || hasUsableStartPosition(nade);
+}
+
+function isLegacyDestroyedFireProjectile(nade: NadeEvent, effect: NadeEvent | null): boolean {
+    const recordedTick = getDetonationTick(nade);
+    return isFireNade(nade) && effect === null && isProjectileNadeRecord(nade) && nade.fadeTick > recordedTick;
+}
+
+function getLegacyFireStartTick(nade: NadeEvent): number {
+    const recordedExpiryTick = getDetonationTick(nade);
+    const earliestAllowedStartTick = Math.max(0, recordedExpiryTick - FIRE_EFFECT_TICKS);
+    const stationaryStartTick = inferStationaryEndpointStartTick(nade);
+    if (stationaryStartTick > 0 && stationaryStartTick <= recordedExpiryTick) {
+        return Math.max(earliestAllowedStartTick, stationaryStartTick);
+    }
+    return earliestAllowedStartTick;
 }
 
 function getCanonicalDetonationTick(nade: NadeEvent): number {
     const effect = getMatchingEffectEvent(nade);
     if (effect) return getDetonationTick(effect);
+    if (isLegacyDestroyedFireProjectile(nade, effect)) return getLegacyFireStartTick(nade);
     if (isDecoyNade(nade)) return getDecoyLandingTick(nade);
     return getDetonationTick(nade);
 }
@@ -140,6 +165,24 @@ function getCanonicalFadeTick(nade: NadeEvent): number {
     const effect = getMatchingEffectEvent(nade);
     if (nade.nadeType === 'smoke') {
         return getDetonationTick(effect ?? nade) + SMOKE_EFFECT_TICKS;
+    }
+    if (isFireNade(nade)) {
+        const recordedTick = getDetonationTick(nade);
+        const detonationTick = effect
+            ? getDetonationTick(effect)
+            : isLegacyDestroyedFireProjectile(nade, effect)
+                ? getLegacyFireStartTick(nade)
+                : recordedTick;
+        const observedFadeTick = effect
+            ? effect.fadeTick
+            : isLegacyDestroyedFireProjectile(nade, effect)
+                ? recordedTick
+                : nade.fadeTick;
+        const fadeTick = observedFadeTick || detonationTick + FIRE_EFFECT_TICKS;
+        return Math.min(
+            detonationTick + FIRE_EFFECT_TICKS,
+            Math.max(detonationTick, fadeTick)
+        );
     }
     if (effect) return effect.fadeTick || nade.fadeTick;
     if (isDecoyNade(nade)) return getDecoyExpiryTick(nade);
@@ -541,16 +584,16 @@ function getActiveNades(tick: number): NadeEvent[] {
     return replayData.nades.filter(n => {
         const detTick = getCanonicalDetonationTick(n);
         const fadeTick = getCanonicalFadeTick(n);
-        return detTick > 0 && fadeTick > 0 && detTick <= tick && tick <= fadeTick && !isTrajectoryEffectDuplicate(n);
+        return detTick > 0 && fadeTick > 0 && detTick <= tick && tick < fadeTick && !isTrajectoryEffectDuplicate(n);
     });
 }
 
 function isTrajectoryEffectDuplicate(nade: NadeEvent): boolean {
-    return hasTrajectory(nade) && getMatchingEffectEvent(nade) !== null;
+    return isProjectileNadeRecord(nade) && getMatchingEffectEvent(nade) !== null;
 }
 
 function getMatchingEffectEvent(nade: NadeEvent): NadeEvent | null {
-    if (!hasTrajectory(nade) || !replayData?.nades) return null;
+    if (!isProjectileNadeRecord(nade) || !replayData?.nades) return null;
     const cached = matchingEffectCache.get(nade);
     if (cached !== undefined) return cached;
 
@@ -558,7 +601,7 @@ function getMatchingEffectEvent(nade: NadeEvent): NadeEvent | null {
     let bestScore = Number.POSITIVE_INFINITY;
 
     for (const candidate of replayData.nades) {
-        if (candidate === nade || hasTrajectory(candidate) || !isMatchingNadeType(nade.nadeType, candidate.nadeType)) {
+        if (candidate === nade || isProjectileNadeRecord(candidate) || !isMatchingNadeType(nade.nadeType, candidate.nadeType)) {
             continue;
         }
 
@@ -575,6 +618,7 @@ function getMatchingEffectEvent(nade: NadeEvent): NadeEvent | null {
             ? Math.abs(recordedTickDelta - SMOKE_EFFECT_TICKS)
             : Math.abs(recordedTickDelta);
         if (nade.nadeType === 'smoke' && recordedTickDelta < 0) continue;
+        if (isFireNade(nade) && (recordedTickDelta < 0 || recordedTickDelta > FIRE_EFFECT_TICKS)) continue;
         if (tickDelta > getMatchTickWindow(nade.nadeType)) continue;
 
         const trajectoryEnd = getTrajectoryEndPoint(nade);
@@ -588,7 +632,9 @@ function getMatchingEffectEvent(nade: NadeEvent): NadeEvent | null {
         const endDistanceSquared = Math.min(eventToRecordedEnd, eventToTrajectoryEnd);
         if (endDistanceSquared > MATCH_DISTANCE_UNITS * MATCH_DISTANCE_UNITS) continue;
 
-        const score = tickDelta + Math.sqrt(endDistanceSquared) / 4;
+        const score = isFireNade(nade)
+            ? Math.sqrt(endDistanceSquared) * 4 + tickDelta / TICKS_PER_SECOND
+            : tickDelta + Math.sqrt(endDistanceSquared) / 4;
         if (score < bestScore) {
             bestScore = score;
             bestMatch = candidate;

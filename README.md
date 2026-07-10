@@ -52,21 +52,21 @@ Draw routes, callouts, and tactical plans directly on the map.
 - Show highlighted, color-coded kill, death/headshot, utility, bomb-plant, bomb-explosion, defuse, and time-expiry SVG icons underneath a timeline that packs non-overlapping events into shared lanes and grows only when stacking is necessary.
 - Click an event marker to seek to two seconds before the event.
 - Double-click an event marker to copy a CS2 `demo_goto` command for two seconds before that event, ready to paste into the CS2 demo viewer.
-- Use the clickable kill feed—with weapon, headshot, and flash-assist SVG icons and up to ten recent entries—to jump to kills quickly.
+- Use the clickable kill feed—with weapon, headshot, flash-assist, blinded-killer, airborne, no-scope, through-smoke, and wallbang SVG indicators and up to ten recent entries—to jump to kills quickly. Flash assists also identify the assisting player.
 - Clearly highlight player-roster and round-navigation buttons when hovering or using keyboard focus.
 
 ### Tactical information
 
 - Adjust responsive player sight-cone and line-of-sight overlays without redrawing the full player layer.
 - Show noise circles for running, shooting, jumping, and falling.
-- Review grenade and utility activity directly on the map, including smoke/fire center icons and countdowns.
+- Review grenade and utility activity directly on the map, including smoke/fire center icons and countdowns; Molotovs and incendiaries are hard-capped at 7 seconds and disappear sooner at their actual smoke-extinguished expiry time.
 - Track player health accurately, with dead players shown at zero health.
 
 ### Map interaction and drawing
 
 - Zoom toward the current mouse position with the mouse wheel.
 - Hold the left mouse button and drag to move around the zoomed map.
-- Select a player dot or roster name to automatically zoom and center the player at the configured zoom level.
+- Select a player dot or roster name to automatically zoom and center the player at the configured zoom level; deselecting keeps the current zoom and viewport position while stopping camera follow.
 - Create simple drawings by holding <kbd>Shift</kbd> and dragging with the left mouse button; choose the color and stroke width or clear all drawings from the controls.
 
 ## Libraries and tools

@@ -68,6 +68,11 @@ export const TIMELINE_ICON_FILES = {
 export const KILL_FEED_ICON_FILES = {
     headshot: 'icon_headshot.svg',
     flashAssist: 'flashbang_assist.svg',
+    blindKill: 'blind_kill.svg',
+    inAirKill: 'inairkill.svg',
+    noScope: 'noscope.svg',
+    smokeKill: 'smoke_kill.svg',
+    penetration: 'penetrate.svg',
 } as const;
 
 export function equipmentIconPath(filename: string): string {

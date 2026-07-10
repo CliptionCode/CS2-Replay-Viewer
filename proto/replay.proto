@@ -59,6 +59,11 @@ message KillEvent {
   float victim_x = 9;
   float victim_y = 10;
   bool assisted_by_flash = 11;
+  uint64 assister_steam_id = 12;
+  bool attacker_blind = 13;
+  bool killer_airborne = 14;
+  bool no_scope = 15;
+  bool through_smoke = 16;
 }
 
 message NadeEvent {

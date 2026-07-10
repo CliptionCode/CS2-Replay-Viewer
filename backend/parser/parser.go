@@ -13,6 +13,7 @@ import (
 
 const (
 	smokeDurationTicks = 18 * 64
+	fireDurationTicks  = 7 * 64
 )
 
 type ReplayData struct {
@@ -65,9 +66,14 @@ type KillEvent struct {
 	Tick              int
 	KillerSteamID     uint64
 	VictimSteamID     uint64
+	AssisterSteamID   uint64
 	Weapon            string
 	IsHeadshot        bool
 	AssistedByFlash   bool
+	AttackerBlind     bool
+	KillerAirborne    bool
+	NoScope           bool
+	ThroughSmoke      bool
 	PenetratedObjects int
 	KillerX           float32
 	KillerY           float32
@@ -167,6 +173,7 @@ func ParseFile(path string) (*ReplayData, error) {
 		roundStats:               make(map[int]*roundStats),
 		playerRoundContributions: make(map[uint64]int),
 		playerTotalRounds:        make(map[uint64]int),
+		infernoNadeIndices:       make(map[int64]int),
 	}
 
 	p.RegisterEventHandler(func(e events.Kill) {
@@ -186,6 +193,12 @@ func ParseFile(path string) (*ReplayData, error) {
 	})
 	p.RegisterEventHandler(func(e events.SmokeStart) {
 		recorder.recordSmokeStart(e, p)
+	})
+	p.RegisterEventHandler(func(e events.InfernoStart) {
+		recorder.recordInfernoStart(e, p)
+	})
+	p.RegisterEventHandler(func(e events.InfernoExpired) {
+		recorder.recordInfernoExpired(e, p)
 	})
 	p.RegisterEventHandler(func(e events.FlashExplode) {
 		recorder.recordFlashExplode(e, p)
@@ -267,21 +280,22 @@ type killRecord struct {
 }
 
 type frameRecorder struct {
-	kills        []KillEvent
-	nades        []NadeEvent
-	flashes      []FlashEvent
-	noises       []NoiseEvent
-	bombs        []BombEvent
-	rounds       []RoundData
-	currentRound *RoundData
-	playerFrames []PlayerFrame
-	playerStats  map[uint64]*playerStatTracker
-	damageMap    map[uint64]map[uint64]int
-	lastFrames   map[uint64]PlayerFrame
-	lastTick     int
-	mapName      string
-	serverName   string
-	maxTick      int
+	kills              []KillEvent
+	nades              []NadeEvent
+	flashes            []FlashEvent
+	noises             []NoiseEvent
+	bombs              []BombEvent
+	rounds             []RoundData
+	currentRound       *RoundData
+	playerFrames       []PlayerFrame
+	playerStats        map[uint64]*playerStatTracker
+	damageMap          map[uint64]map[uint64]int
+	lastFrames         map[uint64]PlayerFrame
+	lastTick           int
+	mapName            string
+	serverName         string
+	maxTick            int
+	infernoNadeIndices map[int64]int
 
 	roundStats  map[int]*roundStats
 	recentKills []killRecord
@@ -318,6 +332,9 @@ func (r *frameRecorder) recordKill(e events.Kill, p demoinfocs.Parser) {
 		Tick:              tick,
 		IsHeadshot:        e.IsHeadshot,
 		AssistedByFlash:   e.AssistedFlash,
+		AttackerBlind:     e.AttackerBlind,
+		NoScope:           e.NoScope,
+		ThroughSmoke:      e.ThroughSmoke,
 		PenetratedObjects: e.PenetratedObjects,
 	}
 
@@ -328,6 +345,7 @@ func (r *frameRecorder) recordKill(e events.Kill, p demoinfocs.Parser) {
 
 	if e.Killer != nil {
 		kill.KillerSteamID = e.Killer.SteamID64
+		kill.KillerAirborne = e.Killer.IsAirborne()
 		pos := e.Killer.Position()
 		kill.KillerX = float32(pos.X)
 		kill.KillerY = float32(pos.Y)
@@ -372,6 +390,7 @@ func (r *frameRecorder) recordKill(e events.Kill, p demoinfocs.Parser) {
 	}
 
 	if e.Assister != nil {
+		kill.AssisterSteamID = e.Assister.SteamID64
 		r.ensureStats(e.Assister.SteamID64).assists++
 		if _, ok := r.roundStats[roundNum]; !ok {
 			r.roundStats[roundNum] = &roundStats{
@@ -528,7 +547,7 @@ func (r *frameRecorder) recordNadeDestroyed(e events.GrenadeProjectileDestroy, p
 	nadeType := nadeTypeString(proj.WeaponInstance.Type)
 	destroyTick := p.CurrentFrame()
 	detTick := destroyTick
-	fadeTick := getNadeFadeTick(nadeType, detTick)
+	fadeTick := getDestroyedProjectileFadeTick(nadeType, detTick)
 
 	pos := proj.Position()
 	trajectory := make([]TrajectoryPoint, 0, len(proj.Trajectory))
@@ -594,6 +613,61 @@ func (r *frameRecorder) recordSmokeStart(e events.SmokeStart, p demoinfocs.Parse
 		nade.ThrowerSteamID = e.Thrower.SteamID64
 	}
 	r.nades = append(r.nades, nade)
+}
+
+func (r *frameRecorder) recordInfernoStart(e events.InfernoStart, p demoinfocs.Parser) {
+	if e.Inferno == nil {
+		return
+	}
+
+	tick := p.CurrentFrame()
+	if tick > r.maxTick {
+		r.maxTick = tick
+	}
+
+	position := e.Inferno.Entity.Position()
+	nade := NadeEvent{
+		Tick:           tick,
+		NadeType:       "molotov",
+		DetonationTick: tick,
+		FadeTick:       getNadeFadeTick("molotov", tick),
+		EndX:           float32(position.X),
+		EndY:           float32(position.Y),
+		EndZ:           float32(position.Z),
+		EffectRadius:   nadeRadius("molotov"),
+	}
+	if thrower := e.Inferno.Thrower(); thrower != nil {
+		nade.ThrowerSteamID = thrower.SteamID64
+	}
+
+	if r.infernoNadeIndices == nil {
+		r.infernoNadeIndices = make(map[int64]int)
+	}
+	r.infernoNadeIndices[e.Inferno.UniqueID()] = len(r.nades)
+	r.nades = append(r.nades, nade)
+}
+
+func (r *frameRecorder) recordInfernoExpired(e events.InfernoExpired, p demoinfocs.Parser) {
+	if e.Inferno == nil {
+		return
+	}
+
+	tick := p.CurrentFrame()
+	if tick > r.maxTick {
+		r.maxTick = tick
+	}
+	updateInfernoFadeTick(r.nades, r.infernoNadeIndices, e.Inferno.UniqueID(), tick)
+}
+
+func updateInfernoFadeTick(nades []NadeEvent, indices map[int64]int, infernoID int64, fadeTick int) bool {
+	index, ok := indices[infernoID]
+	if !ok || index < 0 || index >= len(nades) {
+		return false
+	}
+
+	nades[index].FadeTick = max(nades[index].DetonationTick, fadeTick)
+	delete(indices, infernoID)
+	return true
 }
 
 func (r *frameRecorder) recordFlashExplode(e events.FlashExplode, p demoinfocs.Parser) {
@@ -977,12 +1051,19 @@ func getNadeFadeTick(nadeType string, detTick int) int {
 	case "flashbang":
 		return detTick + 3
 	case "molotov", "incendiary":
-		return detTick + 448
+		return detTick + fireDurationTicks
 	case "decoy":
 		return detTick + 960
 	default:
 		return detTick
 	}
+}
+
+func getDestroyedProjectileFadeTick(nadeType string, destroyTick int) int {
+	if nadeType == "molotov" || nadeType == "incendiary" {
+		return destroyTick
+	}
+	return getNadeFadeTick(nadeType, destroyTick)
 }
 
 func inferStationaryEndpointStartTick(trajectory []TrajectoryPoint, fallbackTick int) int {
