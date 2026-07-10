@@ -2176,8 +2176,8 @@ onMount(() => {
                 <span>LOS Width</span>
                 <input
                     type="range"
-                    min="0.1"
-                    max="5.0"
+                    min="0.3"
+                    max="3.0"
                     step="0.1"
                     bind:value={lineOfSightWidth}
                 />

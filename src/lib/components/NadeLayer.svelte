@@ -25,6 +25,9 @@ const DECOY_COLOR = '#92400e';
 const DECOY_EFFECT_TICKS = 960;
 const DECOY_EXPIRE_INFERENCE_TICKS = 480;
 const STATIONARY_ENDPOINT_DISTANCE_SQUARED = 16;
+const TICKS_PER_SECOND = 64;
+const SMOKE_COUNTDOWN_COLOR = '#86efac';
+const FIRE_COUNTDOWN_COLOR = '#9ca3af';
 
 type NadePathPoint = Pick<NadeTrajectoryPoint, 'tick' | 'x' | 'y' | 'z'>;
 
@@ -48,11 +51,21 @@ function getNadeEffectFill(nadeType: string): string {
 }
 
 function getNadeEffectRadius(nadeType: string): number {
-    if (nadeType === 'smoke') return 50;
+    if (nadeType === 'smoke') return 45;
     if (nadeType === 'hegrenade') return 62;
     if (nadeType === 'flashbang') return 200;
     if (nadeType === 'molotov' || nadeType === 'incendiary') return 38;
     return 50;
+}
+
+function getNadeCountdownColor(nadeType: string): string | null {
+    if (nadeType === 'smoke') return SMOKE_COUNTDOWN_COLOR;
+    if (nadeType === 'molotov' || nadeType === 'incendiary') return FIRE_COUNTDOWN_COLOR;
+    return null;
+}
+
+function getRemainingEffectSeconds(nade: NadeEvent, tick: number): number {
+    return Math.max(0, Math.ceil((getCanonicalFadeTick(nade) - tick) / TICKS_PER_SECOND));
 }
 
 function getDetonationTick(nade: NadeEvent): number {
@@ -318,7 +331,8 @@ function drawNadeEffect(
     ctx: CanvasRenderingContext2D,
     nade: NadeEvent,
     mapMetadata: MapMetadata,
-    canvasSize: { width: number; height: number }
+    canvasSize: { width: number; height: number },
+    tick: number
 ): void {
     const endPoint = getCanonicalEndPoint(nade);
     const pos = worldToCanvas(endPoint.x, endPoint.y, mapMetadata, canvasSize);
@@ -349,6 +363,19 @@ function drawNadeEffect(
     ctx.beginPath();
     ctx.arc(pos.x, pos.y, getNadeEffectRadius(nade.nadeType), 0, Math.PI * 2);
     ctx.fill();
+
+    const countdownColor = getNadeCountdownColor(nade.nadeType);
+    if (countdownColor) {
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.9)';
+        ctx.fillStyle = countdownColor;
+        ctx.font = '800 13px Inter, sans-serif';
+        const countdownText = `${getRemainingEffectSeconds(nade, tick)}s`;
+        ctx.strokeText(countdownText, pos.x, pos.y);
+        ctx.fillText(countdownText, pos.x, pos.y);
+    }
     ctx.restore();
 }
 
@@ -574,7 +601,7 @@ function render() {
     // Draw nade effect zones for active nades (only within current round)
     for (const nade of activeNades) {
         if (!isNadeInRoundRange(nade, roundRange)) continue;
-        drawNadeEffect(ctx, nade, mapMetadata, canvasSize);
+        drawNadeEffect(ctx, nade, mapMetadata, canvasSize, tick);
     }
     ctx.restore();
 }

@@ -462,17 +462,11 @@ Development server commands are intentionally not run by the agent. Build protob
 - Buf CLI: https://buf.build/docs/cli
 
 ### Map Data Sources
-- cs2-radar-extractor: https://github.com/invakid404/cs2-radar-extractor
 - cs2-map-icons: https://github.com/MurkyYT/cs2-map-icons
-- csgo-maps-overviews (DDS→PNG): https://github.com/CSGO-Analysis/csgo-maps-overviews
 - Source 2 Viewer (VRF): https://github.com/ValveResourceFormat/ValveResourceFormat
-- csgo-centrifuge: https://github.com/saiko-tech/csgo-centrifuge
 
 ### Projects Using demoinfocs-golang (Reference)
-- csgoverview (2D viewer for CS:GO): https://github.com/Linus4/csgoverview
 - cs-demo-minifier: https://github.com/markus-wa/cs-demo-minifier
-- demoinfocs-wasm (browser): https://github.com/markus-wa/demoinfocs-wasm
-- awpy (Python wrapper): https://github.com/pnxenopoulos/awpy
 
 ### CS2 Specific
 - CS2 map overviews (Valve): in VPK at `/resource/overviews/{map}.txt`
@@ -521,13 +515,15 @@ Player ghost path trails are filtered to only show frames within the **current r
 
 Nade effect zones and projectile indicators were reduced to **1/4 of original size** (July 2026). Current radii in `NadeLayer.svelte`:
 - All projectile circles: **25** (was 100)
-- Smoke effect zone: **50** (was 200)
+- Smoke effect zone: **45** (was 50; approximately 10% smaller)
 - HE effect zone: **62** (was 250)
 - Flash effect zone: **200** (was 400; doubled from the previous 100px viewer radius)
 - Molotov effect zone: **38** (was 150)
 - Decoy active marker: **5px dot plus `Decoy` label**; no effect-zone circle
 
 Smoke effect-zone fill opacity is **45%** (was 35%), making it 10 percentage points less transparent.
+
+Active smoke and Molotov/incendiary effect zones display a centered whole-second countdown in `NadeLayer.svelte`. The text is derived from the canonical fade tick at 64 ticks per second and is shown as `XXs` until the effect is removed. Smoke countdown labels are light green (`#86efac`); Molotov/incendiary countdown labels are gray (`#9ca3af`). Both labels use a dark outline to remain legible over the effect fill and radar background.
 
 ### 11.2.3 Kill Feed Position
 
@@ -619,7 +615,7 @@ Kill feed player names are color-coded by team at that round: CT names are blue 
 
 `PlayerLayer.svelte` only indexes and renders Steam IDs present in `ReplayData.players` whose stored team is T or CT. Observer/admin/spectator frame samples are ignored, so only real player dots are drawn.
 
-The player sight cone defaults remain `34` canvas pixels long and `0.32` radians wide. `+page.svelte` exposes a compact top-left `Sight` panel below the time display. It includes `Show Sight Cone` (checked by default), `Show for selected Player` (unchecked by default), a width slider, a sight cone length slider with max `240`, a `Show Line of Sight` checkbox, a separate `LOS Len` slider with range `18` to `800`, and a `LOS Width` slider directly below it. Sight cone controls are independent from line-of-sight controls. `LOS Len` defaults to `300`; `LOS Width` defaults to `2.0px` (the former fixed line width), ranges from `0.1` to `5.0`, and steps by `0.1`. The panel scrolls vertically within the viewport so it does not collide with the bottom toolbar.
+The player sight cone defaults remain `34` canvas pixels long and `0.32` radians wide. `+page.svelte` exposes a compact top-left `Sight` panel below the time display. It includes `Show Sight Cone` (checked by default), `Show for selected Player` (unchecked by default), a width slider, a sight cone length slider with max `240`, a `Show Line of Sight` checkbox, a separate `LOS Len` slider with range `18` to `800`, and a `LOS Width` slider directly below it. Sight cone controls are independent from line-of-sight controls. `LOS Len` defaults to `300`; `LOS Width` defaults to `2.0px` (the former fixed line width), ranges from `0.3` to `3.0`, and steps by `0.1`. The panel scrolls vertically within the viewport so it does not collide with the bottom toolbar.
 
 The `Player Selection` section below the sight controls contains `Zoom Selected Player` plus a zoom percentage slider capped at `500%`. This is a visual viewport transform centered on the selected player's current world position. The page writes `--replay-viewport-transform` directly on the replay container from the playback tick, and map/player/nade/death-marker canvases inherit that CSS transform. Layer drawing, trajectories, map calibration, and world coordinate transforms stay unchanged. If no player is selected, this selection-follow zoom has no effect.
 
