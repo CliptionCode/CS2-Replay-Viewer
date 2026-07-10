@@ -58,3 +58,11 @@ An open-source, simple 2D viewer for Counter-Strike 2 replay demos. Load a `.dem
 ## License
 
 This project is open source. See [LICENSE](LICENSE) for details.
+
+## Donations
+
+If you enjoy CS2 Replay Viewer and would like to support its development, you can donate via PayPal.
+
+<a href="https://paypal.me/cliption">
+  <img src="https://img.shields.io/badge/Donate-PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white" alt="Donate with PayPal" />
+</a>
