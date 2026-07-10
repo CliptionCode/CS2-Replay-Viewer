@@ -1,0 +1,12 @@
+python3 -c "
+import json, sys
+
+# Path to the demo file
+path = 'C:\\\\Users\\\\micha\\\\Downloads\\\\iem-cologne-major-2026-betboom-vs-vitality-bo3-XBvPIFP-w6HGsMHgX5Tjhh\\\\betboom-vs-vitality-m1-overpass.dem'
+
+# Create request
+request = {'path': path}
+
+# Print to stdout (so it can be piped to the Go binary)
+print(json.dumps(request))
+" > test.dem.json

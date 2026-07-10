@@ -1,0 +1,21 @@
+[package]
+name = "cs2-replay-viewer"
+version = "0.1.2"
+edition = "2021"
+
+[lib]
+name = "cs2_replay_viewer_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+tokio = { version = "1", features = ["process", "io-util"] }
