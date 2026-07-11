@@ -8,6 +8,7 @@ import type { MapData as MapMetadata, ReplayData } from '$lib/types/replay/repla
 export let mapMetadata: MapMetadata;
 export let replayData: ReplayData | null = null;
 export let mapVariant: 'default' | 'lower' = 'default';
+export let onmapready: (ready: boolean) => void = () => {};
 
 let container: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
@@ -160,6 +161,7 @@ function loadCurrentMapImage(mapName: string): void {
 
     loadedMapName = `${nextMapName}:${mapVariant}`;
     mapImage = null;
+    onmapready(false);
     render();
 
     loadMapImage(nextMapName)
@@ -167,11 +169,13 @@ function loadCurrentMapImage(mapName: string): void {
             if (requestId !== mapLoadId) return;
             mapImage = loadedImage;
             render();
+            onmapready(true);
         })
         .catch(err => {
             if (requestId !== mapLoadId) return;
             console.error('Failed to load map image:', err);
             render();
+            onmapready(true);
         });
 }
 

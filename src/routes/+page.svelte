@@ -79,6 +79,7 @@ export let isPlaying: boolean = false;
 let displayTick: number = 0;
 let roundProgressPct: number = 0;
 let isLoading = false;
+let isMapReady = false;
 let replayContainer: HTMLDivElement | null = null;
 let playbackSpeed: number = 1;
 let rafId: number | null = null;
@@ -304,6 +305,7 @@ function resetLoadedReplayState(clearReplayData = false): void {
 
     if (clearReplayData) {
         replayData = null;
+        isMapReady = false;
         mapMetadata = createMapMetadataFromRadarInfo();
     }
 
@@ -336,6 +338,7 @@ function resetLoadedReplayState(clearReplayData = false): void {
 }
 
 function applyLoadedReplay(data: ReplayData): void {
+    isMapReady = false;
     replayData = data;
     mapMetadata = fillMapMetadata(data.map, data.header?.mapName);
     selectedPlayerSteamId = null;
@@ -2621,7 +2624,9 @@ onMount(() => {
         bind:mapMetadata={mapMetadata}
         bind:replayData={replayData}
         {mapVariant}
+        onmapready={(ready) => isMapReady = ready}
     />
+    {#if isMapReady}
     <DroppedEquipmentLayer
         bind:replayData={replayData}
         bind:mapMetadata={mapMetadata}
@@ -2668,6 +2673,7 @@ onMount(() => {
         {drawingMode}
         fadeSeconds={drawingFadeSeconds}
     />
+    {/if}
 
     <Controls
         {isPlaying}

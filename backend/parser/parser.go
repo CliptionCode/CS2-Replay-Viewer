@@ -181,14 +181,15 @@ func ParseFile(path string) (*ReplayData, error) {
 	defer p.Close()
 
 	recorder := &frameRecorder{
-		playerStats:              make(map[uint64]*playerStatTracker),
-		damageMap:                make(map[uint64]map[uint64]int),
-		lastFrames:               make(map[uint64]PlayerFrame),
-		roundStats:               make(map[int]*roundStats),
-		playerRoundContributions: make(map[uint64]int),
-		playerTotalRounds:        make(map[uint64]int),
-		infernoNadeIndices:       make(map[int64]int),
-		activeDroppedEquipment:   make(map[int]activeDroppedEquipment),
+		playerStats:               make(map[uint64]*playerStatTracker),
+		damageMap:                 make(map[uint64]map[uint64]int),
+		lastFrames:                make(map[uint64]PlayerFrame),
+		roundStats:                make(map[int]*roundStats),
+		playerRoundContributions:  make(map[uint64]int),
+		playerTotalRounds:         make(map[uint64]int),
+		infernoNadeIndices:        make(map[int64]int),
+		activeDroppedEquipment:    make(map[int]activeDroppedEquipment),
+		priorRoundDroppedEntities: make(map[int]struct{}),
 	}
 
 	p.RegisterEventHandler(func(e events.Kill) {
@@ -248,6 +249,12 @@ func ParseFile(path string) (*ReplayData, error) {
 	p.RegisterEventHandler(func(e events.ItemDrop) {
 		recorder.recordItemDrop(e, p)
 	})
+	p.RegisterEventHandler(func(e events.GenericGameEvent) {
+		recorder.recordGenericItemDrop(e, p)
+	})
+	p.RegisterEventHandler(func(e events.BombDropped) {
+		recorder.recordBombDrop(e, p)
+	})
 	p.RegisterEventHandler(func(e events.BombPlantBegin) {
 		recorder.recordBombPlantBegin(e, p)
 	})
@@ -301,24 +308,26 @@ type killRecord struct {
 }
 
 type frameRecorder struct {
-	kills                  []KillEvent
-	nades                  []NadeEvent
-	flashes                []FlashEvent
-	noises                 []NoiseEvent
-	bombs                  []BombEvent
-	droppedEquipment       []DroppedEquipment
-	rounds                 []RoundData
-	currentRound           *RoundData
-	playerFrames           []PlayerFrame
-	playerStats            map[uint64]*playerStatTracker
-	damageMap              map[uint64]map[uint64]int
-	lastFrames             map[uint64]PlayerFrame
-	lastTick               int
-	mapName                string
-	serverName             string
-	maxTick                int
-	infernoNadeIndices     map[int64]int
-	activeDroppedEquipment map[int]activeDroppedEquipment
+	kills                     []KillEvent
+	nades                     []NadeEvent
+	flashes                   []FlashEvent
+	noises                    []NoiseEvent
+	bombs                     []BombEvent
+	droppedEquipment          []DroppedEquipment
+	rounds                    []RoundData
+	currentRound              *RoundData
+	playerFrames              []PlayerFrame
+	playerStats               map[uint64]*playerStatTracker
+	damageMap                 map[uint64]map[uint64]int
+	lastFrames                map[uint64]PlayerFrame
+	lastTick                  int
+	mapName                   string
+	serverName                string
+	maxTick                   int
+	infernoNadeIndices        map[int64]int
+	activeDroppedEquipment    map[int]activeDroppedEquipment
+	priorRoundDroppedEntities map[int]struct{}
+	pendingEquipmentDrops     []pendingEquipmentDrop
 
 	roundStats  map[int]*roundStats
 	recentKills []killRecord
@@ -330,9 +339,25 @@ type frameRecorder struct {
 }
 
 type activeDroppedEquipment struct {
-	segmentIndex  int
-	equipmentType common.EquipmentType
-	lastSeenTick  int
+	segmentIndex     int
+	equipmentType    common.EquipmentType
+	lastSeenTick     int
+	dropSteamID      uint64
+	noiseType        string
+	noiseEmitted     bool
+	lastMovementTick int
+	lastX            float32
+	lastY            float32
+	lastZ            float32
+}
+
+type pendingEquipmentDrop struct {
+	tick     int
+	steamID  uint64
+	category string
+	x        float64
+	y        float64
+	z        float64
 }
 
 type playerStatTracker struct {
@@ -482,6 +507,7 @@ func isTeamMate(steamID1, steamID2 uint64, p demoinfocs.Parser) bool {
 
 func (r *frameRecorder) recordRoundStart(p demoinfocs.Parser) {
 	tick := p.CurrentFrame()
+	r.rememberCurrentlyDroppedEquipment(p)
 	r.closeDroppedEquipment(max(0, tick-1))
 	if tick > r.maxTick {
 		r.maxTick = tick
@@ -519,6 +545,7 @@ func (r *frameRecorder) recordRoundEnd(e events.RoundEnd, p demoinfocs.Parser) {
 		r.currentRound.KnifeOnly = r.firstRoundKnifeOnlySeen && !r.firstRoundNonKnifeSeen
 	}
 	r.currentRound.EndTick = tick + secondsToTicks(7, p)
+	r.rememberCurrentlyDroppedEquipment(p)
 	r.closeDroppedEquipment(r.currentRound.EndTick)
 	r.currentRound.WinnerTeam = int(e.Winner)
 	r.currentRound.WinReason = roundEndReasonString(e.Reason)
@@ -907,19 +934,72 @@ func (r *frameRecorder) recordWeaponReload(e events.WeaponReload, p demoinfocs.P
 }
 
 func (r *frameRecorder) recordItemDrop(e events.ItemDrop, p demoinfocs.Parser) {
-	if e.Player == nil || e.Weapon == nil {
+	if e.Player == nil {
 		return
 	}
 
-	category, supported := droppedEquipmentCategory(e.Weapon)
+	category := ""
+	if e.Weapon != nil {
+		var supported bool
+		category, supported = droppedEquipmentCategory(e.Weapon)
+		if !supported {
+			return
+		}
+	}
+	r.queueEquipmentDrop(e.Player, category, p)
+}
+
+func (r *frameRecorder) recordBombDrop(e events.BombDropped, p demoinfocs.Parser) {
+	if e.Player == nil {
+		return
+	}
+	r.queueEquipmentDrop(e.Player, "c4", p)
+}
+
+func (r *frameRecorder) recordGenericItemDrop(e events.GenericGameEvent, p demoinfocs.Parser) {
+	if e.Name != "item_remove" {
+		return
+	}
+	item, hasItem := e.Data["item"]
+	userID, hasUserID := e.Data["userid"]
+	if !hasItem || !hasUserID {
+		return
+	}
+
+	equipment := common.NewEquipment(common.MapEquipment(item.GetValString()))
+	category, supported := droppedEquipmentCategory(equipment)
 	if !supported {
 		return
 	}
 
-	noiseType := category + "_drop"
+	playerUserID := int(userID.GetValShort())
+	for _, player := range p.GameState().Participants().All() {
+		if player != nil && player.UserID == playerUserID {
+			r.queueEquipmentDrop(player, category, p)
+			return
+		}
+	}
+}
+
+func (r *frameRecorder) queueEquipmentDrop(player *common.Player, category string, p demoinfocs.Parser) {
 	tick := p.CurrentFrame()
-	pos := e.Player.Position()
-	r.recordNoise(tick, secondsToTicks(0.4, p), e.Player.SteamID64, pos.X, pos.Y, pos.Z, 700, noiseType)
+	pos := player.Position()
+	for i := len(r.pendingEquipmentDrops) - 1; i >= 0; i-- {
+		drop := &r.pendingEquipmentDrops[i]
+		if drop.tick < tick {
+			break
+		}
+		if drop.tick == tick && drop.steamID == player.SteamID64 {
+			if drop.category == "" {
+				drop.category = category
+			}
+			return
+		}
+	}
+	r.pendingEquipmentDrops = append(r.pendingEquipmentDrops, pendingEquipmentDrop{
+		tick: tick, steamID: player.SteamID64, category: category,
+		x: pos.X, y: pos.Y, z: pos.Z,
+	})
 }
 
 func (r *frameRecorder) recordNoise(tick int, durationTicks int, steamID uint64, x, y, z float64, radius int, noiseType string) {
@@ -1144,15 +1224,35 @@ func isEquipmentDropped(equipment *common.Equipment, p demoinfocs.Parser) bool {
 	return equipment.Owner == nil
 }
 
+func (r *frameRecorder) rememberCurrentlyDroppedEquipment(p demoinfocs.Parser) {
+	if r.priorRoundDroppedEntities == nil {
+		r.priorRoundDroppedEntities = make(map[int]struct{})
+	}
+	for entityID, equipment := range p.GameState().Weapons() {
+		_, supported := droppedEquipmentCategory(equipment)
+		if supported && isEquipmentDropped(equipment, p) {
+			r.priorRoundDroppedEntities[entityID] = struct{}{}
+		}
+	}
+}
+
 func (r *frameRecorder) recordDroppedEquipment(p demoinfocs.Parser, tick int) {
 	if r.currentRound == nil {
 		r.closeDroppedEquipment(max(0, tick-1))
+		r.discardExpiredPendingEquipmentDrops(tick)
 		return
 	}
 
 	seen := make(map[int]struct{})
+	remainingPriorRoundEntities := make(map[int]struct{})
 	for entityID, equipment := range p.GameState().Weapons() {
 		category, supported := droppedEquipmentCategory(equipment)
+		if _, carriedOver := r.priorRoundDroppedEntities[entityID]; carriedOver {
+			if supported && !(category == "c4" && r.isBombUnavailableAt(tick)) && isEquipmentDropped(equipment, p) {
+				remainingPriorRoundEntities[entityID] = struct{}{}
+			}
+			continue
+		}
 		if !supported || (category == "c4" && r.isBombUnavailableAt(tick)) || !isEquipmentDropped(equipment, p) {
 			continue
 		}
@@ -1161,6 +1261,7 @@ func (r *frameRecorder) recordDroppedEquipment(p demoinfocs.Parser, tick int) {
 		x, y, z := float32(position.X), float32(position.Y), float32(position.Z)
 		seen[entityID] = struct{}{}
 		active, exists := r.activeDroppedEquipment[entityID]
+		continuedMovement := false
 		if exists && active.equipmentType != equipment.Type {
 			segment := &r.droppedEquipment[active.segmentIndex]
 			segment.EndTick = max(segment.StartTick, tick-1)
@@ -1173,14 +1274,30 @@ func (r *frameRecorder) recordDroppedEquipment(p demoinfocs.Parser, tick int) {
 			if droppedEquipmentPositionChanged(*segment, x, y, z) {
 				segment.EndTick = max(segment.StartTick, tick-1)
 				exists = false
+				continuedMovement = true
 			} else {
 				segment.EndTick = tick
 				active.lastSeenTick = tick
-				r.activeDroppedEquipment[entityID] = active
 			}
 		}
 
 		if !exists {
+			if !continuedMovement {
+				dropSteamID := uint64(0)
+				if drop, ok := r.consumePendingEquipmentDrop(category, tick, x, y, z); ok {
+					dropSteamID = drop.steamID
+				} else if tick > r.currentRound.StartTick {
+					dropSteamID = nearestPlayerToDroppedEquipment(p, float64(x), float64(y), float64(z))
+				}
+				active = activeDroppedEquipment{
+					dropSteamID:      dropSteamID,
+					noiseType:        category + "_drop",
+					lastMovementTick: tick,
+					lastX:            x,
+					lastY:            y,
+					lastZ:            z,
+				}
+			}
 			r.droppedEquipment = append(r.droppedEquipment, DroppedEquipment{
 				StartTick:     tick,
 				EndTick:       tick,
@@ -1190,12 +1307,16 @@ func (r *frameRecorder) recordDroppedEquipment(p demoinfocs.Parser, tick int) {
 				Y:             y,
 				Z:             z,
 			})
-			r.activeDroppedEquipment[entityID] = activeDroppedEquipment{
-				segmentIndex:  len(r.droppedEquipment) - 1,
-				equipmentType: equipment.Type,
-				lastSeenTick:  tick,
-			}
+			active.segmentIndex = len(r.droppedEquipment) - 1
+			active.equipmentType = equipment.Type
+			active.lastSeenTick = tick
 		}
+
+		if droppedEquipmentNoiseHasSettled(&active, tick, x, y, z) {
+			r.recordNoise(tick, secondsToTicks(0.4, p), active.dropSteamID, float64(x), float64(y), float64(z), 700, active.noiseType)
+			active.noiseEmitted = true
+		}
+		r.activeDroppedEquipment[entityID] = active
 	}
 
 	for entityID, active := range r.activeDroppedEquipment {
@@ -1206,7 +1327,90 @@ func (r *frameRecorder) recordDroppedEquipment(p demoinfocs.Parser, tick int) {
 		segment.EndTick = max(segment.StartTick, tick-1)
 		delete(r.activeDroppedEquipment, entityID)
 	}
+	r.priorRoundDroppedEntities = remainingPriorRoundEntities
+	r.discardExpiredPendingEquipmentDrops(tick)
 
+}
+
+const pendingEquipmentDropLifetimeTicks = 8
+const pendingEquipmentDropMaxDistanceSquared = 512 * 512
+const droppedEquipmentNoiseSettleTicks = 6
+const droppedEquipmentNoiseMovementThresholdSquared = 0.25
+
+func droppedEquipmentNoiseHasSettled(active *activeDroppedEquipment, tick int, x, y, z float32) bool {
+	dx := active.lastX - x
+	dy := active.lastY - y
+	dz := active.lastZ - z
+	if dx*dx+dy*dy+dz*dz > droppedEquipmentNoiseMovementThresholdSquared {
+		active.lastMovementTick = tick
+	}
+	active.lastX = x
+	active.lastY = y
+	active.lastZ = z
+
+	return !active.noiseEmitted &&
+		active.dropSteamID != 0 &&
+		active.noiseType != "" &&
+		tick-active.lastMovementTick >= droppedEquipmentNoiseSettleTicks
+}
+
+func nearestPlayerToDroppedEquipment(p demoinfocs.Parser, x, y, z float64) uint64 {
+	nearestSteamID := uint64(0)
+	nearestDistance := float64(pendingEquipmentDropMaxDistanceSquared)
+	for _, player := range p.GameState().Participants().All() {
+		if player == nil || player.SteamID64 == 0 || (player.Team != common.TeamTerrorists && player.Team != common.TeamCounterTerrorists) {
+			continue
+		}
+		position := player.Position()
+		dx := position.X - x
+		dy := position.Y - y
+		dz := position.Z - z
+		distance := dx*dx + dy*dy + dz*dz
+		if distance <= nearestDistance {
+			nearestDistance = distance
+			nearestSteamID = player.SteamID64
+		}
+	}
+	return nearestSteamID
+}
+
+func (r *frameRecorder) consumePendingEquipmentDrop(category string, tick int, x, y, z float32) (pendingEquipmentDrop, bool) {
+	bestIndex := -1
+	bestDistance := float64(0)
+	for i, drop := range r.pendingEquipmentDrops {
+		age := tick - drop.tick
+		if age < 0 || age > pendingEquipmentDropLifetimeTicks || (drop.category != "" && drop.category != category) {
+			continue
+		}
+		dx := drop.x - float64(x)
+		dy := drop.y - float64(y)
+		dz := drop.z - float64(z)
+		distance := dx*dx + dy*dy + dz*dz
+		if distance > pendingEquipmentDropMaxDistanceSquared {
+			continue
+		}
+		if bestIndex < 0 || distance < bestDistance {
+			bestIndex = i
+			bestDistance = distance
+		}
+	}
+	if bestIndex < 0 {
+		return pendingEquipmentDrop{}, false
+	}
+
+	drop := r.pendingEquipmentDrops[bestIndex]
+	r.pendingEquipmentDrops = append(r.pendingEquipmentDrops[:bestIndex], r.pendingEquipmentDrops[bestIndex+1:]...)
+	return drop, true
+}
+
+func (r *frameRecorder) discardExpiredPendingEquipmentDrops(tick int) {
+	kept := r.pendingEquipmentDrops[:0]
+	for _, drop := range r.pendingEquipmentDrops {
+		if tick-drop.tick <= pendingEquipmentDropLifetimeTicks {
+			kept = append(kept, drop)
+		}
+	}
+	r.pendingEquipmentDrops = kept
 }
 
 func (r *frameRecorder) isBombUnavailableAt(tick int) bool {

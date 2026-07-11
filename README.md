@@ -64,11 +64,11 @@ Draw routes, callouts, and tactical plans directly on the map.
 ### Tactical information
 
 - Adjust responsive player sight-cone and line-of-sight overlays without redrawing the full player layer.
-- Show independently filterable noise circles for running, shooting, jumping, falling, weapon drops, utility drops, C4 drops, and weapon reloads.
+- Show responsive, independently filterable noise circles for running, shooting, jumping, falling, weapon drops, utility drops, C4 drops, and weapon reloads. Drop circles appear at the item's destination after it lands, including when the demo event omits weapon details.
 - Review grenade and utility activity directly on the map, including smoke/fire center icons and countdowns; Molotovs and incendiaries are hard-capped at 7 seconds and disappear sooner at their actual smoke-extinguished expiry time.
 - Track living-player health accurately; dead CT players use a blue death icon, dead T players use an orange death icon, and neither shows a health bar.
 - See each living player's currently selected weapon or utility name, all remaining utility, and carried C4 as stable icons above their name, including both carried Flashbangs when applicable.
-- Show exact parser-reported dropped weapon, utility, and ownerless C4 icons through the full seven-second post-round window, with separate visibility checkboxes enabled by default.
+- Show exact parser-reported dropped weapon, utility, and ownerless C4 icons through the current round's seven-second post-round window, with separate visibility checkboxes enabled by default and automatic clearing when another round is selected.
 
 ### Map interaction and drawing
 
@@ -80,6 +80,7 @@ Draw routes, callouts, and tactical plans directly on the map.
 - Create tactical drawings by holding <kbd>Shift</kbd> and dragging with either mouse button. Left and right drawing colors default to CT blue and T orange.
 - Keep drawings permanently for the current round or fade them over 1–6 seconds. Changing rounds and `Clear all Drawings` both remove permanent drawings.
 - Keep the radar at a consistent visual size when maximizing or restoring the application while zoomed.
+- Load the radar background before player dots and other replay overlays appear.
 
 ## Libraries and tools
 

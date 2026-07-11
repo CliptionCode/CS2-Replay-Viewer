@@ -78,6 +78,36 @@ func TestDroppedEquipmentCategory(t *testing.T) {
 	}
 }
 
+func TestPendingEquipmentDropMatchesDetectedCategory(t *testing.T) {
+	recorder := frameRecorder{
+		pendingEquipmentDrops: []pendingEquipmentDrop{
+			{tick: 100, steamID: 11, category: "weapon", x: 100, y: 100, z: 0},
+			{tick: 100, steamID: 22, category: "utility", x: 500, y: 500, z: 0},
+		},
+	}
+
+	drop, ok := recorder.consumePendingEquipmentDrop("utility", 102, 505, 500, 0)
+	if !ok || drop.steamID != 22 {
+		t.Fatalf("matched drop = %#v, %v; want utility drop from Steam ID 22", drop, ok)
+	}
+	if len(recorder.pendingEquipmentDrops) != 1 || recorder.pendingEquipmentDrops[0].steamID != 11 {
+		t.Fatalf("remaining drops = %#v; want only Steam ID 11", recorder.pendingEquipmentDrops)
+	}
+}
+
+func TestPendingEquipmentDropWithMissingEventWeaponUsesDetectedCategory(t *testing.T) {
+	recorder := frameRecorder{
+		pendingEquipmentDrops: []pendingEquipmentDrop{
+			{tick: 200, steamID: 33, category: "", x: 50, y: 60, z: 0},
+		},
+	}
+
+	drop, ok := recorder.consumePendingEquipmentDrop("c4", 201, 52, 61, 0)
+	if !ok || drop.steamID != 33 {
+		t.Fatalf("matched drop = %#v, %v; want untyped drop from Steam ID 33", drop, ok)
+	}
+}
+
 func TestInventoryUtilityTypes(t *testing.T) {
 	for _, equipmentType := range []common.EquipmentType{
 		common.EqFlash, common.EqSmoke, common.EqHE, common.EqMolotov, common.EqIncendiary, common.EqDecoy,
@@ -121,6 +151,38 @@ func TestDroppedEquipmentPositionChangedUsesMovementThreshold(t *testing.T) {
 	}
 	if !droppedEquipmentPositionChanged(item, 105, 200, 10) {
 		t.Fatal("five-unit movement should start a new position segment")
+	}
+}
+
+func TestDroppedEquipmentNoiseWaitsForLanding(t *testing.T) {
+	active := activeDroppedEquipment{
+		dropSteamID:      42,
+		noiseType:        "weapon_drop",
+		lastMovementTick: 100,
+		lastX:            10,
+		lastY:            20,
+		lastZ:            30,
+	}
+
+	if droppedEquipmentNoiseHasSettled(&active, 105, 10, 20, 30) {
+		t.Fatal("drop noise should wait for the full landing confirmation window")
+	}
+	if !droppedEquipmentNoiseHasSettled(&active, 106, 10, 20, 30) {
+		t.Fatal("stationary equipment should emit noise after the landing confirmation window")
+	}
+
+	active.noiseEmitted = false
+	if droppedEquipmentNoiseHasSettled(&active, 107, 11, 20, 30) {
+		t.Fatal("movement should restart the landing confirmation window")
+	}
+	if active.lastMovementTick != 107 {
+		t.Fatalf("last movement tick = %d, want 107", active.lastMovementTick)
+	}
+	if droppedEquipmentNoiseHasSettled(&active, 112, 11, 20, 30) {
+		t.Fatal("drop noise should still wait after movement")
+	}
+	if !droppedEquipmentNoiseHasSettled(&active, 113, 11, 20, 30) {
+		t.Fatal("drop noise should emit after the item settles again")
 	}
 }
 

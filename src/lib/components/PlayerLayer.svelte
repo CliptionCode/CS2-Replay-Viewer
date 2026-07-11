@@ -33,6 +33,8 @@ export let enabledNoiseSources: Record<string, boolean> = {
 
 let container: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
+let noiseCanvas: HTMLCanvasElement | null = null;
+let noiseCtx: CanvasRenderingContext2D | null = null;
 let sightCanvas: HTMLCanvasElement | null = null;
 let sightCtx: CanvasRenderingContext2D | null = null;
 
@@ -47,6 +49,7 @@ let cachedRoundKey: string | null = null;
 let unsubscribeTick: (() => void) | null = null;
 let flashEventsBySteamId = new Map<string, FlashEvent[]>();
 let noiseEvents: NoiseEvent[] = [];
+let maxNoiseLookbackTicks = 1;
 
 const MAX_INTERPOLATION_GAP_TICKS = 16;
 const TEAM_T = 2;
@@ -196,6 +199,7 @@ function initializeTrails(): void {
     trailCursor.clear();
     flashEventsBySteamId.clear();
     noiseEvents = [];
+    maxNoiseLookbackTicks = 1;
     cachedRoundKey = null;
     cachedKills = null;
     cachedKillsKey = null;
@@ -225,6 +229,12 @@ function initializeTrails(): void {
     }
 
     noiseEvents = [...(replayData.noises ?? [])].sort((a, b) => a.tick - b.tick);
+    maxNoiseLookbackTicks = noiseEvents.reduce((maxTicks, noise) => {
+        const runningTail = normalizeNoiseType(noise.noiseType) === 'running'
+            ? RUNNING_NOISE_HOLD_TICKS + RUNNING_NOISE_FADE_TICKS
+            : 0;
+        return Math.max(maxTicks, Math.max(1, noise.endTick - noise.tick) + runningTail);
+    }, 1);
 }
 
 function getPlayableSteamIds(): Set<string> {
@@ -568,8 +578,17 @@ function drawNoiseCircles(
     if (!showNoiseCircle) return;
 
     const activeRunningNoises = new Map<string, NoiseEvent>();
+    const firstRelevantTick = tick - maxNoiseLookbackTicks;
+    let low = 0;
+    let high = noiseEvents.length;
+    while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (noiseEvents[middle].tick < firstRelevantTick) low = middle + 1;
+        else high = middle;
+    }
 
-    for (const noise of noiseEvents) {
+    for (let index = low; index < noiseEvents.length; index++) {
+        const noise = noiseEvents[index];
         if (noise.tick > tick) break;
         if (noise.radius <= 0 || !isNoiseEnabled(noise)) continue;
 
@@ -850,6 +869,7 @@ function drawKillMarkers(
 }
 
 let rafId: number | null = null;
+let noiseRafId: number | null = null;
 let sightRafId: number | null = null;
 let renderLoopId: number | null = null;
 
@@ -866,6 +886,14 @@ function scheduleSightRender() {
     sightRafId = requestAnimationFrame(() => {
         sightRafId = null;
         renderSightOnly();
+    });
+}
+
+function scheduleNoiseRender() {
+    if (noiseRafId !== null) return;
+    noiseRafId = requestAnimationFrame(() => {
+        noiseRafId = null;
+        renderNoiseOnly();
     });
 }
 
@@ -921,6 +949,23 @@ function renderSightOnly(): void {
     });
 }
 
+function renderNoiseLayer(tick: number, canvasSize: { width: number; height: number }): void {
+    if (!noiseCtx) return;
+    noiseCtx.clearRect(0, 0, canvasSize.width, canvasSize.height);
+    drawNoiseCircles(noiseCtx, tick, mapMetadata, canvasSize);
+}
+
+function renderNoiseOnly(): void {
+    if (!browser || !noiseCtx || !noiseCanvas || !replayData) return;
+
+    const playbackTick = getPlaybackTick();
+    updatePlayerFrames(playbackTick);
+    renderNoiseLayer(Math.floor(playbackTick), {
+        width: noiseCanvas.clientWidth,
+        height: noiseCanvas.clientHeight,
+    });
+}
+
 function render() {
     if (!browser || !ctx || !container || !replayData) return;
 
@@ -928,6 +973,10 @@ function render() {
         if (sightRafId !== null) {
             cancelAnimationFrame(sightRafId);
             sightRafId = null;
+        }
+        if (noiseRafId !== null) {
+            cancelAnimationFrame(noiseRafId);
+            noiseRafId = null;
         }
         const playbackTick = getPlaybackTick();
         const tick = Math.floor(playbackTick);
@@ -949,13 +998,13 @@ function render() {
         }
 
         drawKillMarkers(ctx, getCachedKillsInCurrentRound(tick), mapMetadata, canvasSize, tick);
-        drawNoiseCircles(ctx, tick, mapMetadata, canvasSize);
         drawBombDot(ctx, tick, mapMetadata, canvasSize);
 
         for (const [steamId, frame] of playerFrames) {
             drawPlayer(ctx, frame, steamId, mapMetadata, canvasSize, tick);
         }
         ctx.restore();
+        renderNoiseLayer(tick, canvasSize);
         renderSightLayer(tick, canvasSize);
     } catch (error) {
         console.error('Error rendering player layer:', error);
@@ -968,6 +1017,10 @@ onMount(() => {
     if (container) {
         ctx = container.getContext('2d')!;
         resizeCanvas(container, ctx);
+    }
+    if (noiseCanvas) {
+        noiseCtx = noiseCanvas.getContext('2d')!;
+        resizeCanvas(noiseCanvas, noiseCtx);
     }
     if (sightCanvas) {
         sightCtx = sightCanvas.getContext('2d')!;
@@ -1024,9 +1077,19 @@ $: {
 }
 
 $: {
-    void selectedPlayerSteamId, showNoiseCircle, noiseForSelectedPlayer, enabledNoiseSources;
+    void selectedPlayerSteamId;
     if (browser && ctx) {
         scheduleRender();
+    }
+    if (browser && noiseCtx) {
+        scheduleNoiseRender();
+    }
+}
+
+$: {
+    void showNoiseCircle, noiseForSelectedPlayer, enabledNoiseSources;
+    if (browser && noiseCtx) {
+        scheduleNoiseRender();
     }
 }
 
@@ -1036,6 +1099,9 @@ function handleResize() {
     resizeTimeout = setTimeout(() => {
         if (container) {
             resizeCanvas(container, ctx);
+        }
+        if (noiseCanvas) {
+            resizeCanvas(noiseCanvas, noiseCtx);
         }
         if (sightCanvas) {
             resizeCanvas(sightCanvas, sightCtx);
@@ -1057,6 +1123,7 @@ onDestroy(() => {
     }
     if (resizeTimeout) clearTimeout(resizeTimeout);
     if (rafId !== null) cancelAnimationFrame(rafId);
+    if (noiseRafId !== null) cancelAnimationFrame(noiseRafId);
     if (sightRafId !== null) cancelAnimationFrame(sightRafId);
     stopRenderLoop();
     unsubscribeTick?.();
@@ -1087,7 +1154,17 @@ onDestroy(() => {
 .sight-layer {
     pointer-events: none;
 }
+
+.noise-layer {
+    pointer-events: none;
+}
 </style>
+
+<canvas
+    bind:this={noiseCanvas}
+    class="player-layer noise-layer canvas"
+    style="width: 100%; height: 100%;"
+></canvas>
 
 <canvas 
     bind:this={container}

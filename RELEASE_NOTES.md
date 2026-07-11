@@ -1,55 +1,51 @@
-# CS2 Replay Viewer v0.1.9
+# CS2 Replay Viewer v0.1.10
 
-Version 0.1.9 makes player loadouts and audible actions easier to review by adding live utility icons, dropped C4 tracking, and new noise-circle filters.
+Version 0.1.10 makes noise filtering feel immediate, restores missing drop-noise circles, and presents newly loaded replays in the correct visual order.
 
 ## Change Overview
 
-- 🚀 **New:** Newly added features
-- 🔧 **Adjusted:** Improvements to existing behavior
+- ⚡ **Performance:** Faster, smoother interactions
 - 🐛 **Fixed:** Corrected behavior
+- 🔧 **Adjusted:** Improvements to existing behavior
 - 📦 **Version and Documentation:** Release and guide updates
-
-## 🚀 New Features
-
-### Drop and Reload Noise
-
-- Weapon, utility, and C4 drops can now display noise circles.
-- Weapon reloads can now display noise circles.
-- Each new noise source has its own checkbox and is enabled by default.
-- New source filters only display circles while the master `Show Noise Circle` checkbox is enabled.
-
-### Dropped C4
-
-- Ownerless C4 now appears at its exact ground position with the C4 icon.
-- The C4 marker disappears when it is picked up or planted and does not remain after explosion or defuse.
-- A new `Dropped C4` checkbox is enabled by default in the `Dropped Equipment` section.
-
-### Live Player Equipment
-
-- Living players continue to show the name of their currently selected weapon or utility.
-- Every remaining grenade is shown above the player's name with a white utility icon.
-- The C4 icon appears in the same inventory row while a living player is carrying the bomb.
-- Players carrying two Flashbangs display two Flashbang icons, and throwing one removes only one icon.
 
 ## 🔧 Adjusted Features
 
-### Noise Controls
+### Replay Loading
 
-- Corrected the master control label from `Show Noice Circle` to `Show Noise Circle`.
-- Existing running, jumping, shooting, and falling filters continue to work independently alongside the new sources.
+- The radar background now finishes loading before player dots, equipment, utility, kill markers, and drawings appear.
+- If a radar image is unavailable, the replay still proceeds with the fallback map background.
 
-### Dropped Equipment
+### Round-Specific Dropped Equipment
 
-- Dropped-equipment visibility now covers weapons, utility, and C4 with a separate default-enabled filter for each category.
+- Dropped weapons, utility, and C4 are now cleared when another round is selected.
+- The seven-second post-round display remains limited to the round where the item was dropped.
+- Delayed or still-moving item markers from the finished round no longer reappear during the next round.
+
+## ⚡ Performance Improvements
+
+### Responsive Noise Controls
+
+- Checking or unchecking any option in the `Noise` section now updates only the noise display.
+- Noise filters no longer pause the full replay interface while unrelated player details and movement trails redraw.
+- Long demos remain responsive because only noise events relevant to the current moment are evaluated.
 
 ## 🐛 Bug Fixes
 
-### Stable Utility Inventory
+### Drop Noise Circles
 
-- Multiple carried utility icons now keep a consistent left-to-right order instead of repeatedly swapping positions.
-- Utility slots remain fixed while icon images load, preventing the row from shifting or re-centering.
+- Fixed missing noise circles for weapon drops.
+- Fixed missing noise circles for utility drops.
+- Fixed missing noise circles for C4 drops.
+- Drop circles now wait until the item has landed and then appear at its final ground location while remaining associated with the player who dropped it.
+- Drop detection now also works when a demo omits the weapon details from its normal drop event.
+
+### Frontend Reliability
+
+- Removed obsolete, unused replay-rendering code that was no longer part of the application.
+- Corrected the frontend type-checking setup so project diagnostics can run without missing runtime type definitions or entry-point errors.
 
 ## 📦 Version and Documentation
 
-- Increased the application version from `0.1.8` to `0.1.9`.
-- Updated the feature guide and project context for the new noise, equipment, and player-inventory behavior.
+- Increased the application version from `0.1.9` to `0.1.10`.
+- Updated the feature guide and replaced the project context with a shorter implementation reference focused on current architecture and workflow rules.
