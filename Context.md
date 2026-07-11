@@ -2,7 +2,7 @@
 
 Compact implementation context for future Codex work.
 
-> **Application version:** `0.1.10`. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application entry in `src-tauri/Cargo.lock` synchronized.
+> **Application version:** `0.1.11`. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application entry in `src-tauri/Cargo.lock` synchronized.
 
 ## Mandatory workflow
 
@@ -83,7 +83,7 @@ The active frontend is SvelteKit and starts at `src/routes/+page.svelte`. There 
 ## Data and replay rules
 
 - CS2 demos are treated as 64 tick unless the parsed header provides another positive rate.
-- `events.FrameDone` samples every player's position, view direction, health, armor, selected weapon, utilities, and bomb possession.
+- `events.FrameDone` samples every player's position, view direction, health, armor, selected weapon, reload state, utilities, and bomb possession. The selected weapon label adds `(Reloading)` while demoinfocs reports `Player.IsReloading`, which clears on completion or cancellation.
 - Only stored T/CT participants render as players. Stored teams represent the end of the match; canvas and roster logic flips sides by half.
 - Round playback begins at `freezetimeEndTick`, with a 15-second fallback for old data.
 - Round display ends seven seconds after the terminal event, clamped before the next round.
@@ -97,7 +97,7 @@ The active frontend is SvelteKit and starts at `src/routes/+page.svelte`. There 
 - Formula: `radarX = (worldX - posX) / scale`, `radarY = (posY - worldY) / scale`.
 - `MAP_CANVAS_MARGIN` must be shared by radar and overlay transforms.
 - Nuke, Train, and Vertigo have lower-map background variants; overlays keep the same transform.
-- `MapLayer` reports readiness. Replay overlays remain unmounted until the radar image is drawn; image failure releases the gate with the fallback background.
+- `MapLayer` shows a lightweight radar-loading surface instead of the fallback grid during normal image loading. It reports readiness only after the radar has painted for one frame; replay overlays remain unmounted until then. Image failure paints the fallback background before releasing the gate.
 
 ### Dropped equipment and drop noise
 
@@ -134,6 +134,11 @@ The active frontend is SvelteKit and starts at `src/routes/+page.svelte`. There 
 - Map wheel zoom targets the pointer without selection; with selection it changes follow zoom.
 - Hold Shift and drag either mouse button to draw. Releasing Shift finalizes the stroke.
 - Timeline event single-click seeks with a lead-in; double-click copies `demo_goto`.
+
+### Application branding
+
+- `static/app-icon.png` is the browser favicon source.
+- Tauri bundle icons in `src-tauri/icons` are generated from the same two-cherry application logo.
 
 ## Release documentation
 

@@ -107,19 +107,20 @@ type TrajectoryPoint struct {
 }
 
 type PlayerFrame struct {
-	Tick      int
-	SteamID   uint64
-	X         float32
-	Y         float32
-	Z         float32
-	Yaw       float32
-	Pitch     float32
-	Health    int
-	Armor     int
-	Weapon    string
-	IsAlive   bool
-	Utilities []string
-	HasBomb   bool
+	Tick        int
+	SteamID     uint64
+	X           float32
+	Y           float32
+	Z           float32
+	Yaw         float32
+	Pitch       float32
+	Health      int
+	Armor       int
+	Weapon      string
+	IsAlive     bool
+	Utilities   []string
+	HasBomb     bool
+	IsReloading bool
 }
 
 type FlashEvent struct {
@@ -1136,16 +1137,17 @@ func (r *frameRecorder) recordFrameDone(p demoinfocs.Parser) {
 		}
 		pos := player.Position()
 		frame := PlayerFrame{
-			Tick:    tick,
-			SteamID: player.SteamID64,
-			X:       float32(pos.X),
-			Y:       float32(pos.Y),
-			Z:       float32(pos.Z),
-			Yaw:     player.ViewDirectionX(),
-			Pitch:   player.ViewDirectionY(),
-			Health:  player.Health(),
-			Armor:   player.Armor(),
-			IsAlive: player.IsAlive(),
+			Tick:        tick,
+			SteamID:     player.SteamID64,
+			X:           float32(pos.X),
+			Y:           float32(pos.Y),
+			Z:           float32(pos.Z),
+			Yaw:         player.ViewDirectionX(),
+			Pitch:       player.ViewDirectionY(),
+			Health:      player.Health(),
+			Armor:       player.Armor(),
+			IsAlive:     player.IsAlive(),
+			IsReloading: player.IsReloading,
 		}
 		if wep := player.ActiveWeapon(); wep != nil {
 			frame.Weapon = wep.String()

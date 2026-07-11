@@ -741,7 +741,9 @@ function drawPlayer(
         ctx.strokeStyle = 'rgba(15, 23, 42, 0.85)';
 
         const playerName = getPlayerName(steamId);
-        const weapon = frame.weapon || '';
+        const weapon = frame.weapon
+            ? `${frame.weapon}${frame.isReloading ? ' (Reloading)' : ''}`
+            : '';
         const utilities = [
             ...(frame.utilities ?? []),
             ...(frame.hasBomb ? ['C4'] : []),

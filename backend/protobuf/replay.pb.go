@@ -824,6 +824,7 @@ type PlayerFrame struct {
 	IsAlive       bool                   `protobuf:"varint,11,opt,name=is_alive,json=isAlive,proto3" json:"is_alive,omitempty"`
 	Utilities     []string               `protobuf:"bytes,12,rep,name=utilities,proto3" json:"utilities,omitempty"`
 	HasBomb       bool                   `protobuf:"varint,13,opt,name=has_bomb,json=hasBomb,proto3" json:"has_bomb,omitempty"`
+	IsReloading   bool                   `protobuf:"varint,14,opt,name=is_reloading,json=isReloading,proto3" json:"is_reloading,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -945,6 +946,13 @@ func (x *PlayerFrame) GetUtilities() []string {
 func (x *PlayerFrame) GetHasBomb() bool {
 	if x != nil {
 		return x.HasBomb
+	}
+	return false
+}
+
+func (x *PlayerFrame) GetIsReloading() bool {
+	if x != nil {
+		return x.IsReloading
 	}
 	return false
 }
@@ -1487,7 +1495,7 @@ const file_replay_proto_rawDesc = "" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12\f\n" +
 	"\x01x\x18\x02 \x01(\x02R\x01x\x12\f\n" +
 	"\x01y\x18\x03 \x01(\x02R\x01y\x12\f\n" +
-	"\x01z\x18\x04 \x01(\x02R\x01z\"\xa8\x02\n" +
+	"\x01z\x18\x04 \x01(\x02R\x01z\"\xcb\x02\n" +
 	"\vPlayerFrame\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12\x19\n" +
 	"\bsteam_id\x18\x02 \x01(\x04R\asteamId\x12\f\n" +
@@ -1502,7 +1510,8 @@ const file_replay_proto_rawDesc = "" +
 	" \x01(\tR\x06weapon\x12\x19\n" +
 	"\bis_alive\x18\v \x01(\bR\aisAlive\x12\x1c\n" +
 	"\tutilities\x18\f \x03(\tR\tutilities\x12\x19\n" +
-	"\bhas_bomb\x18\r \x01(\bR\ahasBomb\"\xba\x01\n" +
+	"\bhas_bomb\x18\r \x01(\bR\ahasBomb\x12!\n" +
+	"\fis_reloading\x18\x0e \x01(\bR\visReloading\"\xba\x01\n" +
 	"\n" +
 	"FlashEvent\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12&\n" +

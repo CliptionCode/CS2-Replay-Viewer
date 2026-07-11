@@ -15,6 +15,9 @@ let ctx: CanvasRenderingContext2D | null = null;
 let mapImage: HTMLImageElement | null = null;
 let loadedMapName = '';
 let mapLoadId = 0;
+let mapLoadState: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
+let readyFrameId: number | null = null;
+let readyPaintFrameId: number | null = null;
 
 function getMapMetadata(): MapMetadata {
     return mapMetadata;
@@ -24,6 +27,8 @@ function loadMapImage(mapName: string): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
         const image = new Image();
         const imagePath = getMapImagePath(mapName, mapVariant);
+        image.decoding = 'async';
+        image.fetchPriority = 'high';
         image.onload = () => resolve(image);
         image.onerror = () => reject(new Error(`Failed to load map image: ${mapName}`));
         image.src = imagePath;
@@ -114,6 +119,26 @@ function drawMapBackground(
     }
 }
 
+function drawMapLoadingState(
+    ctx: CanvasRenderingContext2D,
+    mapWidth: number,
+    mapHeight: number,
+    originX: number,
+    originY: number
+): void {
+    ctx.fillStyle = '#15151d';
+    ctx.fillRect(originX, originY, mapWidth, mapHeight);
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.18)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(originX, originY, mapWidth, mapHeight);
+
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '600 13px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Loading radar…', originX + mapWidth / 2, originY + mapHeight / 2);
+}
+
 function drawMapImage(
     ctx: CanvasRenderingContext2D,
     image: HTMLImageElement,
@@ -161,6 +186,8 @@ function loadCurrentMapImage(mapName: string): void {
 
     loadedMapName = `${nextMapName}:${mapVariant}`;
     mapImage = null;
+    mapLoadState = 'loading';
+    cancelReadyNotification();
     onmapready(false);
     render();
 
@@ -168,15 +195,41 @@ function loadCurrentMapImage(mapName: string): void {
         .then(loadedImage => {
             if (requestId !== mapLoadId) return;
             mapImage = loadedImage;
+            mapLoadState = 'ready';
             render();
-            onmapready(true);
+            notifyReadyAfterMapPaint(requestId);
         })
         .catch(err => {
             if (requestId !== mapLoadId) return;
             console.error('Failed to load map image:', err);
+            mapLoadState = 'failed';
             render();
-            onmapready(true);
+            notifyReadyAfterMapPaint(requestId);
         });
+}
+
+function cancelReadyNotification(): void {
+    if (readyFrameId !== null) {
+        cancelAnimationFrame(readyFrameId);
+        readyFrameId = null;
+    }
+    if (readyPaintFrameId !== null) {
+        cancelAnimationFrame(readyPaintFrameId);
+        readyPaintFrameId = null;
+    }
+}
+
+function notifyReadyAfterMapPaint(requestId: number): void {
+    cancelReadyNotification();
+    readyFrameId = requestAnimationFrame(() => {
+        readyFrameId = null;
+        readyPaintFrameId = requestAnimationFrame(() => {
+            readyPaintFrameId = null;
+            if (requestId === mapLoadId) {
+                onmapready(true);
+            }
+        });
+    });
 }
 
 function render() {
@@ -202,10 +255,12 @@ function render() {
     const centerX = (canvasSize.width - mapCanvasSize.width) / 2;
     const centerY = (canvasSize.height - mapCanvasSize.height) / 2;
 
-    if (mapImage && mapImage.complete) {
+    if (mapLoadState === 'ready' && mapImage?.complete) {
         drawMapImage(ctx, mapImage, mapCanvasSize.width, mapCanvasSize.height, centerX, centerY);
-    } else {
+    } else if (mapLoadState === 'failed') {
         drawMapBackground(ctx, mapCanvasSize.width, mapCanvasSize.height, centerX, centerY);
+    } else {
+        drawMapLoadingState(ctx, mapCanvasSize.width, mapCanvasSize.height, centerX, centerY);
     }
 }
 
@@ -239,6 +294,7 @@ function handleResize() {
 }
 
 onDestroy(() => {
+    cancelReadyNotification();
     if (browser) {
         window.removeEventListener('resize', handleResize);
     }

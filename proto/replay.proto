@@ -104,6 +104,7 @@ message PlayerFrame {
   bool is_alive = 11;
   repeated string utilities = 12;
   bool has_bomb = 13;
+  bool is_reloading = 14;
 }
 
 message FlashEvent {
