@@ -24,8 +24,21 @@ import DroppedEquipmentLayer from '$lib/components/DroppedEquipmentLayer.svelte'
 import KillLayer from '$lib/components/KillLayer.svelte';
 import DrawingLayer from '$lib/components/DrawingLayer.svelte';
 import Controls from '$lib/components/Controls.svelte';
+import ShortcutBinding from '$lib/components/ShortcutBinding.svelte';
 import TimeDisplay from '$lib/components/TimeDisplay.svelte';
 import RoundNav from '$lib/components/RoundNav.svelte';
+import {
+    assignShortcut,
+    loadShortcutRecords,
+    modifierShortcutFromKeyboardEvent,
+    removeShortcut,
+    shortcutBindingsStore,
+    shortcutFromKeyboardEvent,
+    shortcutFromMouseEvent,
+    shortcutFromWheelEvent,
+    shortcutForDisplay,
+    type ShortcutConflict,
+} from '$lib/shortcuts';
 import { DEFAULT_RADAR_MAP, getRadarInfo } from '$lib/maps/radar-info';
 import {
     getPlaybackStartRound as getReplayPlaybackStartRound,
@@ -128,6 +141,7 @@ const DONATION_URL = 'https://paypal.me/cliption';
 const NADE_SINGLE_CLICK_DELAY_MS = 500;
 const DEAD_ICON_SINGLE_CLICK_DELAY_MS = 500;
 const DEAD_PLAYER_SEEK_LEAD_SECONDS = 3;
+const PLAYER_NAME_COLLATOR = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
 
 const NOISE_SOURCE_OPTIONS = [
     { key: 'running', label: 'Running Noise' },
@@ -157,6 +171,33 @@ type MapVariant = 'default' | 'lower';
 type NoiseSourceKey = typeof NOISE_SOURCE_OPTIONS[number]['key'];
 type TimelineUtilityKey = typeof TIMELINE_UTILITY_OPTIONS[number]['key'];
 type TimelineCombatEventKey = typeof TIMELINE_COMBAT_EVENT_OPTIONS[number]['key'];
+type ToolbarSectionKey = 'sight' | 'player' | 'noise' | 'timeline' | 'equipment' | 'drawing';
+
+const TOOLBAR_SECTIONS: { key: ToolbarSectionKey; label: string }[] = [
+    { key: 'sight', label: 'Sight' },
+    { key: 'player', label: 'Player' },
+    { key: 'noise', label: 'Noise' },
+    { key: 'timeline', label: 'Timeline' },
+    { key: 'equipment', label: 'Equipment' },
+    { key: 'drawing', label: 'Drawing' },
+];
+
+const SLIDER_SHORTCUT_ACTIONS = new Set([
+    'sight.width.decrease',
+    'sight.width.increase',
+    'sight.length.decrease',
+    'sight.length.increase',
+    'sight.los-width.decrease',
+    'sight.los-width.increase',
+    'sight.los-length.decrease',
+    'sight.los-length.increase',
+    'player.zoom.decrease',
+    'player.zoom.increase',
+    'drawing.stroke.decrease',
+    'drawing.stroke.increase',
+    'drawing.fade.decrease',
+    'drawing.fade.increase',
+]);
 
 let activeStart: number = 0;
 let sightConeLength = DEFAULT_SIGHT_CONE_LENGTH;
@@ -186,7 +227,8 @@ let rightDrawingColor = TEAM_T_COLOR;
 let drawingStrokeWidth = DEFAULT_DRAWING_STROKE_WIDTH;
 let drawingMode: 'permanent' | 'fade' = 'permanent';
 let drawingFadeSeconds = DEFAULT_DRAWING_FADE_SECONDS;
-let isShiftDrawingActive = false;
+let isDrawingShortcutActive = false;
+let drawingShortcutHeldCodes = new Set<string>();
 let drawingClearSignal = 0;
 let showDroppedWeapons = true;
 let showDroppedUtility = true;
@@ -230,6 +272,11 @@ let timelineHeight = TIMELINE_MIN_HEIGHT;
 let matchScore: MatchScore | null = null;
 let toastMessage = '';
 let toastTimeout: ReturnType<typeof setTimeout> | null = null;
+let activeToolbarSection: ToolbarSectionKey | null = null;
+let shortcutBindings: Record<string, string> = {};
+let shortcutCaptureActionId: string | null = null;
+let pendingCaptureKeyboardShortcut: { code: string; shortcut: string } | null = null;
+const heldShortcutCodes = new Set<string>();
 let bombStatus: BombStatus = { bombText: '', bombClass: '', defuseText: '', defuseClass: '' };
 let playerFrameTrails = new Map<string, PlayerFrame[]>();
 let playerFrameLookupIndices = new Map<string, number>();
@@ -310,7 +357,8 @@ function resetLoadedReplayState(clearReplayData = false): void {
     }
 
     selectedPlayerSteamId = null;
-    isShiftDrawingActive = false;
+    isDrawingShortcutActive = false;
+    drawingShortcutHeldCodes.clear();
     mapVariant = 'default';
     hasLowerMapVariant = false;
     playablePlayers = [];
@@ -347,7 +395,8 @@ function applyLoadedReplay(data: ReplayData): void {
     rebuildPlayerFrameIndex(playablePlayers);
     rebuildTimelineNadeIndex();
     warmTimelineEventsCache();
-    isShiftDrawingActive = false;
+    isDrawingShortcutActive = false;
+    drawingShortcutHeldCodes.clear();
     mapVariant = 'default';
     timelineEvents = [];
     timelineEventsKey = '';
@@ -555,6 +604,13 @@ function buildRosterEntries(round: RoundData | null, tick: number): RosterEntry[
             };
         })
         .filter(entry => entry.side === TEAM_CT || entry.side === TEAM_T);
+}
+
+function compareRosterEntriesByPlayerName(a: RosterEntry, b: RosterEntry): number {
+    const nameOrder = PLAYER_NAME_COLLATOR.compare(a.player.name, b.player.name);
+    if (nameOrder !== 0) return nameOrder;
+    if (a.player.steamId === b.player.steamId) return 0;
+    return a.player.steamId < b.player.steamId ? -1 : 1;
 }
 
 function getPlayerName(steamId: bigint): string {
@@ -1498,8 +1554,7 @@ function handleViewportPointerDown(event: PointerEvent): void {
     }
 
     if (
-        isShiftDrawingActive ||
-        event.shiftKey ||
+        isDrawingShortcutActive ||
         event.button !== 0 ||
         !(event.target instanceof HTMLCanvasElement)
     ) {
@@ -1685,7 +1740,7 @@ function handleReplayCanvasClick(event: MouseEvent): void {
         ignoreNextCanvasClick = false;
         return;
     }
-    if (isShiftDrawingActive || event.shiftKey) return;
+    if (isDrawingShortcutActive) return;
     const point = getReplayCanvasPoint(event);
     if (!point || !replayContainer) return;
 
@@ -1802,8 +1857,12 @@ $: {
     void replayData, displayTick, playablePlayers;
     const round = getCurrentRoundData(displayTick) ?? getPlaybackStartRound(displayTick);
     const rosterEntries = buildRosterEntries(round, displayTick);
-    ctRoster = rosterEntries.filter(entry => entry.side === TEAM_CT);
-    tRoster = rosterEntries.filter(entry => entry.side === TEAM_T);
+    ctRoster = rosterEntries
+        .filter(entry => entry.side === TEAM_CT)
+        .sort(compareRosterEntriesByPlayerName);
+    tRoster = rosterEntries
+        .filter(entry => entry.side === TEAM_T)
+        .sort(compareRosterEntriesByPlayerName);
     ctAliveCount = ctRoster.filter(entry => entry.isAlive).length;
     tAliveCount = tRoster.filter(entry => entry.isAlive).length;
     bombStatus = getBombStatus(displayTick);
@@ -1901,6 +1960,248 @@ function setSpeed(speed: number) {
     playbackSpeed = speed;
 }
 
+function toggleToolbarSection(section: ToolbarSectionKey, releaseToolbarFocus = false): void {
+    if (
+        releaseToolbarFocus &&
+        document.activeElement instanceof HTMLElement &&
+        document.activeElement.classList.contains('toolbar-item')
+    ) {
+        document.activeElement.blur();
+    }
+    activeToolbarSection = activeToolbarSection === section ? null : section;
+}
+
+function getShortcut(actionId: string): string {
+    return shortcutBindings[actionId] ?? '';
+}
+
+function publishShortcutBindings(nextBindings: Record<string, string>): void {
+    shortcutBindings = nextBindings;
+    shortcutBindingsStore.set(nextBindings);
+}
+
+function getRosterSlot(actionId: string): { side: 'ct' | 't'; index: number; entry?: RosterEntry } | null {
+    const match = /^player-slot\.(ct|t)\.(\d+)$/.exec(actionId);
+    if (!match) return null;
+    const side = match[1] as 'ct' | 't';
+    const index = Number(match[2]);
+    const roster = side === 'ct' ? ctRoster : tRoster;
+    return { side, index, entry: roster[index] };
+}
+
+function getShortcutLabel(actionId: string): string {
+    if (actionId.startsWith('section.')) {
+        const section = TOOLBAR_SECTIONS.find(candidate => candidate.key === actionId.slice(8));
+        return `${section?.label ?? 'Control'} section`;
+    }
+    const rosterSlot = getRosterSlot(actionId);
+    if (rosterSlot) {
+        const sideLabel = rosterSlot.side.toUpperCase();
+        return `Select ${sideLabel} Player ${rosterSlot.index + 1}`;
+    }
+    if (actionId.startsWith('noise.source.')) {
+        const key = actionId.slice(13) as NoiseSourceKey;
+        return NOISE_SOURCE_OPTIONS.find(option => option.key === key)?.label ?? 'Noise source';
+    }
+    if (actionId.startsWith('timeline.utility.')) {
+        const key = actionId.slice(17) as TimelineUtilityKey;
+        return TIMELINE_UTILITY_OPTIONS.find(option => option.key === key)?.label ?? 'Timeline utility';
+    }
+    if (actionId.startsWith('timeline.combat.')) {
+        const key = actionId.slice(16) as TimelineCombatEventKey;
+        return TIMELINE_COMBAT_EVENT_OPTIONS.find(option => option.key === key)?.label ?? 'Timeline event';
+    }
+    const labels: Record<string, string> = {
+        'playback.load': 'Load demo',
+        'playback.toggle': 'Play / pause',
+        'map.normal': 'Normal map',
+        'map.lower': 'Lower map',
+        'sight.show-cone': 'Show Sight Cone',
+        'sight.selected-only': 'Show Sight Cone for selected Player',
+        'sight.width.decrease': 'Decrease Sight Cone Width',
+        'sight.width.increase': 'Increase Sight Cone Width',
+        'sight.length.decrease': 'Decrease Sight Cone Length',
+        'sight.length.increase': 'Increase Sight Cone Length',
+        'sight.show-los': 'Show Line of Sight',
+        'sight.los-width.decrease': 'Decrease Line of Sight Width',
+        'sight.los-width.increase': 'Increase Line of Sight Width',
+        'sight.los-length.decrease': 'Decrease Line of Sight Length',
+        'sight.los-length.increase': 'Increase Line of Sight Length',
+        'player.zoom.decrease': 'Decrease Player Selection Zoom',
+        'player.zoom.increase': 'Increase Player Selection Zoom',
+        'noise.show': 'Show Noise Circle',
+        'noise.selected-only': 'Noise for Selected Player',
+        'timeline.show-all-utilities': 'Show all Utilities',
+        'equipment.weapons': 'Show Dropped Weapons',
+        'equipment.utility': 'Show Dropped Utility',
+        'equipment.c4': 'Show Dropped C4',
+        'drawing.setup': 'Drawing Setup',
+        'drawing.stroke.decrease': 'Decrease Drawing Stroke Width',
+        'drawing.stroke.increase': 'Increase Drawing Stroke Width',
+        'drawing.mode.permanent': 'Permanent Drawings',
+        'drawing.mode.fade': 'Fading Drawings',
+        'drawing.fade.decrease': 'Decrease Drawing Fade Time',
+        'drawing.fade.increase': 'Increase Drawing Fade Time',
+        'drawing.clear': 'Clear all Drawings',
+    };
+    return labels[actionId] ?? actionId;
+}
+
+function startShortcutCapture(actionId: string): void {
+    shortcutCaptureActionId = actionId;
+    pendingCaptureKeyboardShortcut = null;
+    if (actionId === 'drawing.setup') {
+        isDrawingShortcutActive = false;
+        drawingShortcutHeldCodes.clear();
+        showToast('Press and release a keyboard shortcut for Drawing Setup, or Escape to cancel');
+        return;
+    }
+    showToast(`Press a key or mouse input for ${getShortcutLabel(actionId)}`);
+}
+
+function isShortcutConflict(error: unknown): error is ShortcutConflict {
+    return Boolean(
+        error &&
+        typeof error === 'object' &&
+        'shortcut' in error &&
+        'label' in error
+    );
+}
+
+async function captureShortcut(shortcut: string): Promise<void> {
+    const actionId = shortcutCaptureActionId;
+    if (!actionId) return;
+
+    try {
+        const record = await assignShortcut(actionId, getShortcutLabel(actionId), shortcut);
+        publishShortcutBindings({ ...shortcutBindings, [actionId]: record.shortcut });
+        shortcutCaptureActionId = null;
+        pendingCaptureKeyboardShortcut = null;
+        showToast(`${shortcutForDisplay(shortcut)} assigned to ${record.label}`);
+    } catch (error) {
+        if (isShortcutConflict(error)) {
+            showToast(`${shortcutForDisplay(shortcut)} is already used by ${error.label}. Try another input.`);
+            return;
+        }
+        console.error('Failed to assign shortcut:', error);
+        showToast('Could not save the shortcut. Try another input.');
+    }
+}
+
+async function deleteShortcut(actionId: string): Promise<void> {
+    try {
+        await removeShortcut(actionId);
+        const nextBindings = { ...shortcutBindings };
+        delete nextBindings[actionId];
+        publishShortcutBindings(nextBindings);
+        if (shortcutCaptureActionId === actionId) shortcutCaptureActionId = null;
+        if (actionId === 'drawing.setup') {
+            isDrawingShortcutActive = false;
+            drawingShortcutHeldCodes.clear();
+        }
+        showToast(`Shortcut removed from ${getShortcutLabel(actionId)}`);
+    } catch (error) {
+        console.error('Failed to remove shortcut:', error);
+        showToast('Could not remove the shortcut');
+    }
+}
+
+async function initializeShortcuts(): Promise<void> {
+    try {
+        const records = await loadShortcutRecords();
+        const obsoleteRecords = records.filter(record =>
+            record.actionId.startsWith('playback.speed.') || /^player\.\d+$/.test(record.actionId)
+        );
+        await Promise.all(obsoleteRecords.map(record => removeShortcut(record.actionId)));
+        const obsoleteActionIds = new Set(obsoleteRecords.map(record => record.actionId));
+        let activeRecords = records.filter(record => !obsoleteActionIds.has(record.actionId));
+        const mouseDrawingRecord = activeRecords.find(record =>
+            record.actionId === 'drawing.setup' && record.shortcut.includes('MOUSE_')
+        );
+        if (mouseDrawingRecord) {
+            const keyboardDrawingRecord = await assignShortcut('drawing.setup', 'Drawing Setup', 'SHIFT');
+            activeRecords = activeRecords.map(record =>
+                record.actionId === 'drawing.setup' ? keyboardDrawingRecord : record
+            );
+        }
+        publishShortcutBindings(Object.fromEntries(activeRecords.map(record => [record.actionId, record.shortcut])));
+    } catch (error) {
+        console.error('Failed to load shortcut database:', error);
+        showToast('Shortcuts could not be loaded from the local database');
+    }
+}
+
+function clampStep(value: number, direction: -1 | 1, step: number, min: number, max: number): number {
+    const next = Math.max(min, Math.min(max, value + direction * step));
+    const precision = Math.max(0, (step.toString().split('.')[1] ?? '').length);
+    return Number(next.toFixed(precision));
+}
+
+function executeShortcut(actionId: string): void {
+    if (actionId.startsWith('section.')) {
+        toggleToolbarSection(actionId.slice(8) as ToolbarSectionKey, true);
+        return;
+    }
+    const rosterSlot = getRosterSlot(actionId);
+    if (rosterSlot) {
+        if (rosterSlot.entry) handleRosterPlayerClick(rosterSlot.entry);
+        return;
+    }
+    if (actionId.startsWith('noise.source.')) {
+        const key = actionId.slice(13) as NoiseSourceKey;
+        setNoiseSourceEnabled(key, !enabledNoiseSources[key]);
+        return;
+    }
+    if (actionId.startsWith('timeline.utility.')) {
+        const key = actionId.slice(17) as TimelineUtilityKey;
+        setTimelineUtilityEnabled(key, !enabledTimelineUtilities[key]);
+        return;
+    }
+    if (actionId.startsWith('timeline.combat.')) {
+        const key = actionId.slice(16) as TimelineCombatEventKey;
+        setTimelineCombatEventEnabled(key, !enabledTimelineCombatEvents[key]);
+        return;
+    }
+    switch (actionId) {
+        case 'playback.load': void loadDemo(); break;
+        case 'playback.toggle': togglePlay(); break;
+        case 'map.normal': setMapVariant('default'); break;
+        case 'map.lower': setMapVariant('lower'); break;
+        case 'sight.show-cone': showSightCone = !showSightCone; break;
+        case 'sight.selected-only': sightConeForSelectedPlayer = !sightConeForSelectedPlayer; break;
+        case 'sight.width.decrease': sightConeHalfAngle = clampStep(sightConeHalfAngle, -1, 0.02, 0.16, 0.8); break;
+        case 'sight.width.increase': sightConeHalfAngle = clampStep(sightConeHalfAngle, 1, 0.02, 0.16, 0.8); break;
+        case 'sight.length.decrease': sightConeLength = clampStep(sightConeLength, -1, 1, 18, 240); break;
+        case 'sight.length.increase': sightConeLength = clampStep(sightConeLength, 1, 1, 18, 240); break;
+        case 'sight.show-los': showLineOfSight = !showLineOfSight; break;
+        case 'sight.los-width.decrease': lineOfSightWidth = clampStep(lineOfSightWidth, -1, 0.1, 0.3, 3); break;
+        case 'sight.los-width.increase': lineOfSightWidth = clampStep(lineOfSightWidth, 1, 0.1, 0.3, 3); break;
+        case 'sight.los-length.decrease': lineOfSightLength = clampStep(lineOfSightLength, -1, 1, 18, 800); break;
+        case 'sight.los-length.increase': lineOfSightLength = clampStep(lineOfSightLength, 1, 1, 18, 800); break;
+        case 'player.zoom.decrease': selectedPlayerZoomPercent = clampStep(selectedPlayerZoomPercent, -1, 25, 100, 500); break;
+        case 'player.zoom.increase': selectedPlayerZoomPercent = clampStep(selectedPlayerZoomPercent, 1, 25, 100, 500); break;
+        case 'noise.show': showNoiseCircle = !showNoiseCircle; break;
+        case 'noise.selected-only': noiseForSelectedPlayer = !noiseForSelectedPlayer; break;
+        case 'timeline.show-all-utilities': showAllTimelineUtilities = !showAllTimelineUtilities; break;
+        case 'equipment.weapons': showDroppedWeapons = !showDroppedWeapons; break;
+        case 'equipment.utility': showDroppedUtility = !showDroppedUtility; break;
+        case 'equipment.c4': showDroppedC4 = !showDroppedC4; break;
+        case 'drawing.stroke.decrease': drawingStrokeWidth = clampStep(drawingStrokeWidth, -1, 1, 1, 10); break;
+        case 'drawing.stroke.increase': drawingStrokeWidth = clampStep(drawingStrokeWidth, 1, 1, 1, 10); break;
+        case 'drawing.mode.permanent': drawingMode = 'permanent'; break;
+        case 'drawing.mode.fade': drawingMode = 'fade'; break;
+        case 'drawing.fade.decrease': drawingFadeSeconds = clampStep(drawingFadeSeconds, -1, 1, 1, 6); break;
+        case 'drawing.fade.increase': drawingFadeSeconds = clampStep(drawingFadeSeconds, 1, 1, 1, 6); break;
+        case 'drawing.clear': clearAllDrawings(); break;
+    }
+}
+
+function findShortcutAction(shortcut: string): string | null {
+    const match = Object.entries(shortcutBindings).find(([, assigned]) => assigned === shortcut);
+    if (!match || match[0].startsWith('system.')) return null;
+    return match[0];
+}
+
 function seekToRound(round: RoundData) {
     if (round) {
         clearAllDrawings();
@@ -1908,25 +2209,115 @@ function seekToRound(round: RoundData) {
     }
 }
 
+function tryActivateDrawingShortcut(event: KeyboardEvent): void {
+    const drawingShortcut = getShortcut('drawing.setup');
+    if (!drawingShortcut) return;
+
+    const candidate = shortcutFromKeyboardEvent(event, heldShortcutCodes)
+        ?? modifierShortcutFromKeyboardEvent(event);
+    if (candidate !== drawingShortcut) return;
+
+    isDrawingShortcutActive = true;
+    drawingShortcutHeldCodes = new Set(heldShortcutCodes);
+}
+
 function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Shift') {
-        isShiftDrawingActive = true;
+    heldShortcutCodes.add(e.code);
+
+    if (shortcutCaptureActionId) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.code === 'Escape') {
+            const cancelledActionId = shortcutCaptureActionId;
+            shortcutCaptureActionId = null;
+            pendingCaptureKeyboardShortcut = null;
+            showToast(`Shortcut editing cancelled for ${getShortcutLabel(cancelledActionId)}`);
+            return;
+        }
+        const shortcut = shortcutFromKeyboardEvent(e, heldShortcutCodes)
+            ?? (shortcutCaptureActionId === 'drawing.setup' ? modifierShortcutFromKeyboardEvent(e) : null);
+        if (shortcut) pendingCaptureKeyboardShortcut = { code: e.code, shortcut };
         return;
     }
-    if (e.key === ' ') {
+
+    tryActivateDrawingShortcut(e);
+    const shortcut = shortcutFromKeyboardEvent(e, heldShortcutCodes);
+    if (!shortcut) return;
+    const actionId = findShortcutAction(shortcut);
+    if (actionId) {
         e.preventDefault();
-        setPlaying(!isPlaying);
+        if (e.repeat && !SLIDER_SHORTCUT_ACTIONS.has(actionId)) return;
+        if (actionId === 'drawing.setup') return;
+        executeShortcut(actionId);
     }
 }
 
 function handleKeyup(e: KeyboardEvent) {
-    if (e.key === 'Shift') {
-        isShiftDrawingActive = false;
+    if (
+        shortcutCaptureActionId &&
+        pendingCaptureKeyboardShortcut?.code === e.code
+    ) {
+        e.preventDefault();
+        e.stopPropagation();
+        const shortcut = pendingCaptureKeyboardShortcut.shortcut;
+        pendingCaptureKeyboardShortcut = null;
+        void captureShortcut(shortcut);
     }
+    if (drawingShortcutHeldCodes.has(e.code)) {
+        isDrawingShortcutActive = false;
+        drawingShortcutHeldCodes.clear();
+    }
+    heldShortcutCodes.delete(e.code);
+}
+
+function handleShortcutMouseDown(event: MouseEvent): void {
+    if (shortcutCaptureActionId) {
+        event.preventDefault();
+        event.stopPropagation();
+        pendingCaptureKeyboardShortcut = null;
+        if (shortcutCaptureActionId === 'drawing.setup') {
+            showToast('Drawing Setup needs a keyboard shortcut. Try a key or press Escape to cancel.');
+            return;
+        }
+        void captureShortcut(shortcutFromMouseEvent(event, heldShortcutCodes));
+        return;
+    }
+
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('[data-shortcut-editor], button, input, label, [role="button"]')) return;
+    const actionId = findShortcutAction(shortcutFromMouseEvent(event, heldShortcutCodes));
+    if (!actionId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    executeShortcut(actionId);
+}
+
+function handleShortcutWheel(event: WheelEvent): void {
+    const shortcut = shortcutFromWheelEvent(event, heldShortcutCodes);
+    if (shortcutCaptureActionId) {
+        event.preventDefault();
+        event.stopPropagation();
+        pendingCaptureKeyboardShortcut = null;
+        if (shortcutCaptureActionId === 'drawing.setup') {
+            showToast('Drawing Setup needs a keyboard shortcut. Try a key or press Escape to cancel.');
+            return;
+        }
+        void captureShortcut(shortcut);
+        return;
+    }
+
+    const actionId = findShortcutAction(shortcut);
+    if (!actionId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    executeShortcut(actionId);
 }
 
 function handleWindowBlur() {
-    isShiftDrawingActive = false;
+    isDrawingShortcutActive = false;
+    drawingShortcutHeldCodes.clear();
+    heldShortcutCodes.clear();
+    pendingCaptureKeyboardShortcut = null;
 }
 
 function handleViewportResize() {
@@ -1939,14 +2330,19 @@ function handleViewportResize() {
 
 onMount(() => {
     if (!browser) return;
+    void initializeShortcuts();
     window.addEventListener('keydown', handleKeydown);
     window.addEventListener('keyup', handleKeyup);
+    window.addEventListener('mousedown', handleShortcutMouseDown, true);
+    window.addEventListener('wheel', handleShortcutWheel, { capture: true, passive: false });
     window.addEventListener('blur', handleWindowBlur);
     window.addEventListener('resize', handleViewportResize);
     updateReplayViewportTransform();
     return () => {
         window.removeEventListener('keydown', handleKeydown);
         window.removeEventListener('keyup', handleKeyup);
+        window.removeEventListener('mousedown', handleShortcutMouseDown, true);
+        window.removeEventListener('wheel', handleShortcutWheel, true);
         window.removeEventListener('blur', handleWindowBlur);
         window.removeEventListener('resize', handleViewportResize);
         if (rafId) cancelAnimationFrame(rafId);
@@ -2175,84 +2571,306 @@ onMount(() => {
     user-select: none;
 }
 
-.sight-controls {
+.control-toolbar {
     position: absolute;
-    top: calc(var(--timeline-height, 86px) + 48px);
-    bottom: 80px;
-    left: 20px;
-    width: 252px;
-    background: rgba(26, 26, 36, 0.86);
-    border: 1px solid #2a2a40;
+    top: calc(var(--timeline-height, 86px) + 10px);
+    bottom: 70px;
+    left: 10px;
+    z-index: 114;
+    display: flex;
+    width: 76px;
+    flex-direction: column;
+    padding: 7px;
+    overflow: hidden;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 8px;
+    background: rgba(18, 18, 27, 0.94);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(10px);
+}
+
+.toolbar-item {
+    position: relative;
+    display: flex;
+    min-height: 58px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 5px 2px;
+    border: 1px solid transparent;
     border-radius: 6px;
-    padding: 10px 12px;
-    z-index: 100;
+    background: transparent;
+    color: #94a3b8;
+}
+
+.toolbar-item::before {
+    position: absolute;
+    top: 10px;
+    bottom: 10px;
+    left: -7px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: #60a5fa;
+    content: '';
+    opacity: 0;
+}
+
+.toolbar-item:hover,
+.toolbar-item.active {
+    border-color: rgba(96, 165, 250, 0.38);
+    background: rgba(59, 130, 246, 0.16);
+    color: #e0f2fe;
+}
+
+.toolbar-item:hover::before,
+.toolbar-item.active::before {
+    opacity: 1;
+}
+
+.toolbar-item:focus-visible {
+    outline: 2px solid #93c5fd;
+    outline-offset: -2px;
+}
+
+.toolbar-item.has-shortcut {
+    min-height: 68px;
+    gap: 2px;
+}
+
+.toolbar-item.donate {
+    margin-top: auto;
+    color: #93c5fd;
+}
+
+.toolbar-icon {
+    display: grid;
+    width: 25px;
+    height: 25px;
+    place-items: center;
+}
+
+.toolbar-icon svg,
+.panel-close svg {
+    width: 23px;
+    height: 23px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.7;
+}
+
+.toolbar-icon.paypal-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #ffffff;
+    color: #003087;
+    font-family: Arial, sans-serif;
+    font-size: 15px;
+    font-style: italic;
+    font-weight: 900;
+}
+
+.toolbar-label {
+    width: 100%;
+    overflow: hidden;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.toolbar-shortcut {
+    display: block;
+    max-width: 62px;
+    min-height: 13px;
+    overflow: hidden;
+    color: #9fb6d4;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    line-height: 13px;
+    opacity: 0.92;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.toolbar-item.active .toolbar-shortcut,
+.toolbar-item:hover .toolbar-shortcut {
+    color: #bfdbfe;
+    opacity: 1;
+}
+
+.control-panel {
+    position: absolute;
+    top: calc(var(--timeline-height, 86px) + 10px);
+    bottom: 70px;
+    left: 94px;
+    z-index: 113;
+    display: flex;
+    width: 370px;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid rgba(96, 165, 250, 0.3);
+    border-radius: 8px;
+    background: rgba(24, 24, 35, 0.96);
+    box-shadow: 16px 18px 40px rgba(0, 0, 0, 0.34);
+    backdrop-filter: blur(12px);
+    animation: panel-enter 0.16s ease-out;
+}
+
+.control-panel-header {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 9px;
+    min-height: 64px;
+    padding: 9px 12px 9px 9px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+    background: linear-gradient(90deg, rgba(59, 130, 246, 0.12), transparent 72%);
+}
+
+.panel-close {
+    display: grid;
+    width: 32px;
+    height: 32px;
+    place-items: center;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 5px;
+    background: #20202d;
+    color: #cbd5e1;
+}
+
+.panel-close:hover,
+.panel-close:focus-visible {
+    border-color: #60a5fa;
+    color: #ffffff;
+}
+
+.panel-eyebrow {
+    color: #64748b;
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+
+.control-panel-header h2 {
+    margin: 1px 0 0;
+    color: #f1f5f9;
+    font-size: 17px;
+    font-weight: 800;
+    line-height: 1.1;
+}
+
+.control-panel-scroll {
+    min-height: 0;
+    padding: 13px 14px 18px;
     overflow-y: auto;
 }
 
+@keyframes panel-enter {
+    from { opacity: 0; transform: translateX(-8px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
 .control-section + .control-section {
-    margin-top: 12px;
-    padding-top: 10px;
+    margin-top: 18px;
+    padding-top: 14px;
     border-top: 1px solid rgba(148, 163, 184, 0.18);
 }
 
 .controls-heading {
-    margin-bottom: 8px;
-    color: #e2e8f0;
-    font-size: 11px;
+    margin-bottom: 9px;
+    color: #cbd5e1;
+    font-size: 10px;
     font-weight: 800;
     letter-spacing: 0.08em;
     line-height: 1.2;
     text-transform: uppercase;
 }
 
-.sight-control {
-    display: grid;
-    grid-template-columns: 66px 1fr 42px;
+.control-row,
+.button-control-row {
+    display: flex;
     align-items: center;
-    gap: 8px;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 34px;
+    padding: 4px 0;
+}
+
+.button-control-row + .button-control-row {
+    margin-top: 5px;
+}
+
+.slider-control {
+    margin-top: 10px;
+    padding: 9px 10px 10px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 6px;
+    background: rgba(15, 15, 23, 0.48);
+}
+
+.control-label-line {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 7px;
     color: #cbd5e1;
-    font-size: 12px;
-    font-weight: 600;
+    font-size: 11px;
+    font-weight: 700;
 }
 
-.sight-control + .sight-control {
-    margin-top: 8px;
-}
-
-.sight-control input {
-    width: 100%;
-    accent-color: #60a5fa;
-}
-
-.sight-control input:disabled {
-    opacity: 0.5;
-}
-
-.sight-control-value {
+.control-label-line output {
     color: #94a3b8;
-    font-family: 'JetBrains Mono', monospace;
-    text-align: right;
+    font-family: var(--font-mono);
+    font-size: 10px;
 }
 
-.drawing-control,
-.drawing-color-control {
-    display: grid;
-    grid-template-columns: 84px 1fr 34px;
+.slider-input-line {
+    display: flex;
     align-items: center;
-    gap: 8px;
-    margin-top: 8px;
-    color: #cbd5e1;
-    font-size: 12px;
-    font-weight: 600;
+    gap: 9px;
 }
 
-.drawing-control input[type='range'] {
+.slider-input-line input[type='range'] {
+    min-width: 70px;
     width: 100%;
     accent-color: #60a5fa;
 }
 
 .drawing-color-control {
-    grid-template-columns: 110px 44px 1fr;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 38px;
+    color: #cbd5e1;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.drawing-shortcut-row {
+    margin-bottom: 5px;
+    padding: 7px 9px;
+    border: 1px solid rgba(96, 165, 250, 0.2);
+    border-radius: 6px;
+    background: rgba(59, 130, 246, 0.07);
+}
+
+.shortcut-control-label {
+    color: #cbd5e1;
+    font-size: 11px;
+    font-weight: 700;
 }
 
 .drawing-color-control input[type='color'] {
@@ -2265,21 +2883,8 @@ onMount(() => {
     cursor: pointer;
 }
 
-.drawing-actions {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 8px;
-    margin-top: 10px;
-}
-
-.drawing-mode-toggle {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-    margin-top: 10px;
-}
-
 .drawing-mode-button {
+    flex: 1 1 auto;
     min-height: 30px;
     border: 1px solid #3a3a50;
     border-radius: 4px;
@@ -2304,14 +2909,14 @@ onMount(() => {
 }
 
 .drawing-hint {
-    margin: 0 0 8px;
+    margin: 0 0 10px;
     color: #94a3b8;
     font-size: 11px;
     line-height: 1.35;
 }
 
 .panel-button {
-    width: 100%;
+    flex: 1 1 auto;
     min-height: 30px;
     padding: 0 10px;
     border: 1px solid #3a3a50;
@@ -2332,9 +2937,11 @@ onMount(() => {
 
 .checkbox-control {
     display: flex;
+    min-width: 0;
+    flex: 1 1 auto;
     align-items: center;
     gap: 8px;
-    margin-top: 8px;
+    margin: 0;
     color: #cbd5e1;
     font-size: 12px;
     font-weight: 700;
@@ -2350,11 +2957,22 @@ onMount(() => {
     opacity: 0.5;
 }
 
+.panel-description {
+    margin: 0 0 8px;
+    color: #94a3b8;
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .control-panel { animation: none; }
+}
+
 .player-roster {
     position: absolute;
     top: calc(var(--timeline-height, 86px) + 10px);
     right: 20px;
-    width: 316px;
+    width: 520px;
     background: rgba(26, 26, 36, 0.9);
     border: 1px solid #2a2a40;
     border-radius: 8px;
@@ -2379,9 +2997,11 @@ onMount(() => {
 
 .roster-player {
     display: block;
-    width: 100%;
+    min-width: 0;
+    width: auto;
+    flex: 1 1 auto;
     height: 24px;
-    margin-bottom: 4px;
+    margin: 0;
     padding: 0 8px;
     border: 1px solid transparent;
     border-radius: 4px;
@@ -2396,6 +3016,22 @@ onMount(() => {
     text-overflow: ellipsis;
     white-space: nowrap;
     transition: background 0.12s ease, border-color 0.12s ease, filter 0.12s ease, outline-color 0.12s ease, transform 0.12s ease;
+}
+
+.roster-player-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    margin-bottom: 4px;
+}
+
+:global(.roster-player-row .shortcut-binding) {
+    min-width: 24px;
+}
+
+:global(.roster-player-row .shortcut-key) {
+    max-width: 76px;
 }
 
 .roster-player:hover,
@@ -2665,7 +3301,7 @@ onMount(() => {
         onselectkillfeed={handleKillFeedSelect}
     />
     <DrawingLayer
-        {isShiftDrawingActive}
+        {isDrawingShortcutActive}
         {leftDrawingColor}
         {rightDrawingColor}
         strokeWidth={drawingStrokeWidth}
@@ -2686,247 +3322,309 @@ onMount(() => {
         onsetspeed={setSpeed}
         onloaddemo={loadDemo}
         onsetmapvariant={setMapVariant}
+        getshortcut={getShortcut}
+        capturingActionId={shortcutCaptureActionId}
+        onshortcutcapture={startShortcutCapture}
+        onshortcutremove={deleteShortcut}
     />
 
     <TimeDisplay currentTick={displayTick} activeStart={activeStart} />
 
-    <div class="sight-controls">
-        <section class="control-section">
-            <div class="controls-heading">Sight</div>
-            <label class="checkbox-control">
-                <input type="checkbox" bind:checked={showSightCone} />
-                <span>Show Sight Cone</span>
-            </label>
-            <label class="checkbox-control">
-                <input
-                    type="checkbox"
-                    bind:checked={sightConeForSelectedPlayer}
-                    disabled={!showSightCone}
-                />
-                <span>Show for selected Player</span>
-            </label>
-            <label class="sight-control">
-                <span>Width</span>
-                <input
-                    type="range"
-                    min="0.16"
-                    max="0.8"
-                    step="0.02"
-                    bind:value={sightConeHalfAngle}
-                    disabled={!showSightCone}
-                />
-                <span class="sight-control-value">{sightConeHalfAngle.toFixed(2)}</span>
-            </label>
-            <label class="sight-control">
-                <span>Length</span>
-                <input
-                    type="range"
-                    min="18"
-                    max="240"
-                    step="1"
-                    bind:value={sightConeLength}
-                    disabled={!showSightCone}
-                />
-                <span class="sight-control-value">{Math.round(sightConeLength)}</span>
-            </label>
-            <label class="checkbox-control">
-                <input type="checkbox" bind:checked={showLineOfSight} />
-                <span>Show Line of Sight</span>
-            </label>
-            <label class="sight-control">
-                <span>LOS Width</span>
-                <input
-                    type="range"
-                    min="0.3"
-                    max="3.0"
-                    step="0.1"
-                    bind:value={lineOfSightWidth}
-                />
-                <span class="sight-control-value">{lineOfSightWidth.toFixed(1)}</span>
-            </label>
-            <label class="sight-control">
-                <span>LOS Len</span>
-                <input
-                    type="range"
-                    min="18"
-                    max="800"
-                    step="1"
-                    bind:value={lineOfSightLength}
-                />
-                <span class="sight-control-value">{Math.round(lineOfSightLength)}</span>
-            </label>
-        </section>
-        <section class="control-section">
-            <div class="controls-heading">Player Selection</div>
-            <label class="sight-control">
-                <span>Zoom</span>
-                <input
-                    type="range"
-                    min="100"
-                    max="500"
-                    step="25"
-                    bind:value={selectedPlayerZoomPercent}
-                />
-                <span class="sight-control-value">{Math.round(selectedPlayerZoomPercent)}%</span>
-            </label>
-        </section>
-        <section class="control-section">
-            <div class="controls-heading">Noise</div>
-            <label class="checkbox-control">
-                <input type="checkbox" bind:checked={showNoiseCircle} />
-                <span>Show Noise Circle</span>
-            </label>
-            <label class="checkbox-control">
-                <input
-                    type="checkbox"
-                    bind:checked={noiseForSelectedPlayer}
-                    disabled={!showNoiseCircle}
-                />
-                <span>Noise for Selected Player</span>
-            </label>
-            {#each NOISE_SOURCE_OPTIONS as source (source.key)}
-                <label class="checkbox-control">
-                    <input
-                        type="checkbox"
-                        checked={enabledNoiseSources[source.key]}
-                        disabled={!showNoiseCircle}
-                        onchange={(event) => setNoiseSourceEnabled(source.key, (event.currentTarget as HTMLInputElement).checked)}
-                    />
-                    <span>{source.label}</span>
-                </label>
-            {/each}
-        </section>
-        <section class="control-section">
-            <div class="controls-heading">Timeline</div>
-            <label class="checkbox-control">
-                <input type="checkbox" bind:checked={showAllTimelineUtilities} />
-                <span>Show all Utilities</span>
-            </label>
-            {#each TIMELINE_COMBAT_EVENT_OPTIONS as combatEvent (combatEvent.key)}
-                <label class="checkbox-control">
-                    <input
-                        type="checkbox"
-                        checked={enabledTimelineCombatEvents[combatEvent.key]}
-                        onchange={(event) => setTimelineCombatEventEnabled(combatEvent.key, (event.currentTarget as HTMLInputElement).checked)}
-                    />
-                    <span>{combatEvent.label}</span>
-                </label>
-            {/each}
-            {#each TIMELINE_UTILITY_OPTIONS as utility (utility.key)}
-                <label class="checkbox-control">
-                    <input
-                        type="checkbox"
-                        checked={enabledTimelineUtilities[utility.key]}
-                        onchange={(event) => setTimelineUtilityEnabled(utility.key, (event.currentTarget as HTMLInputElement).checked)}
-                    />
-                    <span>{utility.label}</span>
-                </label>
-            {/each}
-        </section>
-        <section class="control-section">
-            <div class="controls-heading">Dropped Equipment</div>
-            <label class="checkbox-control">
-                <input type="checkbox" bind:checked={showDroppedWeapons} />
-                <span>Show Dropped Weapons</span>
-            </label>
-            <label class="checkbox-control">
-                <input type="checkbox" bind:checked={showDroppedUtility} />
-                <span>Show Dropped Utility</span>
-            </label>
-            <label class="checkbox-control">
-                <input type="checkbox" bind:checked={showDroppedC4} />
-                <span>Dropped C4</span>
-            </label>
-        </section>
-        <section class="control-section">
-            <div class="controls-heading">Drawing</div>
-            <p class="drawing-hint">Hold Shift and drag with the left or right mouse button to draw.</p>
-            <label class="drawing-color-control">
-                <span>Left Mouse Color</span>
-                <input type="color" bind:value={leftDrawingColor} />
-            </label>
-            <label class="drawing-color-control">
-                <span>Right Mouse Color</span>
-                <input type="color" bind:value={rightDrawingColor} />
-            </label>
-            <label class="drawing-control">
-                <span>Stroke Width</span>
-                <input
-                    type="range"
-                    min="1"
-                    max="10"
-                    step="1"
-                    bind:value={drawingStrokeWidth}
-                />
-                <span class="sight-control-value">{Math.round(drawingStrokeWidth)}</span>
-            </label>
-            <div class="drawing-mode-toggle" aria-label="Drawing persistence">
+    <nav class="control-toolbar" aria-label="Replay controls">
+        {#each TOOLBAR_SECTIONS as section (section.key)}
+            <button
+                type="button"
+                class="toolbar-item"
+                class:active={activeToolbarSection === section.key}
+                class:has-shortcut={Boolean(shortcutBindings[`section.${section.key}`])}
+                aria-pressed={activeToolbarSection === section.key}
+                aria-label={`${section.label} controls`}
+                title={`${section.label} controls`}
+                onclick={() => toggleToolbarSection(section.key)}
+            >
+                <span class="toolbar-icon" aria-hidden="true">
+                    {#if section.key === 'sight'}
+                        <svg viewBox="0 0 24 24"><path d="M3 12s3.2-5 9-5 9 5 9 5-3.2 5-9 5-9-5-9-5Z"/><circle cx="12" cy="12" r="2.5"/></svg>
+                    {:else if section.key === 'player'}
+                        <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"/><path d="M5.5 20c.6-4.2 2.8-6.3 6.5-6.3s5.9 2.1 6.5 6.3"/></svg>
+                    {:else if section.key === 'noise'}
+                        <svg viewBox="0 0 24 24"><path d="M5 14h3l4 4V6L8 10H5v4Z"/><path d="M15 9.5c1.4 1.4 1.4 3.6 0 5M18 7c2.8 2.8 2.8 7.2 0 10"/></svg>
+                    {:else if section.key === 'timeline'}
+                        <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="7" cy="17" r="1.5"/></svg>
+                    {:else if section.key === 'equipment'}
+                        <svg viewBox="0 0 24 24"><path d="M4 8h16v11H4zM9 8V5h6v3M4 13h16M10 13v2h4v-2"/></svg>
+                    {:else}
+                        <svg viewBox="0 0 24 24"><path d="m4 17 9-9 3 3-9 9H4v-3ZM14 7l2-2 3 3-2 2M4 4l4 1M4 4l1 4"/></svg>
+                    {/if}
+                </span>
+                <span class="toolbar-label">{section.label}</span>
+                {#if shortcutBindings[`section.${section.key}`]}
+                    <span
+                        class="toolbar-shortcut"
+                        title={shortcutForDisplay(shortcutBindings[`section.${section.key}`])}
+                    >
+                        [{shortcutForDisplay(shortcutBindings[`section.${section.key}`]).replaceAll(' + ', '+')}]
+                    </span>
+                {/if}
+            </button>
+        {/each}
+        <button
+            type="button"
+            class="toolbar-item donate"
+            aria-label="Donate with PayPal"
+            title="Donate with PayPal"
+            onclick={openDonationPage}
+        >
+            <span class="toolbar-icon paypal-icon" aria-hidden="true">P</span>
+            <span class="toolbar-label">Donate</span>
+        </button>
+    </nav>
+
+    {#if activeToolbarSection}
+        <aside class="control-panel" aria-label={`${TOOLBAR_SECTIONS.find(section => section.key === activeToolbarSection)?.label} controls`}>
+            <header class="control-panel-header">
                 <button
                     type="button"
-                    class={`drawing-mode-button${drawingMode === 'permanent' ? ' selected' : ''}`}
-                    onclick={() => drawingMode = 'permanent'}
+                    class="panel-close"
+                    aria-label="Close control panel"
+                    title="Close control panel"
+                    onclick={() => activeToolbarSection = null}
                 >
-                    Permanent
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg>
                 </button>
-                <button
-                    type="button"
-                    class={`drawing-mode-button${drawingMode === 'fade' ? ' selected' : ''}`}
-                    onclick={() => drawingMode = 'fade'}
-                >
-                    Fade
-                </button>
+                <div>
+                    <div class="panel-eyebrow">Replay controls</div>
+                    <h2>{TOOLBAR_SECTIONS.find(section => section.key === activeToolbarSection)?.label}</h2>
+                </div>
+                <ShortcutBinding
+                    actionId={`section.${activeToolbarSection}`}
+                    shortcut={getShortcut(`section.${activeToolbarSection}`)}
+                    isCapturing={shortcutCaptureActionId === `section.${activeToolbarSection}`}
+                    oncapture={startShortcutCapture}
+                    onremove={deleteShortcut}
+                />
+            </header>
+
+            <div class="control-panel-scroll">
+                {#if activeToolbarSection === 'sight'}
+                    <section class="control-section">
+                        <div class="controls-heading">Sight cone</div>
+                        <div class="control-row">
+                            <label class="checkbox-control"><input type="checkbox" bind:checked={showSightCone} /><span>Show Sight Cone</span></label>
+                            <ShortcutBinding actionId="sight.show-cone" shortcut={getShortcut('sight.show-cone')} isCapturing={shortcutCaptureActionId === 'sight.show-cone'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        <div class="control-row">
+                            <label class="checkbox-control"><input type="checkbox" bind:checked={sightConeForSelectedPlayer} disabled={!showSightCone} /><span>Show for selected Player</span></label>
+                            <ShortcutBinding actionId="sight.selected-only" shortcut={getShortcut('sight.selected-only')} isCapturing={shortcutCaptureActionId === 'sight.selected-only'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        <div class="slider-control">
+                            <div class="control-label-line"><span>Width</span><output>{sightConeHalfAngle.toFixed(2)}</output></div>
+                            <div class="slider-input-line">
+                                <ShortcutBinding actionId="sight.width.decrease" shortcut={getShortcut('sight.width.decrease')} isCapturing={shortcutCaptureActionId === 'sight.width.decrease'} emptyIcon="minus" oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                                <input type="range" min="0.16" max="0.8" step="0.02" bind:value={sightConeHalfAngle} disabled={!showSightCone} aria-label="Sight cone width" />
+                                <ShortcutBinding actionId="sight.width.increase" shortcut={getShortcut('sight.width.increase')} isCapturing={shortcutCaptureActionId === 'sight.width.increase'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                            </div>
+                        </div>
+                        <div class="slider-control">
+                            <div class="control-label-line"><span>Length</span><output>{Math.round(sightConeLength)}</output></div>
+                            <div class="slider-input-line">
+                                <ShortcutBinding actionId="sight.length.decrease" shortcut={getShortcut('sight.length.decrease')} isCapturing={shortcutCaptureActionId === 'sight.length.decrease'} emptyIcon="minus" oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                                <input type="range" min="18" max="240" step="1" bind:value={sightConeLength} disabled={!showSightCone} aria-label="Sight cone length" />
+                                <ShortcutBinding actionId="sight.length.increase" shortcut={getShortcut('sight.length.increase')} isCapturing={shortcutCaptureActionId === 'sight.length.increase'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                            </div>
+                        </div>
+                    </section>
+                    <section class="control-section">
+                        <div class="controls-heading">Line of sight</div>
+                        <div class="control-row">
+                            <label class="checkbox-control"><input type="checkbox" bind:checked={showLineOfSight} /><span>Show Line of Sight</span></label>
+                            <ShortcutBinding actionId="sight.show-los" shortcut={getShortcut('sight.show-los')} isCapturing={shortcutCaptureActionId === 'sight.show-los'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        <div class="slider-control">
+                            <div class="control-label-line"><span>Width</span><output>{lineOfSightWidth.toFixed(1)}</output></div>
+                            <div class="slider-input-line">
+                                <ShortcutBinding actionId="sight.los-width.decrease" shortcut={getShortcut('sight.los-width.decrease')} isCapturing={shortcutCaptureActionId === 'sight.los-width.decrease'} emptyIcon="minus" oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                                <input type="range" min="0.3" max="3" step="0.1" bind:value={lineOfSightWidth} aria-label="Line of sight width" />
+                                <ShortcutBinding actionId="sight.los-width.increase" shortcut={getShortcut('sight.los-width.increase')} isCapturing={shortcutCaptureActionId === 'sight.los-width.increase'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                            </div>
+                        </div>
+                        <div class="slider-control">
+                            <div class="control-label-line"><span>Length</span><output>{Math.round(lineOfSightLength)}</output></div>
+                            <div class="slider-input-line">
+                                <ShortcutBinding actionId="sight.los-length.decrease" shortcut={getShortcut('sight.los-length.decrease')} isCapturing={shortcutCaptureActionId === 'sight.los-length.decrease'} emptyIcon="minus" oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                                <input type="range" min="18" max="800" step="1" bind:value={lineOfSightLength} aria-label="Line of sight length" />
+                                <ShortcutBinding actionId="sight.los-length.increase" shortcut={getShortcut('sight.los-length.increase')} isCapturing={shortcutCaptureActionId === 'sight.los-length.increase'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                            </div>
+                        </div>
+                    </section>
+                {:else if activeToolbarSection === 'player'}
+                    <section class="control-section">
+                        <div class="controls-heading">Player selection</div>
+                        <p class="panel-description">Set how closely the radar follows a selected player.</p>
+                        <div class="slider-control">
+                            <div class="control-label-line"><span>Follow zoom</span><output>{Math.round(selectedPlayerZoomPercent)}%</output></div>
+                            <div class="slider-input-line">
+                                <ShortcutBinding actionId="player.zoom.decrease" shortcut={getShortcut('player.zoom.decrease')} isCapturing={shortcutCaptureActionId === 'player.zoom.decrease'} emptyIcon="minus" oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                                <input type="range" min="100" max="500" step="25" bind:value={selectedPlayerZoomPercent} aria-label="Player selection zoom" />
+                                <ShortcutBinding actionId="player.zoom.increase" shortcut={getShortcut('player.zoom.increase')} isCapturing={shortcutCaptureActionId === 'player.zoom.increase'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                            </div>
+                        </div>
+                    </section>
+                {:else if activeToolbarSection === 'noise'}
+                    <section class="control-section">
+                        <div class="controls-heading">Noise visibility</div>
+                        <div class="control-row">
+                            <label class="checkbox-control"><input type="checkbox" bind:checked={showNoiseCircle} /><span>Show Noise Circle</span></label>
+                            <ShortcutBinding actionId="noise.show" shortcut={getShortcut('noise.show')} isCapturing={shortcutCaptureActionId === 'noise.show'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        <div class="control-row">
+                            <label class="checkbox-control"><input type="checkbox" bind:checked={noiseForSelectedPlayer} disabled={!showNoiseCircle} /><span>Noise for Selected Player</span></label>
+                            <ShortcutBinding actionId="noise.selected-only" shortcut={getShortcut('noise.selected-only')} isCapturing={shortcutCaptureActionId === 'noise.selected-only'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                    </section>
+                    <section class="control-section">
+                        <div class="controls-heading">Sources</div>
+                        {#each NOISE_SOURCE_OPTIONS as source (source.key)}
+                            <div class="control-row">
+                                <label class="checkbox-control">
+                                    <input type="checkbox" checked={enabledNoiseSources[source.key]} disabled={!showNoiseCircle} onchange={(event) => setNoiseSourceEnabled(source.key, (event.currentTarget as HTMLInputElement).checked)} />
+                                    <span>{source.label}</span>
+                                </label>
+                                <ShortcutBinding actionId={`noise.source.${source.key}`} shortcut={getShortcut(`noise.source.${source.key}`)} isCapturing={shortcutCaptureActionId === `noise.source.${source.key}`} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                            </div>
+                        {/each}
+                    </section>
+                {:else if activeToolbarSection === 'timeline'}
+                    <section class="control-section">
+                        <div class="controls-heading">Timeline events</div>
+                        <div class="control-row">
+                            <label class="checkbox-control"><input type="checkbox" bind:checked={showAllTimelineUtilities} /><span>Show all Utilities</span></label>
+                            <ShortcutBinding actionId="timeline.show-all-utilities" shortcut={getShortcut('timeline.show-all-utilities')} isCapturing={shortcutCaptureActionId === 'timeline.show-all-utilities'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        {#each TIMELINE_COMBAT_EVENT_OPTIONS as combatEvent (combatEvent.key)}
+                            <div class="control-row">
+                                <label class="checkbox-control"><input type="checkbox" checked={enabledTimelineCombatEvents[combatEvent.key]} onchange={(event) => setTimelineCombatEventEnabled(combatEvent.key, (event.currentTarget as HTMLInputElement).checked)} /><span>{combatEvent.label}</span></label>
+                                <ShortcutBinding actionId={`timeline.combat.${combatEvent.key}`} shortcut={getShortcut(`timeline.combat.${combatEvent.key}`)} isCapturing={shortcutCaptureActionId === `timeline.combat.${combatEvent.key}`} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                            </div>
+                        {/each}
+                        {#each TIMELINE_UTILITY_OPTIONS as utility (utility.key)}
+                            <div class="control-row">
+                                <label class="checkbox-control"><input type="checkbox" checked={enabledTimelineUtilities[utility.key]} onchange={(event) => setTimelineUtilityEnabled(utility.key, (event.currentTarget as HTMLInputElement).checked)} /><span>{utility.label}</span></label>
+                                <ShortcutBinding actionId={`timeline.utility.${utility.key}`} shortcut={getShortcut(`timeline.utility.${utility.key}`)} isCapturing={shortcutCaptureActionId === `timeline.utility.${utility.key}`} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                            </div>
+                        {/each}
+                    </section>
+                {:else if activeToolbarSection === 'equipment'}
+                    <section class="control-section">
+                        <div class="controls-heading">Dropped equipment</div>
+                        <div class="control-row">
+                            <label class="checkbox-control"><input type="checkbox" bind:checked={showDroppedWeapons} /><span>Show Dropped Weapons</span></label>
+                            <ShortcutBinding actionId="equipment.weapons" shortcut={getShortcut('equipment.weapons')} isCapturing={shortcutCaptureActionId === 'equipment.weapons'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        <div class="control-row">
+                            <label class="checkbox-control"><input type="checkbox" bind:checked={showDroppedUtility} /><span>Show Dropped Utility</span></label>
+                            <ShortcutBinding actionId="equipment.utility" shortcut={getShortcut('equipment.utility')} isCapturing={shortcutCaptureActionId === 'equipment.utility'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        <div class="control-row">
+                            <label class="checkbox-control"><input type="checkbox" bind:checked={showDroppedC4} /><span>Show Dropped C4</span></label>
+                            <ShortcutBinding actionId="equipment.c4" shortcut={getShortcut('equipment.c4')} isCapturing={shortcutCaptureActionId === 'equipment.c4'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                    </section>
+                {:else if activeToolbarSection === 'drawing'}
+                    <section class="control-section">
+                        <div class="controls-heading">Drawing setup</div>
+                        <p class="drawing-hint">Hold the keyboard Drawing Setup shortcut, then drag with the left or right mouse button.</p>
+                        <div class="control-row drawing-shortcut-row">
+                            <span class="shortcut-control-label">Hold to draw</span>
+                            <ShortcutBinding actionId="drawing.setup" shortcut={getShortcut('drawing.setup')} isCapturing={shortcutCaptureActionId === 'drawing.setup'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        <label class="drawing-color-control"><span>Primary Color</span><input type="color" bind:value={leftDrawingColor} /></label>
+                        <label class="drawing-color-control"><span>Secondary Color</span><input type="color" bind:value={rightDrawingColor} /></label>
+                        <div class="slider-control">
+                            <div class="control-label-line"><span>Stroke width</span><output>{Math.round(drawingStrokeWidth)}</output></div>
+                            <div class="slider-input-line">
+                                <ShortcutBinding actionId="drawing.stroke.decrease" shortcut={getShortcut('drawing.stroke.decrease')} isCapturing={shortcutCaptureActionId === 'drawing.stroke.decrease'} emptyIcon="minus" oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                                <input type="range" min="1" max="10" step="1" bind:value={drawingStrokeWidth} aria-label="Drawing stroke width" />
+                                <ShortcutBinding actionId="drawing.stroke.increase" shortcut={getShortcut('drawing.stroke.increase')} isCapturing={shortcutCaptureActionId === 'drawing.stroke.increase'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                            </div>
+                        </div>
+                    </section>
+                    <section class="control-section">
+                        <div class="controls-heading">Persistence</div>
+                        <div class="button-control-row">
+                            <button type="button" class={`drawing-mode-button${drawingMode === 'permanent' ? ' selected' : ''}`} onclick={() => drawingMode = 'permanent'}>Permanent</button>
+                            <ShortcutBinding actionId="drawing.mode.permanent" shortcut={getShortcut('drawing.mode.permanent')} isCapturing={shortcutCaptureActionId === 'drawing.mode.permanent'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        <div class="button-control-row">
+                            <button type="button" class={`drawing-mode-button${drawingMode === 'fade' ? ' selected' : ''}`} onclick={() => drawingMode = 'fade'}>Fade</button>
+                            <ShortcutBinding actionId="drawing.mode.fade" shortcut={getShortcut('drawing.mode.fade')} isCapturing={shortcutCaptureActionId === 'drawing.mode.fade'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        {#if drawingMode === 'fade'}
+                            <div class="slider-control">
+                                <div class="control-label-line"><span>Fade time</span><output>{Math.round(drawingFadeSeconds)}s</output></div>
+                                <div class="slider-input-line">
+                                    <ShortcutBinding actionId="drawing.fade.decrease" shortcut={getShortcut('drawing.fade.decrease')} isCapturing={shortcutCaptureActionId === 'drawing.fade.decrease'} emptyIcon="minus" oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                                    <input type="range" min="1" max="6" step="1" bind:value={drawingFadeSeconds} aria-label="Drawing fade time" />
+                                    <ShortcutBinding actionId="drawing.fade.increase" shortcut={getShortcut('drawing.fade.increase')} isCapturing={shortcutCaptureActionId === 'drawing.fade.increase'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                                </div>
+                            </div>
+                        {/if}
+                        <div class="button-control-row">
+                            <button type="button" class="panel-button" onclick={clearAllDrawings}>Clear all Drawings</button>
+                            <ShortcutBinding actionId="drawing.clear" shortcut={getShortcut('drawing.clear')} isCapturing={shortcutCaptureActionId === 'drawing.clear'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                    </section>
+                {/if}
             </div>
-            {#if drawingMode === 'fade'}
-                <label class="drawing-control">
-                    <span>Fade in s</span>
-                    <input
-                        type="range"
-                        min="1"
-                        max="6"
-                        step="1"
-                        bind:value={drawingFadeSeconds}
-                    />
-                    <span class="sight-control-value">{Math.round(drawingFadeSeconds)}s</span>
-                </label>
-            {/if}
-            <div class="drawing-actions">
-                <button type="button" class="panel-button" onclick={clearAllDrawings}>
-                    Clear all Drawings
-                </button>
-            </div>
-        </section>
-    </div>
+        </aside>
+    {/if}
 
     <div class="player-roster">
         <div class="roster-columns">
             <div class="roster-column">
                 <div class="roster-title">CT ({ctAliveCount}/{ctRoster.length})</div>
-                {#each ctRoster as entry (entry.player.steamId.toString())}
-                    <button
-                        class="roster-player"
-                        class:dead={!entry.isAlive}
-                        class:selected={isSelectedPlayer(entry.player.steamId)}
-                        style="--player-color: {entry.color};"
-                        title={entry.player.name}
-                        onclick={() => handleRosterPlayerClick(entry)}
-                    >
-                        {entry.player.name}
-                    </button>
+                {#each ctRoster as entry, slotIndex (entry.player.steamId.toString())}
+                    <div class="roster-player-row" style="--player-color: {entry.color};">
+                        <button
+                            class="roster-player"
+                            class:dead={!entry.isAlive}
+                            class:selected={isSelectedPlayer(entry.player.steamId)}
+                            title={entry.player.name}
+                            onclick={() => handleRosterPlayerClick(entry)}
+                        >
+                            {entry.player.name}
+                        </button>
+                        <ShortcutBinding
+                            actionId={`player-slot.ct.${slotIndex}`}
+                            shortcut={getShortcut(`player-slot.ct.${slotIndex}`)}
+                            isCapturing={shortcutCaptureActionId === `player-slot.ct.${slotIndex}`}
+                            oncapture={startShortcutCapture}
+                            onremove={deleteShortcut}
+                        />
+                    </div>
                 {/each}
             </div>
             <div class="roster-column">
                 <div class="roster-title">T ({tAliveCount}/{tRoster.length})</div>
-                {#each tRoster as entry (entry.player.steamId.toString())}
-                    <button
-                        class="roster-player"
-                        class:dead={!entry.isAlive}
-                        class:selected={isSelectedPlayer(entry.player.steamId)}
-                        style="--player-color: {entry.color};"
-                        title={entry.player.name}
-                        onclick={() => handleRosterPlayerClick(entry)}
-                    >
-                        {entry.player.name}
-                    </button>
+                {#each tRoster as entry, slotIndex (entry.player.steamId.toString())}
+                    <div class="roster-player-row" style="--player-color: {entry.color};">
+                        <button
+                            class="roster-player"
+                            class:dead={!entry.isAlive}
+                            class:selected={isSelectedPlayer(entry.player.steamId)}
+                            title={entry.player.name}
+                            onclick={() => handleRosterPlayerClick(entry)}
+                        >
+                            {entry.player.name}
+                        </button>
+                        <ShortcutBinding
+                            actionId={`player-slot.t.${slotIndex}`}
+                            shortcut={getShortcut(`player-slot.t.${slotIndex}`)}
+                            isCapturing={shortcutCaptureActionId === `player-slot.t.${slotIndex}`}
+                            oncapture={startShortcutCapture}
+                            onremove={deleteShortcut}
+                        />
+                    </div>
                 {/each}
             </div>
         </div>

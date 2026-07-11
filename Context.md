@@ -2,13 +2,11 @@
 
 Compact implementation context for future Codex work.
 
-> **Application version:** `0.1.11`. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application entry in `src-tauri/Cargo.lock` synchronized.
+> **Application version:** `0.1.12`. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application entry in `src-tauri/Cargo.lock` synchronized.
 
 ## Mandatory workflow
 
 - Read this file before changing the project.
-- For any `.svelte` or Svelte module work, first load both `svelte-core-bestpractices` and `svelte-code-writer`.
-- For Rust work, load `rust-best-practices` when that skill is available.
 - Never run `pnpm tauri dev`, start a Vite dev server, or run any Svelte autofixer in this repository.
 - Preserve unrelated working-tree changes. Do not stage, commit, or push unless explicitly requested.
 - Parser changes do not affect the app until the Go sidecar is rebuilt. Always rebuild it after changing `backend/` behavior.
@@ -74,17 +72,23 @@ The active frontend is SvelteKit and starts at `src/routes/+page.svelte`. There 
 | Players | `PlayerLayer.svelte` | Trails, dots, labels, inventory, flash, bomb, noise, sight |
 | Utility | `NadeLayer.svelte` | Projectile trails, effects, countdowns, hit testing |
 | Kills | `KillLayer.svelte` | Death markers and clickable kill feed |
-| Drawing | `DrawingLayer.svelte` | Shift-drag tactical annotations |
+| Drawing | `DrawingLayer.svelte` | Shortcut-and-drag tactical annotations |
 
 `ReplayCanvas.svelte`, the old monolithic renderer, `src/main.ts`, and the unused error wrapper were removed. Do not restore them.
 
 `src/lib/playback-state.ts` is the non-reactive high-frequency render clock. Canvas layers read it in animation frames. `displayTick` in `+page.svelte` is throttled for reactive UI. Do not pass a per-frame tick prop through the component tree.
+
+The loaded-replay workspace uses a compact left toolbar with Sight, Player, Noise, Timeline, Equipment, and Drawing sections. Only the selected section's controls render in the adjacent slide-out panel; selecting it again or using the panel's back button closes it. Donate is a direct toolbar action and opens the same PayPal page as the Welcome screen.
+
+`src/lib/shortcuts.ts` owns shortcut normalization and the IndexedDB-backed `shortcut_bindings` database. The database is the source of truth for both editable assignments and fixed reservations. `ShortcutBinding.svelte` is the shared add/edit/remove UI used by panel controls, playback controls, section headers, and roster slots. An assigned keycap is itself the edit button; only the remove icon remains beside it.
 
 ## Data and replay rules
 
 - CS2 demos are treated as 64 tick unless the parsed header provides another positive rate.
 - `events.FrameDone` samples every player's position, view direction, health, armor, selected weapon, reload state, utilities, and bomb possession. The selected weapon label adds `(Reloading)` while demoinfocs reports `Player.IsReloading`, which clears on completion or cancellation.
 - Only stored T/CT participants render as players. Stored teams represent the end of the match; canvas and roster logic flips sides by half.
+- CT and T roster entries are sorted independently by player name in ascending, case-insensitive, numeric-aware order. Steam ID is the deterministic tie-breaker for identical names.
+- Roster shortcuts belong to the sorted side position (`CT 1`, `CT 2`, `T 1`, and so on), not to a player identity. When teams switch sides, each shortcut stays with its CT/T position and selects the new occupant.
 - Round playback begins at `freezetimeEndTick`, with a 15-second fallback for old data.
 - Round display ends seven seconds after the terminal event, clamped before the next round.
 - The first verified knife-only round is removed and visible rounds are renumbered.
@@ -132,8 +136,25 @@ The active frontend is SvelteKit and starts at `src/routes/+page.svelte`. There 
 - Selecting a living player centers and follows them; selecting again or dragging empty space clears selection while retaining the viewport.
 - Selection clears when the player dies. Dead icons support copy on single click and lead-in seek on double-click.
 - Map wheel zoom targets the pointer without selection; with selection it changes follow zoom.
-- Hold Shift and drag either mouse button to draw. Releasing Shift finalizes the stroke.
+- Hold the editable keyboard-only Drawing Setup shortcut and drag either mouse button to draw. Shift is the default; releasing the shortcut finalizes the stroke.
 - Timeline event single-click seeks with a lead-in; double-click copies `demo_goto`.
+
+### Toolbar and shortcuts
+
+- Toolbar items use centered icons and labels. Hover and the open section share the highlight treatment, while keyboard focus uses a separate outline. Closing or switching panels by shortcut releases stale mouse focus so only the open section remains highlighted.
+- A toolbar item displays its assigned section shortcut as readable supporting text in brackets, such as `[SHIFT+D]`, below the label.
+- Every panel header, checkbox, button, and roster player supports one editable shortcut. Sliders support separate decrease and increase shortcuts placed on the corresponding sides of the slider. Color pickers intentionally have no shortcut UI.
+- The bottom Play/Pause, load-demo, and map-variant controls use the shortcut editor. Replay-speed preset buttons intentionally do not support shortcuts. Space is seeded as the editable Play/Pause shortcut.
+- Shortcut capture accepts keyboard, mouse-button, and wheel input. Control, right Control, Shift, Alt, Alt Gr, and Caps Lock are modifier-only; other held keys can also combine with mouse input.
+- Escape always cancels shortcut capture without modifying or removing the existing assignment.
+- Assignments are globally unique. A duplicate remains in capture mode and reports the control already using it through the shared toast.
+- Shortcuts execute while their panel is closed. Checkboxes toggle, buttons run their click behavior, sliders change by their declared step and stay within their range, section shortcuts toggle panels, and roster-slot shortcuts invoke the existing player selection behavior for the slot's current occupant.
+- Holding a keyboard shortcut repeats only slider decrease/increase actions at the operating system's key-repeat rate. Every non-slider action remains limited to one trigger per key press.
+- Shortcut keycaps subscribe to the shared binding store so database-confirmed add, edit, and remove operations update every visible shortcut immediately.
+- Clicking an assigned shortcut keycap starts editing it; there is no separate pencil icon.
+- Empty decrease bindings use a minus icon on the left side of sliders; increase bindings use a plus icon on the right.
+- Drawing Setup has its own editable keyboard-only hold shortcut, seeded to Shift. Existing mouse-based Drawing Setup assignments are migrated back to Shift. Drawing colors are labeled Primary Color and Secondary Color.
+- Fixed IndexedDB reservations protect mouse-wheel map zoom from reassignment.
 
 ### Application branding
 

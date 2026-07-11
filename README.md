@@ -6,35 +6,65 @@ An open-source, simple 2D viewer for Counter-Strike 2 replay demos. Load a `.dem
 
 ### Welcome screen
 
-Start by selecting a CS2 `.dem` replay file.
+Start from a focused welcome screen and select a CS2 `.dem` replay file.
 
-![CS2 Replay Viewer welcome screen](docs/images/welcome-screen.png)
+![CS2 Replay Viewer welcome screen with Load Demo File button](docs/images/First_Screen.png)
 
-### Replay workspace
+### Loaded replay workspace
 
-The loaded-demo view combines the interactive radar, sight and noise controls, timeline filters, drawing controls, team lists, round navigation, and playback controls.
+The full replay workspace combines the interactive radar, event timeline, section toolbar, team rosters, color-coded round history, and playback controls.
 
-![Loaded CS2 replay workspace](docs/images/loaded-replay.png)
+![Loaded CS2 replay overview with radar, toolbar, teams, rounds, timeline, and playback controls](docs/images/Demo_Loaded_Screen.png)
+
+### Side panels and section shortcuts
+
+Open only the controls you need. Section shortcuts can be left unassigned or displayed directly on the toolbar and panel header after assignment.
+
+| Without a section shortcut | With a section shortcut |
+|---|---|
+| ![Player side panel without an assigned section shortcut](docs/images/Side_Panel_without_Shortcut.png) | ![Sight side panel with an assigned section shortcut](docs/images/Side_Panel_with_Shortcut.png) |
+
+### Color-coded teams and roster shortcuts
+
+CT and T players remain color-coded and alphabetically sorted. Shortcuts belong to roster positions, while unassigned positions show an add button.
+
+![Color-coded CT and T rosters with assigned and unassigned player shortcuts](docs/images/Color_Coded_Teams_with_and_without_shortcuts.png)
 
 ### Player focus and utility timing
 
-Select and zoom in on a player while following utility effects and their remaining duration.
+Highlight and follow a selected player while inspecting sight lines, equipment, active utility, and effect countdowns.
 
-![Selected player with utility effects and replay controls](docs/images/player-highlight.png)
+![Highlighted player with sight lines, equipment, utility effects, and countdowns](docs/images/Highlight_a_Player.png)
 
-### Team and round tracking
+### Bomb plant and defuse timers
 
-Team colors remain consistent across the player lists and round navigator, making the winning side and surviving players easy to scan.
+Track the remaining bomb timer and an active defuse directly above the radar while reviewing the surrounding positions.
 
-![Color-coded teams and round results](docs/images/color-coded-teams-and-rounds.png)
+![Planted bomb countdown and active defuse timer on the replay radar](docs/images/Bomb_Planted_and_Defused_Timer.png)
 
-![Round-winner summary](docs/images/round-winners.png)
+### Dropped equipment and dead-player markers
+
+See dropped weapons and utility alongside living-player equipment, reload status, and team-colored dead-player icons.
+
+![Dropped weapons, utility, reload status, and dead-player icons on the radar](docs/images/Dropped_Weapon_and_Utility_and_Dead_Player_Icons.png)
+
+### Color-coded round history
+
+Review every round at a glance with winner colors and surviving-player counts for both sides.
+
+![Color-coded round list with T and CT survivors](docs/images/Color_Coded_Rounds.png)
+
+### Team score tracking
+
+Keep the current score visible with team names and consistent T/CT color coding.
+
+![Team names and current round score](docs/images/Keep_Track_of_Won_Rounds_per_Team.png)
 
 ### Tactical drawing
 
-Draw routes, callouts, and tactical plans directly on the map.
+Draw routes, callouts, positions, and tactical plans directly on the replay radar.
 
-![Tactical drawing on the replay radar](docs/images/tactical-drawing.png)
+![Tactical routes, arrows, and callouts drawn on the replay radar](docs/images/Draw_tactics.png)
 
 ## Features
 
@@ -45,10 +75,23 @@ Draw routes, callouts, and tactical plans directly on the map.
 ### Replay navigation
 
 - Load Counter-Strike 2 `.dem` replay demos.
-- Play or pause with the on-screen button or the <kbd>Space</kbd> key.
+- Play or pause with the on-screen button or the editable <kbd>Space</kbd> shortcut.
 - Automatically skip knife rounds and freezetime.
 - Browse a timeline for every round.
 - View color-coded round results, including the winning side and surviving Terrorists and Counter-Terrorists.
+- Keep CT and T player lists consistently sorted by player name in ascending order whenever a replay is loaded.
+
+### Toolbar and custom shortcuts
+
+- Open Sight, Player, Noise, Timeline, Equipment, and Drawing controls from a compact icon-and-label toolbar on the left; select an open section again or use the panel's back button to close it.
+- See each assigned section shortcut as readable bracketed text directly on its toolbar item, with highlighting that always follows the currently open panel.
+- Open the PayPal support page directly from the toolbar's Donate item.
+- Assign, edit, and remove globally unique keyboard or mouse shortcuts for section headers, checkboxes, supported buttons, playback actions, map variants, and individual roster players. Replay-speed preset buttons remain direct click controls without shortcuts.
+- Give every slider an independent decrease and increase shortcut. Press once for one step or hold the shortcut to repeat at the keyboard repeat rate; values remain within their ranges. Holding non-slider shortcuts still triggers them only once.
+- Use shortcuts while their control panel is closed. Player shortcuts belong to sorted CT/T roster positions rather than Steam IDs, so they stay on the same visible slot when teams switch sides and trigger the current occupant.
+- Click an assigned shortcut keycap to edit it directly; use the adjacent remove icon to clear it.
+- Keep shortcut assignments across sessions in the application's local database, with existing mouse-wheel zoom inputs protected from reassignment.
+- Press <kbd>Escape</kbd> while adding or editing any shortcut to cancel and preserve the previous assignment.
 
 ### Timeline and event review
 
@@ -77,7 +120,7 @@ Draw routes, callouts, and tactical plans directly on the map.
 - Hold the left mouse button and drag to move the map at every zoom level, with generous movement beyond each edge; clicking or dragging empty canvas space exits player follow mode.
 - Select a living player dot or roster name to automatically zoom and center the player at the configured zoom level. Selection clears automatically when that player dies.
 - Single-click a dead-player icon to copy `demo_goto <Tick>` for three seconds before death, or double-click it to select the player and jump to that tick.
-- Create tactical drawings by holding <kbd>Shift</kbd> and dragging with either mouse button. Left and right drawing colors default to CT blue and T orange.
+- Create tactical drawings by holding the editable keyboard-only Drawing Setup shortcut—<kbd>Shift</kbd> by default—and dragging with either mouse button. Primary and secondary colors default to CT blue and T orange.
 - Keep drawings permanently for the current round or fade them over 1–6 seconds. Changing rounds and `Clear all Drawings` both remove permanent drawings.
 - Keep the radar at a consistent visual size when maximizing or restoring the application while zoomed.
 - Load and paint the radar background before player dots and other replay overlays appear, without flashing the coordinate grid during normal loading.

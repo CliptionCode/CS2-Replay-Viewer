@@ -2,7 +2,7 @@
 import { onMount, onDestroy } from 'svelte';
 import { browser } from '$app/environment';
 
-export let isShiftDrawingActive = false;
+export let isDrawingShortcutActive = false;
 export let leftDrawingColor = '#3b82f6';
 export let rightDrawingColor = '#f97316';
 export let strokeWidth = 4;
@@ -132,7 +132,7 @@ function getCanvasPoint(event: PointerEvent): DrawingPoint | null {
 }
 
 function startStroke(event: PointerEvent): void {
-    if (!isShiftDrawingActive || !event.shiftKey || (event.button !== 0 && event.button !== 2)) return;
+    if (!isDrawingShortcutActive || (event.button !== 0 && event.button !== 2)) return;
 
     const point = getCanvasPoint(event);
     if (!point || !canvas) return;
@@ -181,7 +181,7 @@ function finishStroke(event: PointerEvent): void {
 }
 
 function handleContextMenu(event: MouseEvent): void {
-    if (isShiftDrawingActive || event.shiftKey) event.preventDefault();
+    if (isDrawingShortcutActive) event.preventDefault();
 }
 
 function clearDrawings(): void {
@@ -220,8 +220,8 @@ $: {
 }
 
 $: {
-    void isShiftDrawingActive;
-    if (!isShiftDrawingActive) {
+    void isDrawingShortcutActive;
+    if (!isDrawingShortcutActive) {
         completeActiveStroke();
         if (canvas && activePointerId !== null && canvas.hasPointerCapture(activePointerId)) {
             canvas.releasePointerCapture(activePointerId);
@@ -266,7 +266,7 @@ onDestroy(() => {
 <canvas
     bind:this={canvas}
     class="drawing-layer"
-    class:active={isShiftDrawingActive}
+    class:active={isDrawingShortcutActive}
     onpointerdown={startStroke}
     onpointermove={extendStroke}
     onpointerup={finishStroke}

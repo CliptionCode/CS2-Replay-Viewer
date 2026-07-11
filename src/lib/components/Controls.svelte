@@ -1,4 +1,6 @@
 <script lang="ts">
+import ShortcutBinding from './ShortcutBinding.svelte';
+
 export let isPlaying = false;
 export let playbackSpeed = 1;
 export let isLoading = false;
@@ -9,6 +11,10 @@ export let ontoggleplay: () => void;
 export let onsetspeed: (speed: number) => void;
 export let onloaddemo: () => void = () => {};
 export let onsetmapvariant: (variant: 'default' | 'lower') => void = () => {};
+export let getshortcut: (actionId: string) => string = () => '';
+export let capturingActionId: string | null = null;
+export let onshortcutcapture: (actionId: string) => void = () => {};
+export let onshortcutremove: (actionId: string) => void = () => {};
 
 let playBtn: HTMLButtonElement | undefined;
 let speedBtnEls: HTMLButtonElement[] = [];
@@ -76,11 +82,17 @@ $: {
     cursor: not-allowed;
 }
 
-.load-demo-button {
+.load-demo-control {
     position: absolute;
     left: 16px;
     top: 50%;
     transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.load-demo-button {
     height: 34px;
     padding: 0 14px;
     background: #2a2a40;
@@ -92,6 +104,16 @@ $: {
     font-size: 12px;
     font-weight: 700;
     transition: all 0.15s ease;
+}
+
+.control-with-shortcut {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+:global(.controls .shortcut-key) {
+    max-width: 74px;
 }
 
 .load-demo-button:hover {
@@ -146,10 +168,16 @@ $: {
 </style>
 
 <div class="controls">
-    <button class="load-demo-button" onclick={onloaddemo} disabled={isLoading}>
-        {isLoading ? 'Loading...' : 'Load Demo'}
-    </button>
-    <button bind:this={playBtn} class="control-button" onclick={ontoggleplay}>▶</button>
+    <div class="load-demo-control">
+        <button class="load-demo-button" onclick={onloaddemo} disabled={isLoading}>
+            {isLoading ? 'Loading...' : 'Load Demo'}
+        </button>
+        <ShortcutBinding actionId="playback.load" shortcut={getshortcut('playback.load')} isCapturing={capturingActionId === 'playback.load'} oncapture={onshortcutcapture} onremove={onshortcutremove} />
+    </div>
+    <div class="control-with-shortcut">
+        <button bind:this={playBtn} class="control-button" onclick={ontoggleplay}>▶</button>
+        <ShortcutBinding actionId="playback.toggle" shortcut={getshortcut('playback.toggle')} isCapturing={capturingActionId === 'playback.toggle'} oncapture={onshortcutcapture} onremove={onshortcutremove} />
+    </div>
     <div class="speed-group">
         <span class="speed-label">Speed</span>
         {#each speedOptions as speed, i}
@@ -159,20 +187,14 @@ $: {
     {#if hasLowerMapVariant}
         <div class="speed-group">
             <span class="speed-label">Map</span>
-            <button
-                class="speed-button"
-                class:active={mapVariant === 'default'}
-                onclick={() => onsetmapvariant('default')}
-            >
-                Normal
-            </button>
-            <button
-                class="speed-button"
-                class:active={mapVariant === 'lower'}
-                onclick={() => onsetmapvariant('lower')}
-            >
-                Lower
-            </button>
+            <div class="control-with-shortcut">
+                <button class="speed-button" class:active={mapVariant === 'default'} onclick={() => onsetmapvariant('default')}>Normal</button>
+                <ShortcutBinding actionId="map.normal" shortcut={getshortcut('map.normal')} isCapturing={capturingActionId === 'map.normal'} oncapture={onshortcutcapture} onremove={onshortcutremove} />
+            </div>
+            <div class="control-with-shortcut">
+                <button class="speed-button" class:active={mapVariant === 'lower'} onclick={() => onsetmapvariant('lower')}>Lower</button>
+                <ShortcutBinding actionId="map.lower" shortcut={getshortcut('map.lower')} isCapturing={capturingActionId === 'map.lower'} oncapture={onshortcutcapture} onremove={onshortcutremove} />
+            </div>
         </div>
     {/if}
 </div>
