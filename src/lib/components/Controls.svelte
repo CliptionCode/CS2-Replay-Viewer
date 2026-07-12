@@ -7,10 +7,12 @@ export let isLoading = false;
 export let speedOptions: number[] = [0.5, 1, 2, 3];
 export let hasLowerMapVariant = false;
 export let mapVariant: 'default' | 'lower' = 'default';
+export let viewMode: '2d' | '3d' = '2d';
 export let ontoggleplay: () => void;
 export let onsetspeed: (speed: number) => void;
 export let onloaddemo: () => void = () => {};
 export let onsetmapvariant: (variant: 'default' | 'lower') => void = () => {};
+export let onsetviewmode: (mode: '2d' | '3d') => void = () => {};
 export let getshortcut: (actionId: string) => string = () => '';
 export let capturingActionId: string | null = null;
 export let onshortcutcapture: (actionId: string) => void = () => {};
@@ -183,6 +185,11 @@ $: {
         {#each speedOptions as speed, i}
             <button bind:this={speedBtnEls[i]} class="speed-button" onclick={() => onsetspeed(speed)}>{speed}x</button>
         {/each}
+    </div>
+    <div class="speed-group">
+        <span class="speed-label">View</span>
+        <button class="speed-button" class:active={viewMode === '2d'} onclick={() => onsetviewmode('2d')}>2D</button>
+        <button class="speed-button" class:active={viewMode === '3d'} onclick={() => onsetviewmode('3d')}>3D</button>
     </div>
     {#if hasLowerMapVariant}
         <div class="speed-group">

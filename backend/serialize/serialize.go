@@ -146,7 +146,9 @@ func convertNade(n *parser.NadeEvent) *pb.NadeEvent {
 		DetonationTick: int32(n.DetonationTick),
 		FadeTick:       int32(n.FadeTick),
 		EffectRadius:   n.EffectRadius,
+		ThrowerTeam:    int32(n.ThrowerTeam),
 		Trajectory:     make([]*pb.NadeTrajectoryPoint, 0, len(n.Trajectory)),
+		Trajectory_3D:  make([]*pb.NadeTrajectoryPoint, 0, len(n.Trajectory3D)),
 	}
 
 	for i := range n.Trajectory {
@@ -157,26 +159,44 @@ func convertNade(n *parser.NadeEvent) *pb.NadeEvent {
 			Z:    n.Trajectory[i].Z,
 		})
 	}
+	for i := range n.Trajectory3D {
+		pbNade.Trajectory_3D = append(pbNade.Trajectory_3D, &pb.NadeTrajectoryPoint{
+			Tick: int32(n.Trajectory3D[i].Tick),
+			X:    n.Trajectory3D[i].X,
+			Y:    n.Trajectory3D[i].Y,
+			Z:    n.Trajectory3D[i].Z,
+		})
+	}
 
 	return pbNade
 }
 
 func convertFrame(f *parser.PlayerFrame) *pb.PlayerFrame {
 	return &pb.PlayerFrame{
-		Tick:        int32(f.Tick),
-		SteamId:     f.SteamID,
-		X:           f.X,
-		Y:           f.Y,
-		Z:           f.Z,
-		Yaw:         f.Yaw,
-		Pitch:       f.Pitch,
-		Health:      int32(f.Health),
-		Armor:       int32(f.Armor),
-		Weapon:      f.Weapon,
-		IsAlive:     f.IsAlive,
-		Utilities:   append([]string(nil), f.Utilities...),
-		HasBomb:     f.HasBomb,
-		IsReloading: f.IsReloading,
+		Tick:           int32(f.Tick),
+		SteamId:        f.SteamID,
+		X:              f.X,
+		Y:              f.Y,
+		Z:              f.Z,
+		Yaw:            f.Yaw,
+		Pitch:          f.Pitch,
+		Health:         int32(f.Health),
+		Armor:          int32(f.Armor),
+		Weapon:         f.Weapon,
+		IsAlive:        f.IsAlive,
+		Utilities:      append([]string(nil), f.Utilities...),
+		HasBomb:        f.HasBomb,
+		IsReloading:    f.IsReloading,
+		EyeX:           f.EyeX,
+		EyeY:           f.EyeY,
+		EyeZ:           f.EyeZ,
+		HasEyePosition: f.HasEyePosition,
+		IsDucking:      f.IsDucking,
+		OnGround:       f.OnGround,
+		VelocityX:      f.VelocityX,
+		VelocityY:      f.VelocityY,
+		VelocityZ:      f.VelocityZ,
+		Team:           int32(f.Team),
 	}
 }
 
@@ -210,6 +230,9 @@ func convertBomb(b *parser.BombEvent) *pb.BombEvent {
 		PlayerSteamId: b.PlayerSteamID,
 		Site:          b.Site,
 		HasKit:        b.HasKit,
+		X:             b.X,
+		Y:             b.Y,
+		Z:             b.Z,
 	}
 }
 

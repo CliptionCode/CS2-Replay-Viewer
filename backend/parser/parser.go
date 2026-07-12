@@ -94,9 +94,11 @@ type NadeEvent struct {
 	EndY           float32
 	EndZ           float32
 	Trajectory     []TrajectoryPoint
+	Trajectory3D   []TrajectoryPoint
 	DetonationTick int
 	FadeTick       int
 	EffectRadius   float32
+	ThrowerTeam    int
 }
 
 type TrajectoryPoint struct {
@@ -107,20 +109,30 @@ type TrajectoryPoint struct {
 }
 
 type PlayerFrame struct {
-	Tick        int
-	SteamID     uint64
-	X           float32
-	Y           float32
-	Z           float32
-	Yaw         float32
-	Pitch       float32
-	Health      int
-	Armor       int
-	Weapon      string
-	IsAlive     bool
-	Utilities   []string
-	HasBomb     bool
-	IsReloading bool
+	Tick           int
+	SteamID        uint64
+	X              float32
+	Y              float32
+	Z              float32
+	Yaw            float32
+	Pitch          float32
+	Health         int
+	Armor          int
+	Weapon         string
+	IsAlive        bool
+	Utilities      []string
+	HasBomb        bool
+	IsReloading    bool
+	EyeX           float32
+	EyeY           float32
+	EyeZ           float32
+	HasEyePosition bool
+	IsDucking      bool
+	OnGround       bool
+	VelocityX      float32
+	VelocityY      float32
+	VelocityZ      float32
+	Team           int
 }
 
 type FlashEvent struct {
@@ -148,6 +160,9 @@ type BombEvent struct {
 	PlayerSteamID uint64
 	Site          string
 	HasKit        bool
+	X             float32
+	Y             float32
+	Z             float32
 }
 
 type DroppedEquipment struct {
@@ -189,6 +204,7 @@ func ParseFile(path string) (*ReplayData, error) {
 		playerRoundContributions:  make(map[uint64]int),
 		playerTotalRounds:         make(map[uint64]int),
 		infernoNadeIndices:        make(map[int64]int),
+		grenadeTrajectories:       make(map[int64][]TrajectoryPoint),
 		activeDroppedEquipment:    make(map[int]activeDroppedEquipment),
 		priorRoundDroppedEntities: make(map[int]struct{}),
 	}
@@ -326,6 +342,7 @@ type frameRecorder struct {
 	serverName                string
 	maxTick                   int
 	infernoNadeIndices        map[int64]int
+	grenadeTrajectories       map[int64][]TrajectoryPoint
 	activeDroppedEquipment    map[int]activeDroppedEquipment
 	priorRoundDroppedEntities map[int]struct{}
 	pendingEquipmentDrops     []pendingEquipmentDrop
@@ -508,6 +525,7 @@ func isTeamMate(steamID1, steamID2 uint64, p demoinfocs.Parser) bool {
 
 func (r *frameRecorder) recordRoundStart(p demoinfocs.Parser) {
 	tick := p.CurrentFrame()
+	clear(r.grenadeTrajectories)
 	r.rememberCurrentlyDroppedEquipment(p)
 	r.closeDroppedEquipment(max(0, tick-1))
 	if tick > r.maxTick {
@@ -619,6 +637,18 @@ func (r *frameRecorder) recordNadeDestroyed(e events.GrenadeProjectileDestroy, p
 			Z:    float32(tp.Position.Z),
 		})
 	}
+	trajectory3D := append([]TrajectoryPoint(nil), r.grenadeTrajectories[proj.UniqueID()]...)
+	delete(r.grenadeTrajectories, proj.UniqueID())
+	trajectory3D = append(trajectory3D, TrajectoryPoint{
+		Tick: destroyTick,
+		X:    float32(pos.X),
+		Y:    float32(pos.Y),
+		Z:    float32(pos.Z),
+	})
+	trajectory3D = normalizeTrajectory(trajectory3D)
+	if len(trajectory3D) < 2 {
+		trajectory3D = append([]TrajectoryPoint(nil), trajectory...)
+	}
 
 	if nadeType == "decoy" {
 		landingTick := inferStationaryEndpointStartTick(trajectory, destroyTick)
@@ -637,11 +667,13 @@ func (r *frameRecorder) recordNadeDestroyed(e events.GrenadeProjectileDestroy, p
 		EndY:           float32(pos.Y),
 		EndZ:           float32(pos.Z),
 		Trajectory:     trajectory,
+		Trajectory3D:   trajectory3D,
 		EffectRadius:   nadeRadius(nadeType),
 	}
 
 	if proj.Thrower != nil {
 		nade.ThrowerSteamID = proj.Thrower.SteamID64
+		nade.ThrowerTeam = int(proj.Thrower.Team)
 	}
 
 	if len(nade.Trajectory) > 0 {
@@ -670,6 +702,7 @@ func (r *frameRecorder) recordSmokeStart(e events.SmokeStart, p demoinfocs.Parse
 	}
 	if e.Thrower != nil {
 		nade.ThrowerSteamID = e.Thrower.SteamID64
+		nade.ThrowerTeam = int(e.Thrower.Team)
 	}
 	r.nades = append(r.nades, nade)
 }
@@ -697,6 +730,7 @@ func (r *frameRecorder) recordInfernoStart(e events.InfernoStart, p demoinfocs.P
 	}
 	if thrower := e.Inferno.Thrower(); thrower != nil {
 		nade.ThrowerSteamID = thrower.SteamID64
+		nade.ThrowerTeam = int(thrower.Team)
 	}
 
 	if r.infernoNadeIndices == nil {
@@ -746,6 +780,7 @@ func (r *frameRecorder) recordFlashExplode(e events.FlashExplode, p demoinfocs.P
 	}
 	if e.Thrower != nil {
 		nade.ThrowerSteamID = e.Thrower.SteamID64
+		nade.ThrowerTeam = int(e.Thrower.Team)
 	}
 	r.nades = append(r.nades, nade)
 }
@@ -767,6 +802,7 @@ func (r *frameRecorder) recordHeExplode(e events.HeExplode, p demoinfocs.Parser)
 	}
 	if e.Thrower != nil {
 		nade.ThrowerSteamID = e.Thrower.SteamID64
+		nade.ThrowerTeam = int(e.Thrower.Team)
 	}
 	r.nades = append(r.nades, nade)
 }
@@ -792,6 +828,7 @@ func (r *frameRecorder) recordDecoyStart(e events.DecoyStart, p demoinfocs.Parse
 	}
 	if e.Thrower != nil {
 		nade.ThrowerSteamID = e.Thrower.SteamID64
+		nade.ThrowerTeam = int(e.Thrower.Team)
 	}
 	r.nades = append(r.nades, nade)
 }
@@ -803,8 +840,10 @@ func (r *frameRecorder) recordDecoyExpired(e events.DecoyExpired, p demoinfocs.P
 	}
 
 	throwerSteamID := uint64(0)
+	throwerTeam := 0
 	if e.Thrower != nil {
 		throwerSteamID = e.Thrower.SteamID64
+		throwerTeam = int(e.Thrower.Team)
 	}
 
 	for i := len(r.nades) - 1; i >= 0; i-- {
@@ -833,6 +872,7 @@ func (r *frameRecorder) recordDecoyExpired(e events.DecoyExpired, p demoinfocs.P
 	nade := NadeEvent{
 		Tick:           startTick,
 		ThrowerSteamID: throwerSteamID,
+		ThrowerTeam:    throwerTeam,
 		NadeType:       "decoy",
 		DetonationTick: startTick,
 		FadeTick:       tick,
@@ -1088,8 +1128,13 @@ func (r *frameRecorder) recordBombEvent(eventType string, player *common.Player,
 	}
 
 	playerSteamID := uint64(0)
+	var x, y, z float32
 	if player != nil {
 		playerSteamID = player.SteamID64
+		position := player.Position()
+		x = float32(position.X)
+		y = float32(position.Y)
+		z = float32(position.Z)
 	}
 
 	r.bombs = append(r.bombs, BombEvent{
@@ -1098,6 +1143,9 @@ func (r *frameRecorder) recordBombEvent(eventType string, player *common.Player,
 		PlayerSteamID: playerSteamID,
 		Site:          bombsiteString(site),
 		HasKit:        hasKit,
+		X:             x,
+		Y:             y,
+		Z:             z,
 	})
 }
 
@@ -1130,6 +1178,7 @@ func (r *frameRecorder) recordFrameDone(p demoinfocs.Parser) {
 	}
 	r.observeInitialRoundInventory(p)
 	r.recordDroppedEquipment(p, tick)
+	r.recordGrenadeProjectiles(p, tick)
 
 	for _, player := range p.GameState().Participants().All() {
 		if player == nil {
@@ -1148,6 +1197,23 @@ func (r *frameRecorder) recordFrameDone(p demoinfocs.Parser) {
 			Armor:       player.Armor(),
 			IsAlive:     player.IsAlive(),
 			IsReloading: player.IsReloading,
+			IsDucking:   player.IsDucking(),
+			OnGround:    player.Flags().OnGround(),
+			Team:        int(player.Team),
+		}
+		if eyePos, ok := player.PositionEyes(); ok {
+			frame.EyeX = float32(eyePos.X)
+			frame.EyeY = float32(eyePos.Y)
+			frame.EyeZ = float32(eyePos.Z)
+			frame.HasEyePosition = true
+		}
+		if previous, ok := r.lastFrames[player.SteamID64]; ok && tick > previous.Tick {
+			seconds := float32(tick-previous.Tick) / float32(tickRateOrDefault(p))
+			if seconds > 0 {
+				frame.VelocityX = (frame.X - previous.X) / seconds
+				frame.VelocityY = (frame.Y - previous.Y) / seconds
+				frame.VelocityZ = (frame.Z - previous.Z) / seconds
+			}
 		}
 		if wep := player.ActiveWeapon(); wep != nil {
 			frame.Weapon = wep.String()
@@ -1162,7 +1228,46 @@ func (r *frameRecorder) recordFrameDone(p demoinfocs.Parser) {
 		}
 		sort.Strings(frame.Utilities)
 		r.playerFrames = append(r.playerFrames, frame)
+		r.lastFrames[player.SteamID64] = frame
 	}
+}
+
+func (r *frameRecorder) recordGrenadeProjectiles(p demoinfocs.Parser, tick int) {
+	for _, projectile := range p.GameState().GrenadeProjectiles() {
+		if projectile == nil {
+			continue
+		}
+		position := projectile.Position()
+		point := TrajectoryPoint{
+			Tick: tick,
+			X:    float32(position.X),
+			Y:    float32(position.Y),
+			Z:    float32(position.Z),
+		}
+		points := r.grenadeTrajectories[projectile.UniqueID()]
+		if len(points) > 0 && sameTrajectoryPoint(points[len(points)-1], point) {
+			continue
+		}
+		r.grenadeTrajectories[projectile.UniqueID()] = append(points, point)
+	}
+}
+
+func normalizeTrajectory(points []TrajectoryPoint) []TrajectoryPoint {
+	sort.SliceStable(points, func(i, j int) bool {
+		return points[i].Tick < points[j].Tick
+	})
+	result := points[:0]
+	for _, point := range points {
+		if len(result) > 0 && sameTrajectoryPoint(result[len(result)-1], point) {
+			continue
+		}
+		result = append(result, point)
+	}
+	return result
+}
+
+func sameTrajectoryPoint(a, b TrajectoryPoint) bool {
+	return a.Tick == b.Tick && a.X == b.X && a.Y == b.Y && a.Z == b.Z
 }
 
 const droppedEquipmentMoveThresholdSquared = 16

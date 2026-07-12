@@ -616,6 +616,8 @@ type NadeEvent struct {
 	DetonationTick int32                  `protobuf:"varint,11,opt,name=detonation_tick,json=detonationTick,proto3" json:"detonation_tick,omitempty"`
 	FadeTick       int32                  `protobuf:"varint,12,opt,name=fade_tick,json=fadeTick,proto3" json:"fade_tick,omitempty"`
 	EffectRadius   float32                `protobuf:"fixed32,13,opt,name=effect_radius,json=effectRadius,proto3" json:"effect_radius,omitempty"`
+	ThrowerTeam    int32                  `protobuf:"varint,14,opt,name=thrower_team,json=throwerTeam,proto3" json:"thrower_team,omitempty"`
+	Trajectory_3D  []*NadeTrajectoryPoint `protobuf:"bytes,15,rep,name=trajectory_3d,json=trajectory3d,proto3" json:"trajectory_3d,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -741,6 +743,20 @@ func (x *NadeEvent) GetEffectRadius() float32 {
 	return 0
 }
 
+func (x *NadeEvent) GetThrowerTeam() int32 {
+	if x != nil {
+		return x.ThrowerTeam
+	}
+	return 0
+}
+
+func (x *NadeEvent) GetTrajectory_3D() []*NadeTrajectoryPoint {
+	if x != nil {
+		return x.Trajectory_3D
+	}
+	return nil
+}
+
 type NadeTrajectoryPoint struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Tick          int32                  `protobuf:"varint,1,opt,name=tick,proto3" json:"tick,omitempty"`
@@ -810,23 +826,33 @@ func (x *NadeTrajectoryPoint) GetZ() float32 {
 }
 
 type PlayerFrame struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Tick          int32                  `protobuf:"varint,1,opt,name=tick,proto3" json:"tick,omitempty"`
-	SteamId       uint64                 `protobuf:"varint,2,opt,name=steam_id,json=steamId,proto3" json:"steam_id,omitempty"`
-	X             float32                `protobuf:"fixed32,3,opt,name=x,proto3" json:"x,omitempty"`
-	Y             float32                `protobuf:"fixed32,4,opt,name=y,proto3" json:"y,omitempty"`
-	Z             float32                `protobuf:"fixed32,5,opt,name=z,proto3" json:"z,omitempty"`
-	Yaw           float32                `protobuf:"fixed32,6,opt,name=yaw,proto3" json:"yaw,omitempty"`
-	Pitch         float32                `protobuf:"fixed32,7,opt,name=pitch,proto3" json:"pitch,omitempty"`
-	Health        int32                  `protobuf:"varint,8,opt,name=health,proto3" json:"health,omitempty"`
-	Armor         int32                  `protobuf:"varint,9,opt,name=armor,proto3" json:"armor,omitempty"`
-	Weapon        string                 `protobuf:"bytes,10,opt,name=weapon,proto3" json:"weapon,omitempty"`
-	IsAlive       bool                   `protobuf:"varint,11,opt,name=is_alive,json=isAlive,proto3" json:"is_alive,omitempty"`
-	Utilities     []string               `protobuf:"bytes,12,rep,name=utilities,proto3" json:"utilities,omitempty"`
-	HasBomb       bool                   `protobuf:"varint,13,opt,name=has_bomb,json=hasBomb,proto3" json:"has_bomb,omitempty"`
-	IsReloading   bool                   `protobuf:"varint,14,opt,name=is_reloading,json=isReloading,proto3" json:"is_reloading,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Tick           int32                  `protobuf:"varint,1,opt,name=tick,proto3" json:"tick,omitempty"`
+	SteamId        uint64                 `protobuf:"varint,2,opt,name=steam_id,json=steamId,proto3" json:"steam_id,omitempty"`
+	X              float32                `protobuf:"fixed32,3,opt,name=x,proto3" json:"x,omitempty"`
+	Y              float32                `protobuf:"fixed32,4,opt,name=y,proto3" json:"y,omitempty"`
+	Z              float32                `protobuf:"fixed32,5,opt,name=z,proto3" json:"z,omitempty"`
+	Yaw            float32                `protobuf:"fixed32,6,opt,name=yaw,proto3" json:"yaw,omitempty"`
+	Pitch          float32                `protobuf:"fixed32,7,opt,name=pitch,proto3" json:"pitch,omitempty"`
+	Health         int32                  `protobuf:"varint,8,opt,name=health,proto3" json:"health,omitempty"`
+	Armor          int32                  `protobuf:"varint,9,opt,name=armor,proto3" json:"armor,omitempty"`
+	Weapon         string                 `protobuf:"bytes,10,opt,name=weapon,proto3" json:"weapon,omitempty"`
+	IsAlive        bool                   `protobuf:"varint,11,opt,name=is_alive,json=isAlive,proto3" json:"is_alive,omitempty"`
+	Utilities      []string               `protobuf:"bytes,12,rep,name=utilities,proto3" json:"utilities,omitempty"`
+	HasBomb        bool                   `protobuf:"varint,13,opt,name=has_bomb,json=hasBomb,proto3" json:"has_bomb,omitempty"`
+	IsReloading    bool                   `protobuf:"varint,14,opt,name=is_reloading,json=isReloading,proto3" json:"is_reloading,omitempty"`
+	EyeX           float32                `protobuf:"fixed32,15,opt,name=eye_x,json=eyeX,proto3" json:"eye_x,omitempty"`
+	EyeY           float32                `protobuf:"fixed32,16,opt,name=eye_y,json=eyeY,proto3" json:"eye_y,omitempty"`
+	EyeZ           float32                `protobuf:"fixed32,17,opt,name=eye_z,json=eyeZ,proto3" json:"eye_z,omitempty"`
+	HasEyePosition bool                   `protobuf:"varint,18,opt,name=has_eye_position,json=hasEyePosition,proto3" json:"has_eye_position,omitempty"`
+	IsDucking      bool                   `protobuf:"varint,19,opt,name=is_ducking,json=isDucking,proto3" json:"is_ducking,omitempty"`
+	OnGround       bool                   `protobuf:"varint,20,opt,name=on_ground,json=onGround,proto3" json:"on_ground,omitempty"`
+	VelocityX      float32                `protobuf:"fixed32,21,opt,name=velocity_x,json=velocityX,proto3" json:"velocity_x,omitempty"`
+	VelocityY      float32                `protobuf:"fixed32,22,opt,name=velocity_y,json=velocityY,proto3" json:"velocity_y,omitempty"`
+	VelocityZ      float32                `protobuf:"fixed32,23,opt,name=velocity_z,json=velocityZ,proto3" json:"velocity_z,omitempty"`
+	Team           int32                  `protobuf:"varint,24,opt,name=team,proto3" json:"team,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *PlayerFrame) Reset() {
@@ -955,6 +981,76 @@ func (x *PlayerFrame) GetIsReloading() bool {
 		return x.IsReloading
 	}
 	return false
+}
+
+func (x *PlayerFrame) GetEyeX() float32 {
+	if x != nil {
+		return x.EyeX
+	}
+	return 0
+}
+
+func (x *PlayerFrame) GetEyeY() float32 {
+	if x != nil {
+		return x.EyeY
+	}
+	return 0
+}
+
+func (x *PlayerFrame) GetEyeZ() float32 {
+	if x != nil {
+		return x.EyeZ
+	}
+	return 0
+}
+
+func (x *PlayerFrame) GetHasEyePosition() bool {
+	if x != nil {
+		return x.HasEyePosition
+	}
+	return false
+}
+
+func (x *PlayerFrame) GetIsDucking() bool {
+	if x != nil {
+		return x.IsDucking
+	}
+	return false
+}
+
+func (x *PlayerFrame) GetOnGround() bool {
+	if x != nil {
+		return x.OnGround
+	}
+	return false
+}
+
+func (x *PlayerFrame) GetVelocityX() float32 {
+	if x != nil {
+		return x.VelocityX
+	}
+	return 0
+}
+
+func (x *PlayerFrame) GetVelocityY() float32 {
+	if x != nil {
+		return x.VelocityY
+	}
+	return 0
+}
+
+func (x *PlayerFrame) GetVelocityZ() float32 {
+	if x != nil {
+		return x.VelocityZ
+	}
+	return 0
+}
+
+func (x *PlayerFrame) GetTeam() int32 {
+	if x != nil {
+		return x.Team
+	}
+	return 0
 }
 
 type FlashEvent struct {
@@ -1140,6 +1236,9 @@ type BombEvent struct {
 	PlayerSteamId uint64                 `protobuf:"varint,3,opt,name=player_steam_id,json=playerSteamId,proto3" json:"player_steam_id,omitempty"`
 	Site          string                 `protobuf:"bytes,4,opt,name=site,proto3" json:"site,omitempty"`
 	HasKit        bool                   `protobuf:"varint,5,opt,name=has_kit,json=hasKit,proto3" json:"has_kit,omitempty"`
+	X             float32                `protobuf:"fixed32,6,opt,name=x,proto3" json:"x,omitempty"`
+	Y             float32                `protobuf:"fixed32,7,opt,name=y,proto3" json:"y,omitempty"`
+	Z             float32                `protobuf:"fixed32,8,opt,name=z,proto3" json:"z,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1207,6 +1306,27 @@ func (x *BombEvent) GetHasKit() bool {
 		return x.HasKit
 	}
 	return false
+}
+
+func (x *BombEvent) GetX() float32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *BombEvent) GetY() float32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *BombEvent) GetZ() float32 {
+	if x != nil {
+		return x.Z
+	}
+	return 0
 }
 
 type DroppedEquipment struct {
@@ -1473,7 +1593,7 @@ const file_replay_proto_rawDesc = "" +
 	"\x0eattacker_blind\x18\r \x01(\bR\rattackerBlind\x12'\n" +
 	"\x0fkiller_airborne\x18\x0e \x01(\bR\x0ekillerAirborne\x12\x19\n" +
 	"\bno_scope\x18\x0f \x01(\bR\anoScope\x12#\n" +
-	"\rthrough_smoke\x18\x10 \x01(\bR\fthroughSmoke\"\x98\x03\n" +
+	"\rthrough_smoke\x18\x10 \x01(\bR\fthroughSmoke\"\xfd\x03\n" +
 	"\tNadeEvent\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12(\n" +
 	"\x10thrower_steam_id\x18\x02 \x01(\x04R\x0ethrowerSteamId\x12\x1b\n" +
@@ -1490,12 +1610,14 @@ const file_replay_proto_rawDesc = "" +
 	"trajectory\x12'\n" +
 	"\x0fdetonation_tick\x18\v \x01(\x05R\x0edetonationTick\x12\x1b\n" +
 	"\tfade_tick\x18\f \x01(\x05R\bfadeTick\x12#\n" +
-	"\reffect_radius\x18\r \x01(\x02R\feffectRadius\"S\n" +
+	"\reffect_radius\x18\r \x01(\x02R\feffectRadius\x12!\n" +
+	"\fthrower_team\x18\x0e \x01(\x05R\vthrowerTeam\x12@\n" +
+	"\rtrajectory_3d\x18\x0f \x03(\v2\x1b.replay.NadeTrajectoryPointR\ftrajectory3d\"S\n" +
 	"\x13NadeTrajectoryPoint\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12\f\n" +
 	"\x01x\x18\x02 \x01(\x02R\x01x\x12\f\n" +
 	"\x01y\x18\x03 \x01(\x02R\x01y\x12\f\n" +
-	"\x01z\x18\x04 \x01(\x02R\x01z\"\xcb\x02\n" +
+	"\x01z\x18\x04 \x01(\x02R\x01z\"\xe1\x04\n" +
 	"\vPlayerFrame\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12\x19\n" +
 	"\bsteam_id\x18\x02 \x01(\x04R\asteamId\x12\f\n" +
@@ -1511,7 +1633,21 @@ const file_replay_proto_rawDesc = "" +
 	"\bis_alive\x18\v \x01(\bR\aisAlive\x12\x1c\n" +
 	"\tutilities\x18\f \x03(\tR\tutilities\x12\x19\n" +
 	"\bhas_bomb\x18\r \x01(\bR\ahasBomb\x12!\n" +
-	"\fis_reloading\x18\x0e \x01(\bR\visReloading\"\xba\x01\n" +
+	"\fis_reloading\x18\x0e \x01(\bR\visReloading\x12\x13\n" +
+	"\x05eye_x\x18\x0f \x01(\x02R\x04eyeX\x12\x13\n" +
+	"\x05eye_y\x18\x10 \x01(\x02R\x04eyeY\x12\x13\n" +
+	"\x05eye_z\x18\x11 \x01(\x02R\x04eyeZ\x12(\n" +
+	"\x10has_eye_position\x18\x12 \x01(\bR\x0ehasEyePosition\x12\x1d\n" +
+	"\n" +
+	"is_ducking\x18\x13 \x01(\bR\tisDucking\x12\x1b\n" +
+	"\ton_ground\x18\x14 \x01(\bR\bonGround\x12\x1d\n" +
+	"\n" +
+	"velocity_x\x18\x15 \x01(\x02R\tvelocityX\x12\x1d\n" +
+	"\n" +
+	"velocity_y\x18\x16 \x01(\x02R\tvelocityY\x12\x1d\n" +
+	"\n" +
+	"velocity_z\x18\x17 \x01(\x02R\tvelocityZ\x12\x12\n" +
+	"\x04team\x18\x18 \x01(\x05R\x04team\"\xba\x01\n" +
 	"\n" +
 	"FlashEvent\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12&\n" +
@@ -1529,14 +1665,17 @@ const file_replay_proto_rawDesc = "" +
 	"\x01z\x18\x06 \x01(\x02R\x01z\x12\x16\n" +
 	"\x06radius\x18\a \x01(\x02R\x06radius\x12\x1d\n" +
 	"\n" +
-	"noise_type\x18\b \x01(\tR\tnoiseType\"\x93\x01\n" +
+	"noise_type\x18\b \x01(\tR\tnoiseType\"\xbd\x01\n" +
 	"\tBombEvent\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12\x1d\n" +
 	"\n" +
 	"event_type\x18\x02 \x01(\tR\teventType\x12&\n" +
 	"\x0fplayer_steam_id\x18\x03 \x01(\x04R\rplayerSteamId\x12\x12\n" +
 	"\x04site\x18\x04 \x01(\tR\x04site\x12\x17\n" +
-	"\ahas_kit\x18\x05 \x01(\bR\x06hasKit\"\xb9\x01\n" +
+	"\ahas_kit\x18\x05 \x01(\bR\x06hasKit\x12\f\n" +
+	"\x01x\x18\x06 \x01(\x02R\x01x\x12\f\n" +
+	"\x01y\x18\a \x01(\x02R\x01y\x12\f\n" +
+	"\x01z\x18\b \x01(\x02R\x01z\"\xb9\x01\n" +
 	"\x10DroppedEquipment\x12\x1d\n" +
 	"\n" +
 	"start_tick\x18\x01 \x01(\x05R\tstartTick\x12\x19\n" +
@@ -1597,11 +1736,12 @@ var file_replay_proto_depIdxs = []int32{
 	10, // 9: replay.ReplayData.bombs:type_name -> replay.BombEvent
 	11, // 10: replay.ReplayData.dropped_equipment:type_name -> replay.DroppedEquipment
 	6,  // 11: replay.NadeEvent.trajectory:type_name -> replay.NadeTrajectoryPoint
-	12, // [12:12] is the sub-list for method output_type
-	12, // [12:12] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	6,  // 12: replay.NadeEvent.trajectory_3d:type_name -> replay.NadeTrajectoryPoint
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_replay_proto_init() }

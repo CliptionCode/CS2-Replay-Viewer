@@ -81,6 +81,8 @@ message NadeEvent {
   int32 detonation_tick = 11;
   int32 fade_tick = 12;
   float effect_radius = 13;
+  int32 thrower_team = 14;
+  repeated NadeTrajectoryPoint trajectory_3d = 15;
 }
 
 message NadeTrajectoryPoint {
@@ -105,6 +107,16 @@ message PlayerFrame {
   repeated string utilities = 12;
   bool has_bomb = 13;
   bool is_reloading = 14;
+  float eye_x = 15;
+  float eye_y = 16;
+  float eye_z = 17;
+  bool has_eye_position = 18;
+  bool is_ducking = 19;
+  bool on_ground = 20;
+  float velocity_x = 21;
+  float velocity_y = 22;
+  float velocity_z = 23;
+  int32 team = 24;
 }
 
 message FlashEvent {
@@ -132,6 +144,9 @@ message BombEvent {
   uint64 player_steam_id = 3;
   string site = 4;
   bool has_kit = 5;
+  float x = 6;
+  float y = 7;
+  float z = 8;
 }
 
 message DroppedEquipment {

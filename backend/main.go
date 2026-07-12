@@ -18,14 +18,19 @@ type ParseRequest struct {
 type ParseResponse struct {
 	Success bool   `json:"success"`
 	Data    string `json:"data,omitempty"`
+	Path    string `json:"path,omitempty"`
 	Error   string `json:"error,omitempty"`
 }
 
 func main() {
 	var path string
+	var outputPath string
 
 	if len(os.Args) > 1 {
 		path = os.Args[1]
+		if len(os.Args) > 3 && os.Args[2] == "--output" {
+			outputPath = os.Args[3]
+		}
 	} else {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil && err != io.EOF {
@@ -60,6 +65,14 @@ func main() {
 	pbBytes, err := serialize.ReplayDataToProto(replay)
 	if err != nil {
 		outputError(fmt.Sprintf("Failed to serialize: %v", err))
+		return
+	}
+	if outputPath != "" {
+		if err := os.WriteFile(outputPath, pbBytes, 0600); err != nil {
+			outputError(fmt.Sprintf("Failed to write protobuf output: %v", err))
+			return
+		}
+		json.NewEncoder(os.Stdout).Encode(ParseResponse{Success: true, Path: outputPath})
 		return
 	}
 

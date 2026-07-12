@@ -2,7 +2,7 @@
 
 Compact implementation context for future Codex work.
 
-> **Application version:** `0.1.12`. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application entry in `src-tauri/Cargo.lock` synchronized.
+> **Application version:** `0.2.0`. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application entry in `src-tauri/Cargo.lock` synchronized.
 
 ## Mandatory workflow
 
@@ -61,7 +61,11 @@ Pop-Location
 
 Data flow:
 
-`.dem` → Go/demoinfocs parser → protobuf bytes via Rust temp file → SvelteKit frontend → layered Canvas 2D replay.
+`.dem` → Go/demoinfocs parser → protobuf bytes via Rust temp file → SvelteKit frontend → layered Canvas 2D replay or Three.js 3D replay.
+
+The 3D path is additive: `<map>.vpk` → bundled ValveResourceFormat CLI → versioned local glTF/PNG cache → bounded loopback streaming server → `ReplayScene`. The user selects the exact `steamapps\common\Counter-Strike Global Offensive` root; Rust resolves `game\csgo\maps\<replay-map>.vpk`, and the validated root is stored in the IndexedDB-backed viewer settings. Extraction is scoped to the loaded replay's map, and a completion marker prevents interrupted cache output from being reused. Large glTF buffers are exposed through bounded virtual slices instead of being loaded into a single Tauri asset response.
+
+`pnpm tauri dev` and `pnpm tauri build` run the idempotent `ensure:extractor` step before the frontend command. It provisions the pinned ValveResourceFormat Windows CLI plus every required native DLL into `tools/source2viewer`; Tauri bundles that directory as application resources. Runtime must never ask end users to install the extractor themselves.
 
 The active frontend is SvelteKit and starts at `src/routes/+page.svelte`. There is no standalone `App.svelte` entry point. Rendering layers are:
 
@@ -79,6 +83,20 @@ The active frontend is SvelteKit and starts at `src/routes/+page.svelte`. There 
 `src/lib/playback-state.ts` is the non-reactive high-frequency render clock. Canvas layers read it in animation frames. `displayTick` in `+page.svelte` is throttled for reactive UI. Do not pass a per-frame tick prop through the component tree.
 
 The loaded-replay workspace uses a compact left toolbar with Sight, Player, Noise, Timeline, Equipment, and Drawing sections. Only the selected section's controls render in the adjacent slide-out panel; selecting it again or using the panel's back button closes it. Donate is a direct toolbar action and opens the same PayPal page as the Welcome screen.
+
+The bottom View toggle defaults to 2D. In 3D, Camera is the first toolbar section and Sight contains only line-of-sight controls plus transparency. The existing timeline, roster, round navigation, playback controls, and roster shortcuts remain shared. `src/lib/renderer/ReplayScene.ts` owns the Three.js scene and `src/lib/maps/local-map.ts` owns the Tauri map commands.
+
+Async 3D map completion initializes the overview position only when the scene is in free-camera mode. When a player was already selected before switching from 2D, map completion reapplies the current replay scene instead of overwriting the selected player's first-person camera.
+
+Thrown utility has an additive protobuf `trajectory_3d` stream captured from each live grenade projectile on every parsed demo frame. `ReplayScene` uses this dense, tick-timed path for 3D projectile movement and trajectory lines so arcs and collision bounces follow the replay; older replay data falls back to `trajectory`. The 2D `NadeLayer` intentionally continues to use the original `trajectory` field unchanged.
+
+Box-shaped 3D utility projectiles (Flashbang, Decoy, Molotov, and incendiary) use their long geometry dimension on the Three.js Y axis so they render as vertical rectangles. HE and smoke projectiles remain spherical.
+
+3D line of sight uses cylindrical mesh beams because platform WebGL implementations ignore native line widths. It is enabled by default with length 500; the 3D width range is 1–50 with step 1, and the length maximum is 1100. These 3D values are separate from the existing 2D line-of-sight values. The free-camera movement-speed default is 36. Initial W/A/S/D movement codes are written to the viewer-settings IndexedDB record on first startup and remain editable.
+
+Bomb protobuf events include world X/Y/Z. The parser captures the event player's position, while `ReplayScene` uses the planter's recorded frame as a compatibility fallback for older replay data. Within the active round, the planted marker is orange, turns gray on `defused`, and red on `exploded`. The global context-menu handler suppresses the WebView menu for right-click interactions.
+
+The 3D bomb marker has billboarded world-space status text: an orange whole-second explosion countdown after planting, a blue kit-aware defuse countdown while a living CT is actively defusing, and blue/red terminal messages after defuse/explosion. Label canvas-size changes replace the Three.js texture instead of mutating its dimensions in place, preventing the prior countdown texture from stretching when terminal text appears. Free-camera forward/backward movement follows the camera's complete view vector, including pitch, while strafing uses the camera's local right vector.
 
 `src/lib/shortcuts.ts` owns shortcut normalization and the IndexedDB-backed `shortcut_bindings` database. The database is the source of truth for both editable assignments and fixed reservations. `ShortcutBinding.svelte` is the shared add/edit/remove UI used by panel controls, playback controls, section headers, and roster slots. An assigned keycap is itself the edit button; only the remove icon remains beside it.
 

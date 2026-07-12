@@ -1,6 +1,6 @@
 # CS2 Replay Viewer
 
-An open-source, simple 2D viewer for Counter-Strike 2 replay demos. Load a `.dem` file to replay rounds on an interactive radar map, inspect player movement and utility, and quickly jump to the moments that matter.
+An open-source 2D and 3D viewer for Counter-Strike 2 replay demos. Load a `.dem` file to replay rounds on an interactive radar or directly inside extracted CS2 map geometry, inspect player movement and utility, and quickly jump to the moments that matter.
 
 ## Screenshots
 
@@ -81,6 +81,19 @@ Draw routes, callouts, positions, and tactical plans directly on the replay rada
 - View color-coded round results, including the winning side and surviving Terrorists and Counter-Terrorists.
 - Keep CT and T player lists consistently sorted by player name in ascending order whenever a replay is loaded.
 
+### 2D and 3D views
+
+- Switch between the existing 2D radar and an interactive 3D map without changing the current round, timeline, playback position, or selected player.
+- Select the `steamapps\common\Counter-Strike Global Offensive` installation folder once; the validated path is kept in the local settings database for later sessions, and the viewer resolves `game\csgo\maps` itself.
+- Extract only the map used by the loaded replay and stream its Source 2 geometry and textures from a versioned local cache. Completed caches are reused in later sessions, while interrupted extractions are never treated as valid.
+- Select players from the roster, by shortcut, or directly in the 3D scene to enter their recorded eye view.
+- Move the free camera with editable, database-backed <kbd>W</kbd>, <kbd>A</kbd>, <kbd>S</kbd>, and <kbd>D</kbd> defaults. Movement speed starts at 36, and movement and mouse-wheel zoom speed remain configurable from the 3D-only Camera panel.
+- Keep 3D line of sight enabled by default with a starting length of 500. Configure its real beam width from 1–50, length up to 1100, and transparency while retaining the full existing Sight panel in 2D mode.
+- Follow thrown utility along its recorded per-tick 3D arc and wall/floor bounces, with box-shaped utility shown vertically, without changing the established 2D utility rendering.
+- Mark the planted bomb with a small orange sphere at its planted position; the marker turns gray after a defuse and red after an explosion.
+- Read an in-world explosion countdown above the planted bomb, a blue active-defuse countdown beneath it, and clear `Bomb defused` or `Bomb exploded` status text when the bomb reaches a terminal state.
+- Fly the free camera directly along the current viewing direction with forward/backward movement, including upward and downward pitch.
+
 ### Toolbar and custom shortcuts
 
 - Open Sight, Player, Noise, Timeline, Equipment, and Drawing controls from a compact icon-and-label toolbar on the left; select an open section again or use the panel's back button to close it.
@@ -124,6 +137,7 @@ Draw routes, callouts, positions, and tactical plans directly on the replay rada
 - Keep drawings permanently for the current round or fade them over 1–6 seconds. Changing rounds and `Clear all Drawings` both remove permanent drawings.
 - Keep the radar at a consistent visual size when maximizing or restoring the application while zoomed.
 - Load and paint the radar background before player dots and other replay overlays appear, without flashing the coordinate grid during normal loading.
+- Suppress the embedded WebView context menu so right-click interactions never open browser controls over either replay view.
 
 ## Libraries and tools
 
@@ -133,6 +147,8 @@ Draw routes, callouts, positions, and tactical plans directly on the replay rada
 - [Tauri](https://github.com/tauri-apps/tauri) — provides the lightweight desktop application shell and native file, shell, and dialog integration.
 - [Svelte](https://github.com/sveltejs/svelte) and [SvelteKit](https://github.com/sveltejs/kit) — power the interactive TypeScript user interface.
 - [Vite](https://github.com/vitejs/vite) — builds and bundles the frontend.
+- [Three.js](https://threejs.org/) — renders the interactive 3D replay scene, players, utility, and extracted map geometry.
+- [ValveResourceFormat](https://github.com/ValveResourceFormat/ValveResourceFormat) — extracts local CS2 map resources into the cached glTF data used by the 3D view. The pinned Windows CLI and its native runtime files are provisioned automatically during Tauri development and release builds, then bundled into the installer; end users do not install or download it separately.
 - [cs2-map-icons](https://github.com/MurkyYT/cs2-map-icons) — supplies the radar images and overview metadata used to place replay data accurately on each supported map.
 - [counter-strike-icons](https://github.com/Juknum/counter-strike-icons/tree/main/cs2/panorama/images/icons/equipment) — supplies the CS2 equipment SVGs used by the kill feed, timeline markers, and utility effect centers from `static/equipment-icons`. The empty `world.svg` and `worldent.svg` source files are intentionally excluded.
 

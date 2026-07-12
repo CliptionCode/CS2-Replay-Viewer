@@ -1,11 +1,13 @@
 {
   "name": "cs2-replay-viewer",
   "private": true,
-  "version": "0.1.12",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:tauri": "pnpm ensure:extractor && vite build",
+    "ensure:extractor": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-source2viewer.ps1",
     "preview": "vite preview",
     "tauri": "tauri",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
@@ -14,7 +16,8 @@
     "@bufbuild/protobuf": "^2.2.0",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
-    "@tauri-apps/plugin-fs": "^2.5.1"
+    "@tauri-apps/plugin-fs": "^2.5.1",
+    "three": "^0.178.0"
   },
   "devDependencies": {
     "@bufbuild/protoc-gen-es": "^2.2.0",
@@ -23,6 +26,7 @@
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@tauri-apps/cli": "^2.0.0",
     "@types/node": "^22.20.1",
+    "@types/three": "^0.178.0",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "typescript": "^5.6.0",

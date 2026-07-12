@@ -1,47 +1,73 @@
-# CS2 Replay Viewer v0.1.12
+# CS2 Replay Viewer v0.2.0
 
-Version 0.1.12 introduces a compact left-side control toolbar and a persistent custom shortcut system for faster replay review.
+Version 0.2.0 introduces an integrated 3D replay view while preserving the familiar 2D radar, shared timeline, playback controls, round navigation, roster, and player shortcuts.
 
 ## Change Overview
 
-- 🚀 **New Features:** Custom keyboard and mouse shortcuts across replay controls and players
-- 🔧 **Adjusted Features:** Section-based left toolbar and expanded player rows
-- 📦 **Version and Documentation:** Version 0.1.12 release and feature-guide updates
+- 🚀 **New Features:** Interactive 3D map replays, player-eye viewing, free-camera controls, and planted-bomb state markers
+- 🔧 **Adjusted Features:** Expanded 3D line-of-sight controls, database-backed movement defaults, and automatic map-cache reuse
+- ⚡ **Performance Improvements:** Map-specific extraction, bounded map streaming, and persistent completed caches
+- 🐛 **Bug Fixes:** Stable 3D loading lifecycle, accurate per-tick utility arcs and bounces, functional line-of-sight width, incomplete-cache detection, and suppressed WebView context menus
+- 📦 **Version and Documentation:** Version 0.2.0, bundled 3D map component, and updated feature guide
 
 ## 🚀 New Features
 
-### Custom Shortcuts
+### Integrated 3D Replay View
 
-- Add, edit, or remove shortcuts directly beside supported controls.
-- Assign keyboard combinations, mouse buttons, and modified mouse-wheel inputs while keeping every shortcut unique.
-- Trigger checkboxes, buttons, section panels, playback actions, map variants, and individual players even when their control panel is closed.
-- Use separate decrease and increase shortcuts for sliders; each press follows that slider's configured step, and holding the shortcut repeats the adjustment. Non-slider shortcuts remain single-trigger per press.
-- Keep all assignments between application sessions in the local shortcut database.
-- See add, edit, and remove changes immediately without reopening a control panel.
-- Press Escape during any shortcut capture to cancel while preserving the previous assignment.
-- Receive an on-screen notice when an input is already assigned, then continue listening for another input.
-- Existing map-wheel zoom inputs are protected from reassignment.
+- Switch between the existing 2D radar and a fully interactive 3D map from the bottom controls.
+- Keep the current timeline, round, playback position, team roster, and player selection when changing views.
+- Select a player through the roster, an assigned player shortcut, or their model in the 3D scene to enter the recorded player-eye view.
+- View recorded player positions, health, utility trajectories, and map geometry using locally installed Counter-Strike 2 data.
+
+### Camera Controls
+
+- Use W, A, S, and D as editable free-camera movement keys.
+- Keep camera key assignments in the local settings database from the first application startup.
+- Configure camera movement speed, starting at 36, and mouse-wheel zoom speed from the 3D-only Camera panel.
+- Move forward and backward along the full viewing direction, including climbing or descending when looking up or down.
+
+### Bomb State Marker
+
+- See a small orange sphere at the planted bomb position.
+- See the remaining explosion time above the bomb and a kit-aware blue countdown while a Counter-Terrorist is actively defusing.
+- See the marker turn gray when the bomb is defused.
+- See the marker turn red when the bomb explodes.
+- See clear blue or red status text above the marker after a defuse or explosion.
 
 ## 🔧 Adjusted Features
 
-### Replay Controls
+### 3D Line of Sight
 
-- Replaced the always-open left control stack with a compact vertical toolbar for Sight, Player, Noise, Timeline, Equipment, and Drawing.
-- Each toolbar item now uses a centered icon and label with matching hover and selected highlights.
-- Assigned section shortcuts now appear as readable bracketed text directly on their toolbar items, and shortcut-driven panel changes no longer leave an old mouse-selected item highlighted.
-- Selecting a section opens only its controls in a slide-out panel; selecting it again or using the panel's back button closes it.
-- Added Donate to the toolbar with the same PayPal behavior as the Welcome screen.
-- Added shortcut controls beside bottom playback actions and beside every roster player without changing player selection behavior.
-- CT and T player lists are now sorted alphabetically by player name for a consistent order every time the same replay is loaded.
-- Player shortcuts now stay with their sorted CT/T roster position instead of following a Steam ID, so side switches select the new player occupying that slot.
-- Assigned shortcut keycaps are now directly clickable for editing, replacing the separate pencil icon.
-- Replay-speed preset buttons remain direct click controls and no longer offer shortcut assignments; previously saved speed shortcuts are cleared automatically.
-- Added an editable Drawing Setup hold shortcut with Shift as its default, plus clearer Primary and Secondary drawing-color labels.
-- Drawing Setup remains keyboard-only; any mouse-based Drawing Setup assignment is restored to the default Shift binding.
-- Centered and restyled shortcut keycaps, and changed empty decrease-slider bindings to a minus icon.
-- Color pickers remain shortcut-free so drawing colors stay focused on direct visual input.
+- Show 3D line of sight by default.
+- Start with a line-of-sight length of 500 and increase it up to 1100.
+- Adjust real beam width from 1 to 50 in whole-number steps.
+- Adjust beam transparency independently from width and length.
+- Keep the existing 2D Sight controls and values unchanged.
+
+### Counter-Strike 2 Game Data
+
+- Select the `steamapps\common\Counter-Strike Global Offensive` folder; the application resolves the required map files itself.
+- Extract only the map used by the loaded replay.
+- Reuse completed map caches in later sessions without processing the VPK again.
+- Include the pinned Source 2 map component and all native dependencies in the Windows installer, with no end-user setup or download step.
+
+## ⚡ Performance Improvements
+
+- Stream large map resources through bounded local slices instead of loading one enormous map buffer through the desktop asset protocol.
+- Version caches from the installed map VPK so changed game files produce a fresh map cache automatically.
+- Mark successful extractions as complete so cached maps can be loaded immediately and reliably.
+
+## 🐛 Bug Fixes
+
+- Prevented reactive loading-state changes from repeatedly recreating the Three.js scene and restarting the loading spinner.
+- Preserved an existing player selection when switching from 2D to 3D so the loaded map opens directly in that player's first-person view.
+- Replaced the planted-bomb countdown cleanly with a large blue `Bomb defused` message instead of stretching the previous countdown texture.
+- Oriented rectangular 3D utility models vertically instead of displaying them horizontally.
+- Replaced unsupported WebGL line-width behavior with real 3D beam geometry so the width slider visibly changes line of sight.
+- Prevented interrupted map extractions from being mistaken for complete caches.
+- Disabled the embedded WebView context menu so right-clicking no longer opens browser controls.
 
 ## 📦 Version and Documentation
 
-- Increased the application version from `0.1.11` to `0.1.12`.
-- Updated the feature guide and implementation context for the toolbar and shortcut system.
+- Increased the application version from `0.1.12` to `0.2.0` across package, desktop-shell, and Rust metadata.
+- Updated the feature guide and implementation context for the complete 3D workflow.

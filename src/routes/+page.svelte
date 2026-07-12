@@ -3,6 +3,7 @@ import { onMount, tick as flushDom } from 'svelte';
 import { browser } from '$app/environment';
 import { invoke } from '@tauri-apps/api/core';
 import { readFile } from '@tauri-apps/plugin-fs';
+import { open } from '@tauri-apps/plugin-dialog';
 import { create, fromBinary } from '@bufbuild/protobuf';
 import { ReplayDataSchema, MapDataSchema } from '$lib/types/replay/replay_pb';
 import type {
@@ -40,6 +41,16 @@ import {
     type ShortcutConflict,
 } from '$lib/shortcuts';
 import { DEFAULT_RADAR_MAP, getRadarInfo } from '$lib/maps/radar-info';
+import { ReplayScene } from '$lib/renderer/ReplayScene';
+import { getMapStatus, mapSceneUrl, prepareMap, validateCs2Folder, type LocalMapStatus } from '$lib/maps/local-map';
+import {
+    DEFAULT_VIEWER_SETTINGS,
+    keyCodeForDisplay,
+    loadViewerSettings,
+    saveViewerSettings,
+    type CameraMovementDirection,
+    type ViewerSettings,
+} from '$lib/settings';
 import {
     getPlaybackStartRound as getReplayPlaybackStartRound,
     getRoundEndDelayTicks,
@@ -112,6 +123,8 @@ const DEFAULT_SIGHT_CONE_HALF_ANGLE = 0.68;
 const EVENT_SEEK_LEAD_SECONDS = 2;
 const DEFAULT_LINE_OF_SIGHT_LENGTH = 300;
 const DEFAULT_LINE_OF_SIGHT_WIDTH = 1.6;
+const DEFAULT_3D_LINE_OF_SIGHT_LENGTH = 500;
+const DEFAULT_3D_LINE_OF_SIGHT_WIDTH = 5;
 const DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT = 250;
 const MAX_MOUSE_VIEWPORT_ZOOM_SCALE = 5;
 const MAP_PAN_VIEWPORT_PADDING = 0.5;
@@ -168,18 +181,27 @@ const TIMELINE_COMBAT_EVENT_OPTIONS = [
 ] as const;
 
 type MapVariant = 'default' | 'lower';
+type ViewMode = '2d' | '3d';
 type NoiseSourceKey = typeof NOISE_SOURCE_OPTIONS[number]['key'];
 type TimelineUtilityKey = typeof TIMELINE_UTILITY_OPTIONS[number]['key'];
 type TimelineCombatEventKey = typeof TIMELINE_COMBAT_EVENT_OPTIONS[number]['key'];
-type ToolbarSectionKey = 'sight' | 'player' | 'noise' | 'timeline' | 'equipment' | 'drawing';
+type ToolbarSectionKey = 'camera' | 'sight' | 'player' | 'noise' | 'timeline' | 'equipment' | 'drawing';
 
 const TOOLBAR_SECTIONS: { key: ToolbarSectionKey; label: string }[] = [
+    { key: 'camera', label: 'Camera' },
     { key: 'sight', label: 'Sight' },
     { key: 'player', label: 'Player' },
     { key: 'noise', label: 'Noise' },
     { key: 'timeline', label: 'Timeline' },
     { key: 'equipment', label: 'Equipment' },
     { key: 'drawing', label: 'Drawing' },
+];
+
+const CAMERA_MOVEMENT_CONTROLS: { direction: CameraMovementDirection; label: string }[] = [
+    { direction: 'forward', label: 'Forward' },
+    { direction: 'left', label: 'Left' },
+    { direction: 'backward', label: 'Backward' },
+    { direction: 'right', label: 'Right' },
 ];
 
 const SLIDER_SHORTCUT_ACTIONS = new Set([
@@ -191,6 +213,12 @@ const SLIDER_SHORTCUT_ACTIONS = new Set([
     'sight.los-width.increase',
     'sight.los-length.decrease',
     'sight.los-length.increase',
+    'sight.los-opacity.decrease',
+    'sight.los-opacity.increase',
+    'camera.movement-speed.decrease',
+    'camera.movement-speed.increase',
+    'camera.zoom-speed.decrease',
+    'camera.zoom-speed.increase',
     'player.zoom.decrease',
     'player.zoom.increase',
     'drawing.stroke.decrease',
@@ -207,6 +235,18 @@ let sightConeForSelectedPlayer = false;
 let showLineOfSight = false;
 let lineOfSightLength = DEFAULT_LINE_OF_SIGHT_LENGTH;
 let lineOfSightWidth = DEFAULT_LINE_OF_SIGHT_WIDTH;
+let showLineOfSight3D = true;
+let lineOfSightLength3D = DEFAULT_3D_LINE_OF_SIGHT_LENGTH;
+let lineOfSightWidth3D = DEFAULT_3D_LINE_OF_SIGHT_WIDTH;
+let lineOfSightTransparency = 0.7;
+let viewMode: ViewMode = '2d';
+let replay3DScene: ReplayScene | null = null;
+let localMap3D: LocalMapStatus | null = null;
+let map3DLoading = false;
+let map3DLoadingText = 'Loading map…';
+let map3DError = '';
+let viewerSettings: ViewerSettings = structuredClone(DEFAULT_VIEWER_SETTINGS);
+let cameraKeyCapture: CameraMovementDirection | null = null;
 let selectedPlayerZoomPercent = DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT;
 let mouseViewportZoomScale = 1;
 let mouseViewportTranslateX = 0;
@@ -273,6 +313,7 @@ let matchScore: MatchScore | null = null;
 let toastMessage = '';
 let toastTimeout: ReturnType<typeof setTimeout> | null = null;
 let activeToolbarSection: ToolbarSectionKey | null = null;
+let visibleToolbarSections = TOOLBAR_SECTIONS.filter(section => section.key !== 'camera');
 let shortcutBindings: Record<string, string> = {};
 let shortcutCaptureActionId: string | null = null;
 let pendingCaptureKeyboardShortcut: { code: string; shortcut: string } | null = null;
@@ -405,6 +446,134 @@ function applyLoadedReplay(data: ReplayData): void {
     bombStatus = emptyBombStatus();
     setPlaying(false);
     setTick(data.rounds[0] ? getRoundActiveStart(data.rounds[0]) : 0);
+    replay3DScene?.setReplay(data);
+    if (viewMode === '3d') void prepareCurrent3DMap();
+}
+
+function apply3DSceneSettings(): void {
+    replay3DScene?.setSightSettings(showLineOfSight3D, lineOfSightLength3D, lineOfSightWidth3D, 1 - lineOfSightTransparency);
+    replay3DScene?.setCameraControls(
+        viewerSettings.cameraMovementKeys,
+        viewerSettings.cameraMovementSpeed,
+        viewerSettings.cameraZoomSpeed
+    );
+    replay3DScene?.setCamera(selectedPlayerSteamId === null ? 'free' : 'player', selectedPlayerSteamId);
+}
+
+function mount3DScene(canvas: HTMLCanvasElement): { destroy: () => void } {
+    const scene = new ReplayScene(canvas);
+    replay3DScene = scene;
+    scene.setPlayerSelectHandler(selectPlayer);
+    if (replayData) scene.setReplay(replayData);
+    scene.setTick(getPlaybackTick());
+    apply3DSceneSettings();
+    return {
+        destroy: () => {
+            if (replay3DScene === scene) replay3DScene = null;
+            scene.dispose();
+        }
+    };
+}
+
+async function chooseCs2GamePath(): Promise<string | null> {
+    let savedPath = viewerSettings.cs2GamePath;
+    if (savedPath) {
+        try {
+            savedPath = await validateCs2Folder(savedPath);
+        } catch {
+            savedPath = '';
+        }
+    }
+    if (!savedPath) {
+        showToast('Select the steamapps\\common\\Counter-Strike Global Offensive folder');
+        const selected = await open({
+            directory: true,
+            multiple: false,
+            title: 'Select steamapps\\common\\Counter-Strike Global Offensive'
+        });
+        if (typeof selected !== 'string') return null;
+        savedPath = await validateCs2Folder(selected);
+    }
+    viewerSettings = { ...viewerSettings, cs2GamePath: savedPath };
+    await saveViewerSettings(viewerSettings);
+    return savedPath;
+}
+
+async function setViewMode(mode: ViewMode): Promise<void> {
+    if (mode === viewMode) return;
+    if (mode === '2d') {
+        viewMode = '2d';
+        if (activeToolbarSection === 'camera') activeToolbarSection = null;
+        return;
+    }
+    map3DError = '';
+    try {
+        if (!await chooseCs2GamePath()) return;
+        viewMode = '3d';
+        await flushDom();
+        await prepareCurrent3DMap();
+    } catch (cause) {
+        map3DError = cause instanceof Error ? cause.message : String(cause);
+        showToast(map3DError);
+    }
+}
+
+async function prepareCurrent3DMap(): Promise<void> {
+    const mapName = replayData?.header?.mapName;
+    const gamePath = viewerSettings.cs2GamePath;
+    if (!mapName || !gamePath || !replay3DScene || map3DLoading) return;
+    map3DLoading = true;
+    map3DLoadingText = `Checking the ${mapName} cache…`;
+    map3DError = '';
+    try {
+        localMap3D = await getMapStatus(mapName, gamePath);
+        if (!localMap3D.vpkPath) throw new Error(`The installed ${mapName} map data was not found`);
+        if (!localMap3D.ready) {
+            if (!localMap3D.extractorAvailable) {
+                throw new Error('The 3D map component is missing from this installation. Reinstall CS2 Replay Viewer.');
+            }
+            map3DLoadingText = `Creating the local ${mapName} 3D cache…`;
+            localMap3D = await prepareMap(mapName, gamePath);
+        }
+        map3DLoadingText = `Loading cached ${mapName} map…`;
+        await load3DMapScene(localMap3D);
+    } catch (cause) {
+        map3DError = cause instanceof Error ? cause.message : String(cause);
+    } finally {
+        map3DLoading = false;
+    }
+}
+
+async function load3DMapScene(status: LocalMapStatus): Promise<void> {
+    if (!status.scenePath || !replay3DScene || !viewerSettings.cs2GamePath) return;
+    const url = await mapSceneUrl(status, viewerSettings.cs2GamePath);
+    await replay3DScene.loadMap(url);
+}
+
+function beginCameraKeyCapture(direction: CameraMovementDirection): void {
+    cameraKeyCapture = direction;
+}
+
+function captureCameraKey(event: KeyboardEvent, direction: CameraMovementDirection): void {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.code === 'Escape') {
+        cameraKeyCapture = null;
+        return;
+    }
+    viewerSettings = {
+        ...viewerSettings,
+        cameraMovementKeys: { ...viewerSettings.cameraMovementKeys, [direction]: event.code }
+    };
+    cameraKeyCapture = null;
+    apply3DSceneSettings();
+    void saveViewerSettings(viewerSettings);
+}
+
+function updateCameraSetting(key: 'cameraMovementSpeed' | 'cameraZoomSpeed', value: number): void {
+    viewerSettings = { ...viewerSettings, [key]: value };
+    apply3DSceneSettings();
+    void saveViewerSettings(viewerSettings);
 }
 
 async function loadDemo() {
@@ -419,6 +588,7 @@ async function loadDemo() {
 
         const pbPath: string = await invoke('parse_demo', { path: demPath });
         const bytes = await readFile(pbPath);
+        void invoke('release_replay_file', { path: pbPath }).catch(() => undefined);
         const data = fromBinary(ReplayDataSchema, bytes);
         applyLoadedReplay(data);
     } catch (e: any) {
@@ -1498,6 +1668,7 @@ function resetMouseViewportZoom(): void {
 }
 
 function handleViewportWheel(event: WheelEvent): void {
+    if (viewMode !== '2d') return;
     if (!(event.target instanceof HTMLCanvasElement) || !replayContainer) return;
 
     event.preventDefault();
@@ -1549,6 +1720,7 @@ function handleViewportWheel(event: WheelEvent): void {
 }
 
 function handleViewportPointerDown(event: PointerEvent): void {
+    if (viewMode !== '2d') return;
     if (event.button === 0) {
         ignoreNextCanvasClick = false;
     }
@@ -1576,6 +1748,7 @@ function handleViewportPointerDown(event: PointerEvent): void {
 }
 
 function handleViewportPointerMove(event: PointerEvent): void {
+    if (viewMode !== '2d') return;
     if (!mouseViewportDrag || event.pointerId !== mouseViewportDrag.pointerId) return;
 
     const deltaX = event.clientX - mouseViewportDrag.startClientX;
@@ -1595,6 +1768,7 @@ function handleViewportPointerMove(event: PointerEvent): void {
 }
 
 function finishViewportPointerDrag(event: PointerEvent): void {
+    if (viewMode !== '2d') return;
     if (!mouseViewportDrag || event.pointerId !== mouseViewportDrag.pointerId) return;
 
     ignoreNextCanvasClick = mouseViewportDrag.hasMoved;
@@ -1625,6 +1799,7 @@ function attachViewportInteractions(element: HTMLDivElement): () => void {
 }
 
 function getReplayCanvasPoint(event: MouseEvent): { x: number; y: number; tick: number } | null {
+    if (viewMode !== '2d') return null;
     if (!(event.target instanceof HTMLCanvasElement) || !replayContainer) return null;
     const rect = replayContainer.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
@@ -1817,6 +1992,7 @@ function playbackLoop(timestamp: number) {
     }
 
     setPlaybackTick(targetFloat);
+    replay3DScene?.setTick(targetFloat);
     updateReplayViewportTransform(targetFloat);
     syncDisplayTick(false, timestamp);
 
@@ -1888,6 +2064,18 @@ $: {
     }
 }
 
+$: {
+    void viewMode;
+    visibleToolbarSections = viewMode === '3d'
+        ? TOOLBAR_SECTIONS
+        : TOOLBAR_SECTIONS.filter(section => section.key !== 'camera');
+}
+
+$: {
+    void showLineOfSight3D, lineOfSightLength3D, lineOfSightWidth3D, lineOfSightTransparency, selectedPlayerSteamId, viewerSettings;
+    apply3DSceneSettings();
+}
+
 function startPlayback() {
     if (!browser || !replayData || rafId) return;
 
@@ -1926,6 +2114,7 @@ function setTick(tick: number) {
     }
 
     setPlaybackTickAndNotify(nextTick);
+    replay3DScene?.setTick(nextTick);
     syncDisplayTick(true);
     updateReplayViewportTransform(nextTick);
     if (isPlaying) {
@@ -2027,6 +2216,12 @@ function getShortcutLabel(actionId: string): string {
         'sight.los-width.increase': 'Increase Line of Sight Width',
         'sight.los-length.decrease': 'Decrease Line of Sight Length',
         'sight.los-length.increase': 'Increase Line of Sight Length',
+        'sight.los-opacity.decrease': 'Decrease Line of Sight Transparency',
+        'sight.los-opacity.increase': 'Increase Line of Sight Transparency',
+        'camera.movement-speed.decrease': 'Decrease Camera Movement Speed',
+        'camera.movement-speed.increase': 'Increase Camera Movement Speed',
+        'camera.zoom-speed.decrease': 'Decrease Camera Zoom Speed',
+        'camera.zoom-speed.increase': 'Increase Camera Zoom Speed',
         'player.zoom.decrease': 'Decrease Player Selection Zoom',
         'player.zoom.increase': 'Increase Player Selection Zoom',
         'noise.show': 'Show Noise Circle',
@@ -2173,11 +2368,32 @@ function executeShortcut(actionId: string): void {
         case 'sight.width.increase': sightConeHalfAngle = clampStep(sightConeHalfAngle, 1, 0.02, 0.16, 0.8); break;
         case 'sight.length.decrease': sightConeLength = clampStep(sightConeLength, -1, 1, 18, 240); break;
         case 'sight.length.increase': sightConeLength = clampStep(sightConeLength, 1, 1, 18, 240); break;
-        case 'sight.show-los': showLineOfSight = !showLineOfSight; break;
-        case 'sight.los-width.decrease': lineOfSightWidth = clampStep(lineOfSightWidth, -1, 0.1, 0.3, 3); break;
-        case 'sight.los-width.increase': lineOfSightWidth = clampStep(lineOfSightWidth, 1, 0.1, 0.3, 3); break;
-        case 'sight.los-length.decrease': lineOfSightLength = clampStep(lineOfSightLength, -1, 1, 18, 800); break;
-        case 'sight.los-length.increase': lineOfSightLength = clampStep(lineOfSightLength, 1, 1, 18, 800); break;
+        case 'sight.show-los':
+            if (viewMode === '3d') showLineOfSight3D = !showLineOfSight3D;
+            else showLineOfSight = !showLineOfSight;
+            break;
+        case 'sight.los-width.decrease':
+            if (viewMode === '3d') lineOfSightWidth3D = clampStep(lineOfSightWidth3D, -1, 1, 1, 50);
+            else lineOfSightWidth = clampStep(lineOfSightWidth, -1, 0.1, 0.3, 3);
+            break;
+        case 'sight.los-width.increase':
+            if (viewMode === '3d') lineOfSightWidth3D = clampStep(lineOfSightWidth3D, 1, 1, 1, 50);
+            else lineOfSightWidth = clampStep(lineOfSightWidth, 1, 0.1, 0.3, 3);
+            break;
+        case 'sight.los-length.decrease':
+            if (viewMode === '3d') lineOfSightLength3D = clampStep(lineOfSightLength3D, -1, 1, 18, 1100);
+            else lineOfSightLength = clampStep(lineOfSightLength, -1, 1, 18, 800);
+            break;
+        case 'sight.los-length.increase':
+            if (viewMode === '3d') lineOfSightLength3D = clampStep(lineOfSightLength3D, 1, 1, 18, 1100);
+            else lineOfSightLength = clampStep(lineOfSightLength, 1, 1, 18, 800);
+            break;
+        case 'sight.los-opacity.decrease': lineOfSightTransparency = clampStep(lineOfSightTransparency, -1, 0.05, 0, 0.95); break;
+        case 'sight.los-opacity.increase': lineOfSightTransparency = clampStep(lineOfSightTransparency, 1, 0.05, 0, 0.95); break;
+        case 'camera.movement-speed.decrease': updateCameraSetting('cameraMovementSpeed', clampStep(viewerSettings.cameraMovementSpeed, -1, 2, 4, 100)); break;
+        case 'camera.movement-speed.increase': updateCameraSetting('cameraMovementSpeed', clampStep(viewerSettings.cameraMovementSpeed, 1, 2, 4, 100)); break;
+        case 'camera.zoom-speed.decrease': updateCameraSetting('cameraZoomSpeed', clampStep(viewerSettings.cameraZoomSpeed, -1, 0.1, 0.1, 3)); break;
+        case 'camera.zoom-speed.increase': updateCameraSetting('cameraZoomSpeed', clampStep(viewerSettings.cameraZoomSpeed, 1, 0.1, 0.1, 3)); break;
         case 'player.zoom.decrease': selectedPlayerZoomPercent = clampStep(selectedPlayerZoomPercent, -1, 25, 100, 500); break;
         case 'player.zoom.increase': selectedPlayerZoomPercent = clampStep(selectedPlayerZoomPercent, 1, 25, 100, 500); break;
         case 'noise.show': showNoiseCircle = !showNoiseCircle; break;
@@ -2320,6 +2536,10 @@ function handleWindowBlur() {
     pendingCaptureKeyboardShortcut = null;
 }
 
+function suppressContextMenu(event: MouseEvent): void {
+    event.preventDefault();
+}
+
 function handleViewportResize() {
     constrainMouseViewportTranslation();
     updateReplayViewportTransform();
@@ -2331,11 +2551,16 @@ function handleViewportResize() {
 onMount(() => {
     if (!browser) return;
     void initializeShortcuts();
+    void loadViewerSettings().then((settings) => {
+        viewerSettings = settings;
+        apply3DSceneSettings();
+    }).catch((error) => console.error('Failed to load viewer settings:', error));
     window.addEventListener('keydown', handleKeydown);
     window.addEventListener('keyup', handleKeyup);
     window.addEventListener('mousedown', handleShortcutMouseDown, true);
     window.addEventListener('wheel', handleShortcutWheel, { capture: true, passive: false });
     window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('contextmenu', suppressContextMenu);
     window.addEventListener('resize', handleViewportResize);
     updateReplayViewportTransform();
     return () => {
@@ -2344,6 +2569,7 @@ onMount(() => {
         window.removeEventListener('mousedown', handleShortcutMouseDown, true);
         window.removeEventListener('wheel', handleShortcutWheel, true);
         window.removeEventListener('blur', handleWindowBlur);
+        window.removeEventListener('contextmenu', suppressContextMenu);
         window.removeEventListener('resize', handleViewportResize);
         if (rafId) cancelAnimationFrame(rafId);
         if (toastTimeout) clearTimeout(toastTimeout);
@@ -3164,6 +3390,106 @@ onMount(() => {
     font-weight: 900;
 }
 
+.three-d-viewport {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    outline: none;
+}
+
+.three-d-loading,
+.three-d-map-error {
+    position: absolute;
+    z-index: 20;
+    top: 50%;
+    left: 50%;
+    display: grid;
+    max-width: 520px;
+    place-items: center;
+    gap: 12px;
+    padding: 18px 22px;
+    transform: translate(-50%, -50%);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 8px;
+    background: rgba(9, 13, 18, 0.86);
+    color: #e2e8f0;
+    text-align: center;
+    pointer-events: none;
+}
+
+.three-d-map-error {
+    border-color: rgba(248, 113, 113, 0.55);
+    color: #fecaca;
+}
+
+.three-d-spinner {
+    width: 42px;
+    height: 42px;
+    border: 4px solid rgba(226, 232, 240, 0.18);
+    border-top-color: #60a5fa;
+    border-radius: 50%;
+    animation: three-d-spin 0.8s linear infinite;
+}
+
+@keyframes three-d-spin { to { transform: rotate(360deg); } }
+
+.three-d-crosshair {
+    position: absolute;
+    z-index: 18;
+    top: 50%;
+    left: 50%;
+    width: 22px;
+    height: 22px;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+}
+
+.three-d-crosshair i {
+    position: absolute;
+    top: 10px;
+    left: 4px;
+    width: 14px;
+    height: 2px;
+    background: rgba(255, 255, 255, 0.82);
+}
+
+.three-d-crosshair i:last-child { transform: rotate(90deg); }
+
+.camera-key-grid {
+    display: grid;
+    gap: 7px;
+}
+
+.camera-key-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: #cbd5e1;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.camera-key-row button {
+    min-width: 86px;
+    min-height: 30px;
+    padding: 0 10px;
+    border: 1px solid #3a3a50;
+    border-radius: 4px;
+    background: #20202d;
+    color: #e2e8f0;
+    font-family: var(--font-mono);
+    font-weight: 800;
+}
+
+.camera-key-row button:hover,
+.camera-key-row button.capturing {
+    border-color: #60a5fa;
+    background: rgba(59, 130, 246, 0.2);
+}
+
 </style>
 
 {#if replayData}
@@ -3256,6 +3582,7 @@ onMount(() => {
     {/if}
 
     <!-- Main canvas layers -->
+    {#if viewMode === '2d'}
     <MapLayer 
         bind:mapMetadata={mapMetadata}
         bind:replayData={replayData}
@@ -3310,18 +3637,34 @@ onMount(() => {
         fadeSeconds={drawingFadeSeconds}
     />
     {/if}
+    {:else}
+    <canvas class="three-d-viewport" aria-label="3D replay viewport" use:mount3DScene></canvas>
+    {#if selectedPlayerSteamId !== null}
+        <div class="three-d-crosshair" aria-hidden="true"><i></i><i></i></div>
+    {/if}
+    {#if map3DLoading}
+        <div class="three-d-loading" role="status" aria-live="polite">
+            <span class="three-d-spinner" aria-hidden="true"></span>
+            <strong>{map3DLoadingText}</strong>
+        </div>
+    {:else if map3DError}
+        <div class="three-d-map-error" role="alert">{map3DError}</div>
+    {/if}
+    {/if}
 
     <Controls
         {isPlaying}
         {playbackSpeed}
         {isLoading}
         speedOptions={SPEED_OPTIONS}
-        {hasLowerMapVariant}
+        hasLowerMapVariant={viewMode === '2d' && hasLowerMapVariant}
         {mapVariant}
+        {viewMode}
         ontoggleplay={togglePlay}
         onsetspeed={setSpeed}
         onloaddemo={loadDemo}
         onsetmapvariant={setMapVariant}
+        onsetviewmode={(mode) => void setViewMode(mode)}
         getshortcut={getShortcut}
         capturingActionId={shortcutCaptureActionId}
         onshortcutcapture={startShortcutCapture}
@@ -3331,7 +3674,7 @@ onMount(() => {
     <TimeDisplay currentTick={displayTick} activeStart={activeStart} />
 
     <nav class="control-toolbar" aria-label="Replay controls">
-        {#each TOOLBAR_SECTIONS as section (section.key)}
+        {#each visibleToolbarSections as section (section.key)}
             <button
                 type="button"
                 class="toolbar-item"
@@ -3343,7 +3686,9 @@ onMount(() => {
                 onclick={() => toggleToolbarSection(section.key)}
             >
                 <span class="toolbar-icon" aria-hidden="true">
-                    {#if section.key === 'sight'}
+                    {#if section.key === 'camera'}
+                        <svg viewBox="0 0 24 24"><path d="M4 7h11v10H4zM15 10l5-3v10l-5-3z"/><circle cx="9.5" cy="12" r="2.2"/></svg>
+                    {:else if section.key === 'sight'}
                         <svg viewBox="0 0 24 24"><path d="M3 12s3.2-5 9-5 9 5 9 5-3.2 5-9 5-9-5-9-5Z"/><circle cx="12" cy="12" r="2.5"/></svg>
                     {:else if section.key === 'player'}
                         <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"/><path d="M5.5 20c.6-4.2 2.8-6.3 6.5-6.3s5.9 2.1 6.5 6.3"/></svg>
@@ -3406,7 +3751,47 @@ onMount(() => {
             </header>
 
             <div class="control-panel-scroll">
-                {#if activeToolbarSection === 'sight'}
+                {#if activeToolbarSection === 'camera'}
+                    <section class="control-section">
+                        <div class="controls-heading">Movement keys</div>
+                        <p class="panel-description">Click a key, then press its replacement. Escape cancels the change.</p>
+                        <div class="camera-key-grid">
+                            {#each CAMERA_MOVEMENT_CONTROLS as control (control.direction)}
+                                <div class="camera-key-row">
+                                    <span>{control.label}</span>
+                                    <button
+                                        type="button"
+                                        class:capturing={cameraKeyCapture === control.direction}
+                                        onclick={() => beginCameraKeyCapture(control.direction)}
+                                        onkeydown={(event) => cameraKeyCapture === control.direction && captureCameraKey(event, control.direction)}
+                                    >
+                                        {cameraKeyCapture === control.direction ? 'Press key…' : keyCodeForDisplay(viewerSettings.cameraMovementKeys[control.direction])}
+                                    </button>
+                                </div>
+                            {/each}
+                        </div>
+                    </section>
+                    <section class="control-section">
+                        <div class="controls-heading">Camera speed</div>
+                        <div class="slider-control">
+                            <div class="control-label-line"><span>Movement speed</span><output>{Math.round(viewerSettings.cameraMovementSpeed)}</output></div>
+                            <div class="slider-input-line">
+                                <ShortcutBinding actionId="camera.movement-speed.decrease" shortcut={getShortcut('camera.movement-speed.decrease')} isCapturing={shortcutCaptureActionId === 'camera.movement-speed.decrease'} emptyIcon="minus" oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                                <input type="range" min="4" max="100" step="2" value={viewerSettings.cameraMovementSpeed} oninput={(event) => updateCameraSetting('cameraMovementSpeed', Number(event.currentTarget.value))} aria-label="3D camera movement speed" />
+                                <ShortcutBinding actionId="camera.movement-speed.increase" shortcut={getShortcut('camera.movement-speed.increase')} isCapturing={shortcutCaptureActionId === 'camera.movement-speed.increase'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                            </div>
+                        </div>
+                        <div class="slider-control">
+                            <div class="control-label-line"><span>Zoom speed</span><output>{viewerSettings.cameraZoomSpeed.toFixed(1)}×</output></div>
+                            <div class="slider-input-line">
+                                <ShortcutBinding actionId="camera.zoom-speed.decrease" shortcut={getShortcut('camera.zoom-speed.decrease')} isCapturing={shortcutCaptureActionId === 'camera.zoom-speed.decrease'} emptyIcon="minus" oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                                <input type="range" min="0.1" max="3" step="0.1" value={viewerSettings.cameraZoomSpeed} oninput={(event) => updateCameraSetting('cameraZoomSpeed', Number(event.currentTarget.value))} aria-label="3D camera mouse wheel zoom speed" />
+                                <ShortcutBinding actionId="camera.zoom-speed.increase" shortcut={getShortcut('camera.zoom-speed.increase')} isCapturing={shortcutCaptureActionId === 'camera.zoom-speed.increase'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                            </div>
+                        </div>
+                    </section>
+                {:else if activeToolbarSection === 'sight'}
+                    {#if viewMode === '2d'}
                     <section class="control-section">
                         <div class="controls-heading">Sight cone</div>
                         <div class="control-row">
@@ -3434,28 +3819,51 @@ onMount(() => {
                             </div>
                         </div>
                     </section>
+                    {/if}
                     <section class="control-section">
                         <div class="controls-heading">Line of sight</div>
                         <div class="control-row">
-                            <label class="checkbox-control"><input type="checkbox" bind:checked={showLineOfSight} /><span>Show Line of Sight</span></label>
+                            {#if viewMode === '3d'}
+                                <label class="checkbox-control"><input type="checkbox" bind:checked={showLineOfSight3D} /><span>Show Line of Sight</span></label>
+                            {:else}
+                                <label class="checkbox-control"><input type="checkbox" bind:checked={showLineOfSight} /><span>Show Line of Sight</span></label>
+                            {/if}
                             <ShortcutBinding actionId="sight.show-los" shortcut={getShortcut('sight.show-los')} isCapturing={shortcutCaptureActionId === 'sight.show-los'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
                         </div>
                         <div class="slider-control">
-                            <div class="control-label-line"><span>Width</span><output>{lineOfSightWidth.toFixed(1)}</output></div>
+                            <div class="control-label-line"><span>Width</span><output>{viewMode === '3d' ? Math.round(lineOfSightWidth3D) : lineOfSightWidth.toFixed(1)}</output></div>
                             <div class="slider-input-line">
                                 <ShortcutBinding actionId="sight.los-width.decrease" shortcut={getShortcut('sight.los-width.decrease')} isCapturing={shortcutCaptureActionId === 'sight.los-width.decrease'} emptyIcon="minus" oncapture={startShortcutCapture} onremove={deleteShortcut} />
-                                <input type="range" min="0.3" max="3" step="0.1" bind:value={lineOfSightWidth} aria-label="Line of sight width" />
+                                {#if viewMode === '3d'}
+                                    <input type="range" min="1" max="50" step="1" bind:value={lineOfSightWidth3D} aria-label="3D line of sight width" />
+                                {:else}
+                                    <input type="range" min="0.3" max="3" step="0.1" bind:value={lineOfSightWidth} aria-label="Line of sight width" />
+                                {/if}
                                 <ShortcutBinding actionId="sight.los-width.increase" shortcut={getShortcut('sight.los-width.increase')} isCapturing={shortcutCaptureActionId === 'sight.los-width.increase'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
                             </div>
                         </div>
                         <div class="slider-control">
-                            <div class="control-label-line"><span>Length</span><output>{Math.round(lineOfSightLength)}</output></div>
+                            <div class="control-label-line"><span>Length</span><output>{Math.round(viewMode === '3d' ? lineOfSightLength3D : lineOfSightLength)}</output></div>
                             <div class="slider-input-line">
                                 <ShortcutBinding actionId="sight.los-length.decrease" shortcut={getShortcut('sight.los-length.decrease')} isCapturing={shortcutCaptureActionId === 'sight.los-length.decrease'} emptyIcon="minus" oncapture={startShortcutCapture} onremove={deleteShortcut} />
-                                <input type="range" min="18" max="800" step="1" bind:value={lineOfSightLength} aria-label="Line of sight length" />
+                                {#if viewMode === '3d'}
+                                    <input type="range" min="18" max="1100" step="1" bind:value={lineOfSightLength3D} aria-label="3D line of sight length" />
+                                {:else}
+                                    <input type="range" min="18" max="800" step="1" bind:value={lineOfSightLength} aria-label="Line of sight length" />
+                                {/if}
                                 <ShortcutBinding actionId="sight.los-length.increase" shortcut={getShortcut('sight.los-length.increase')} isCapturing={shortcutCaptureActionId === 'sight.los-length.increase'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
                             </div>
                         </div>
+                        {#if viewMode === '3d'}
+                            <div class="slider-control">
+                                <div class="control-label-line"><span>Transparency</span><output>{Math.round(lineOfSightTransparency * 100)}%</output></div>
+                                <div class="slider-input-line">
+                                    <ShortcutBinding actionId="sight.los-opacity.decrease" shortcut={getShortcut('sight.los-opacity.decrease')} isCapturing={shortcutCaptureActionId === 'sight.los-opacity.decrease'} emptyIcon="minus" oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                                    <input type="range" min="0" max="0.95" step="0.05" bind:value={lineOfSightTransparency} aria-label="Line of sight transparency" />
+                                    <ShortcutBinding actionId="sight.los-opacity.increase" shortcut={getShortcut('sight.los-opacity.increase')} isCapturing={shortcutCaptureActionId === 'sight.los-opacity.increase'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                                </div>
+                            </div>
+                        {/if}
                     </section>
                 {:else if activeToolbarSection === 'player'}
                     <section class="control-section">

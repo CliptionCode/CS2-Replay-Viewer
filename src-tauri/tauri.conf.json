@@ -1,12 +1,12 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
   "productName": "CS2 Replay Viewer",
-  "version": "0.1.12",
+  "version": "0.2.0",
   "identifier": "com.cs2replayviewer.app",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm ensure:extractor && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm build:tauri",
     "frontendDist": "../build"
   },
   "app": {
@@ -37,6 +37,9 @@
       "icons/icon.ico"
     ],
     "externalBin": ["binaries/cs2-parser"],
+    "resources": {
+      "../tools/source2viewer/*": "tools/source2viewer/"
+    },
     "windows": {
       "wix": null
     }

@@ -9,6 +9,7 @@ pnpm-debug.log*
 *.dem
 dist/
 build/
+map-cache/
 .svelte-kit/
 .vite/
 .env
@@ -22,6 +23,7 @@ build/
 *.exe
 *.exe~
 *.dll
+tools/source2viewer/.bundled-version
 *.so
 *.dylib
 *.test
