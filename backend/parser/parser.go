@@ -133,6 +133,7 @@ type PlayerFrame struct {
 	VelocityY      float32
 	VelocityZ      float32
 	Team           int
+	HasDefuseKit   bool
 }
 
 type FlashEvent struct {
@@ -206,6 +207,7 @@ func ParseFile(path string) (*ReplayData, error) {
 		infernoNadeIndices:        make(map[int64]int),
 		grenadeTrajectories:       make(map[int64][]TrajectoryPoint),
 		activeDroppedEquipment:    make(map[int]activeDroppedEquipment),
+		lastDefuseKitDropTick:     make(map[uint64]int),
 		priorRoundDroppedEntities: make(map[int]struct{}),
 	}
 
@@ -344,6 +346,8 @@ type frameRecorder struct {
 	infernoNadeIndices        map[int64]int
 	grenadeTrajectories       map[int64][]TrajectoryPoint
 	activeDroppedEquipment    map[int]activeDroppedEquipment
+	activeDroppedDefuseKits   []int
+	lastDefuseKitDropTick     map[uint64]int
 	priorRoundDroppedEntities map[int]struct{}
 	pendingEquipmentDrops     []pendingEquipmentDrop
 
@@ -448,6 +452,15 @@ func (r *frameRecorder) recordKill(e events.Kill, p demoinfocs.Parser) {
 		pos := e.Victim.Position()
 		kill.VictimX = float32(pos.X)
 		kill.VictimY = float32(pos.Y)
+		// Defuse kits are player properties rather than world-equipment entities in
+		// demoinfocs. Record the drop from the last completed frame during the kill
+		// event so a round-ending death cannot close the round before FrameDone.
+		if previous, ok := r.lastFrames[e.Victim.SteamID64]; ok && previous.HasDefuseKit {
+			previous.X = float32(pos.X)
+			previous.Y = float32(pos.Y)
+			previous.Z = float32(pos.Z)
+			r.recordDroppedDefuseKit(tick, previous)
+		}
 		r.ensureStats(e.Victim.SteamID64).deaths++
 
 		if _, ok := r.roundStats[roundNum]; !ok {
@@ -528,6 +541,7 @@ func (r *frameRecorder) recordRoundStart(p demoinfocs.Parser) {
 	clear(r.grenadeTrajectories)
 	r.rememberCurrentlyDroppedEquipment(p)
 	r.closeDroppedEquipment(max(0, tick-1))
+	r.closeDroppedDefuseKits(max(0, tick-1))
 	if tick > r.maxTick {
 		r.maxTick = tick
 	}
@@ -566,6 +580,7 @@ func (r *frameRecorder) recordRoundEnd(e events.RoundEnd, p demoinfocs.Parser) {
 	r.currentRound.EndTick = tick + secondsToTicks(7, p)
 	r.rememberCurrentlyDroppedEquipment(p)
 	r.closeDroppedEquipment(r.currentRound.EndTick)
+	r.closeDroppedDefuseKits(r.currentRound.EndTick)
 	r.currentRound.WinnerTeam = int(e.Winner)
 	r.currentRound.WinReason = roundEndReasonString(e.Reason)
 	if r.currentRound.EndTick > r.maxTick {
@@ -1179,6 +1194,10 @@ func (r *frameRecorder) recordFrameDone(p demoinfocs.Parser) {
 	r.observeInitialRoundInventory(p)
 	r.recordDroppedEquipment(p, tick)
 	r.recordGrenadeProjectiles(p, tick)
+	r.extendDroppedDefuseKits(tick)
+
+	defuseKitDrops := make([]PlayerFrame, 0)
+	defuseKitPickups := make([]PlayerFrame, 0)
 
 	for _, player := range p.GameState().Participants().All() {
 		if player == nil {
@@ -1186,20 +1205,21 @@ func (r *frameRecorder) recordFrameDone(p demoinfocs.Parser) {
 		}
 		pos := player.Position()
 		frame := PlayerFrame{
-			Tick:        tick,
-			SteamID:     player.SteamID64,
-			X:           float32(pos.X),
-			Y:           float32(pos.Y),
-			Z:           float32(pos.Z),
-			Yaw:         player.ViewDirectionX(),
-			Pitch:       player.ViewDirectionY(),
-			Health:      player.Health(),
-			Armor:       player.Armor(),
-			IsAlive:     player.IsAlive(),
-			IsReloading: player.IsReloading,
-			IsDucking:   player.IsDucking(),
-			OnGround:    player.Flags().OnGround(),
-			Team:        int(player.Team),
+			Tick:         tick,
+			SteamID:      player.SteamID64,
+			X:            float32(pos.X),
+			Y:            float32(pos.Y),
+			Z:            float32(pos.Z),
+			Yaw:          player.ViewDirectionX(),
+			Pitch:        player.ViewDirectionY(),
+			Health:       player.Health(),
+			Armor:        player.Armor(),
+			IsAlive:      player.IsAlive(),
+			IsReloading:  player.IsReloading,
+			IsDucking:    player.IsDucking(),
+			OnGround:     player.Flags().OnGround(),
+			Team:         int(player.Team),
+			HasDefuseKit: player.HasDefuseKit(),
 		}
 		if eyePos, ok := player.PositionEyes(); ok {
 			frame.EyeX = float32(eyePos.X)
@@ -1207,7 +1227,8 @@ func (r *frameRecorder) recordFrameDone(p demoinfocs.Parser) {
 			frame.EyeZ = float32(eyePos.Z)
 			frame.HasEyePosition = true
 		}
-		if previous, ok := r.lastFrames[player.SteamID64]; ok && tick > previous.Tick {
+		previous, hasPrevious := r.lastFrames[player.SteamID64]
+		if hasPrevious && tick > previous.Tick {
 			seconds := float32(tick-previous.Tick) / float32(tickRateOrDefault(p))
 			if seconds > 0 {
 				frame.VelocityX = (frame.X - previous.X) / seconds
@@ -1227,8 +1248,22 @@ func (r *frameRecorder) recordFrameDone(p demoinfocs.Parser) {
 			}
 		}
 		sort.Strings(frame.Utilities)
+		if hasPrevious {
+			if defuseKitWasDropped(previous, frame) {
+				defuseKitDrops = append(defuseKitDrops, frame)
+			} else if defuseKitWasPickedUp(previous, frame) {
+				defuseKitPickups = append(defuseKitPickups, frame)
+			}
+		}
 		r.playerFrames = append(r.playerFrames, frame)
 		r.lastFrames[player.SteamID64] = frame
+	}
+
+	for _, frame := range defuseKitDrops {
+		r.recordDroppedDefuseKit(tick, frame)
+	}
+	for _, frame := range defuseKitPickups {
+		r.pickUpDroppedDefuseKit(tick, frame)
 	}
 }
 
@@ -1320,6 +1355,89 @@ func (r *frameRecorder) closeDroppedEquipment(endTick int) {
 	}
 }
 
+func (r *frameRecorder) extendDroppedDefuseKits(tick int) {
+	for _, segmentIndex := range r.activeDroppedDefuseKits {
+		if segmentIndex < 0 || segmentIndex >= len(r.droppedEquipment) {
+			continue
+		}
+		segment := &r.droppedEquipment[segmentIndex]
+		segment.EndTick = max(segment.StartTick, tick)
+	}
+}
+
+func (r *frameRecorder) closeDroppedDefuseKits(endTick int) {
+	for _, segmentIndex := range r.activeDroppedDefuseKits {
+		if segmentIndex < 0 || segmentIndex >= len(r.droppedEquipment) {
+			continue
+		}
+		segment := &r.droppedEquipment[segmentIndex]
+		segment.EndTick = max(segment.StartTick, endTick)
+	}
+	r.activeDroppedDefuseKits = nil
+}
+
+func (r *frameRecorder) recordDroppedDefuseKit(tick int, frame PlayerFrame) {
+	if r.currentRound == nil {
+		return
+	}
+	if frame.SteamID != 0 {
+		if lastTick, ok := r.lastDefuseKitDropTick[frame.SteamID]; ok && tick >= lastTick && tick-lastTick <= 2 {
+			return
+		}
+		if r.lastDefuseKitDropTick == nil {
+			r.lastDefuseKitDropTick = make(map[uint64]int)
+		}
+		r.lastDefuseKitDropTick[frame.SteamID] = tick
+	}
+	r.droppedEquipment = append(r.droppedEquipment, DroppedEquipment{
+		StartTick:     tick,
+		EndTick:       tick,
+		EquipmentName: "Defuse Kit",
+		Category:      "defuse_kit",
+		X:             frame.X,
+		Y:             frame.Y,
+		Z:             frame.Z,
+	})
+	r.activeDroppedDefuseKits = append(r.activeDroppedDefuseKits, len(r.droppedEquipment)-1)
+}
+
+func defuseKitWasDropped(previous, current PlayerFrame) bool {
+	return previous.HasDefuseKit && !current.HasDefuseKit && !current.IsAlive
+}
+
+func defuseKitWasPickedUp(previous, current PlayerFrame) bool {
+	return !previous.HasDefuseKit && current.HasDefuseKit && current.IsAlive
+}
+
+func (r *frameRecorder) pickUpDroppedDefuseKit(tick int, frame PlayerFrame) {
+	bestActiveIndex := -1
+	bestDistance := float32(0)
+	for activeIndex, segmentIndex := range r.activeDroppedDefuseKits {
+		if segmentIndex < 0 || segmentIndex >= len(r.droppedEquipment) {
+			continue
+		}
+		segment := r.droppedEquipment[segmentIndex]
+		dx := segment.X - frame.X
+		dy := segment.Y - frame.Y
+		dz := segment.Z - frame.Z
+		distance := dx*dx + dy*dy + dz*dz
+		if bestActiveIndex < 0 || distance < bestDistance {
+			bestActiveIndex = activeIndex
+			bestDistance = distance
+		}
+	}
+	if bestActiveIndex < 0 {
+		return
+	}
+	segmentIndex := r.activeDroppedDefuseKits[bestActiveIndex]
+	segment := &r.droppedEquipment[segmentIndex]
+	segment.EndTick = max(segment.StartTick, tick-1)
+	r.activeDroppedDefuseKits = append(
+		r.activeDroppedDefuseKits[:bestActiveIndex],
+		r.activeDroppedDefuseKits[bestActiveIndex+1:]...,
+	)
+}
+
 func isEquipmentDropped(equipment *common.Equipment, p demoinfocs.Parser) bool {
 	if equipment == nil || equipment.Entity == nil {
 		return false
@@ -1396,9 +1514,13 @@ func (r *frameRecorder) recordDroppedEquipment(p demoinfocs.Parser, tick int) {
 				} else if tick > r.currentRound.StartTick {
 					dropSteamID = nearestPlayerToDroppedEquipment(p, float64(x), float64(y), float64(z))
 				}
+				noiseType := category + "_drop"
+				if category == "defuse_kit" {
+					noiseType = ""
+				}
 				active = activeDroppedEquipment{
 					dropSteamID:      dropSteamID,
-					noiseType:        category + "_drop",
+					noiseType:        noiseType,
 					lastMovementTick: tick,
 					lastX:            x,
 					lastY:            y,

@@ -1,73 +1,61 @@
-# CS2 Replay Viewer v0.2.0
+# CS2 Replay Viewer v0.2.1
 
-Version 0.2.0 introduces an integrated 3D replay view while preserving the familiar 2D radar, shared timeline, playback controls, round navigation, roster, and player shortcuts.
+Version 0.2.1 makes the 3D replay view easier to read by adding player and equipment labels, refining the default line-of-sight display, and slightly reducing smoke size. It also adds defuse-kit indicators for living Counter-Terrorists in both replay views.
 
 ## Change Overview
 
-- 🚀 **New Features:** Interactive 3D map replays, player-eye viewing, free-camera controls, and planted-bomb state markers
-- 🔧 **Adjusted Features:** Expanded 3D line-of-sight controls, database-backed movement defaults, and automatic map-cache reuse
-- ⚡ **Performance Improvements:** Map-specific extraction, bounded map streaming, and persistent completed caches
-- 🐛 **Bug Fixes:** Stable 3D loading lifecycle, accurate per-tick utility arcs and bounces, functional line-of-sight width, incomplete-cache detection, and suppressed WebView context menus
-- 📦 **Version and Documentation:** Version 0.2.0, bundled 3D map component, and updated feature guide
+- 🚀 **New Features:** Player-name, active-weapon, carried-equipment, and dropped-equipment indicators in 3D, plus configurable defuse-kit indicators in both views
+- 🔧 **Adjusted Features:** Player-equipment visibility controls, dropped-equipment filters, larger 3D weapon icons, a streamlined 3D toolbar, longer 3D line of sight, and a smaller 3D smoke effect
+- 📦 **Version and Documentation:** Version 0.2.1 and updated feature documentation
 
 ## 🚀 New Features
 
-### Integrated 3D Replay View
+### 3D Player Labels
 
-- Switch between the existing 2D radar and a fully interactive 3D map from the bottom controls.
-- Keep the current timeline, round, playback position, team roster, and player selection when changing views.
-- Select a player through the roster, an assigned player shortcut, or their model in the 3D scene to enter the recorded player-eye view.
-- View recorded player positions, health, utility trajectories, and map geometry using locally installed Counter-Strike 2 data.
+- See each living player's name above their health bar in orange for Terrorists and blue for Counter-Terrorists.
+- See the player's currently selected weapon or utility between their name and health bar.
+- See `(Reloading)` beside the weapon name for the full recorded reload duration.
+- See every carried utility as an equipment icon above the player name, including both Flashbangs when carried.
+- See a C4 icon in the same row to identify the current bomb carrier.
 
-### Camera Controls
+### Defuse-Kit Indicators
 
-- Use W, A, S, and D as editable free-camera movement keys.
-- Keep camera key assignments in the local settings database from the first application startup.
-- Configure camera movement speed, starting at 36, and mouse-wheel zoom speed from the 3D-only Camera panel.
-- Move forward and backward along the full viewing direction, including climbing or descending when looking up or down.
+- See `defuser.svg` beside a living Counter-Terrorist's utility in both 2D and 3D.
+- See a dropped defuse kit at its carrier's recorded position after death, and see it disappear when another player picks it up.
+- Toggle dropped defuse kits independently from weapons, utility, and C4 in the Equipment panel.
+- Reparse older demos to populate the new defuse-kit indicator throughout the replay.
 
-### Bomb State Marker
+### Player Equipment Controls
 
-- See a small orange sphere at the planted bomb position.
-- See the remaining explosion time above the bomb and a kit-aware blue countdown while a Counter-Terrorist is actively defusing.
-- See the marker turn gray when the bomb is defused.
-- See the marker turn red when the bomb explodes.
-- See clear blue or red status text above the marker after a defuse or explosion.
+- Independently show or hide player utility, C4 possession, and defuse-kit possession from the Player panel.
+- Start with all three visibility controls enabled in both replay views.
+
+### Dropped Equipment in 3D
+
+- See ownerless weapons, utility, and C4 at their recorded positions using the matching equipment icons.
+- Use the existing Weapons, Utility, and C4 checkboxes to control their visibility.
+- Keep items scoped to the active round so equipment from a previous round does not remain in the scene.
 
 ## 🔧 Adjusted Features
 
 ### 3D Line of Sight
 
-- Show 3D line of sight by default.
-- Start with a line-of-sight length of 500 and increase it up to 1100.
-- Adjust real beam width from 1 to 50 in whole-number steps.
-- Adjust beam transparency independently from width and length.
-- Keep the existing 2D Sight controls and values unchanged.
+- Increased the default line-of-sight length from 500 to 650.
+- Changed the default transparency from 70% to 50%.
+- Kept all 2D line-of-sight settings unchanged.
 
-### Counter-Strike 2 Game Data
+### 3D Smoke Size
 
-- Select the `steamapps\common\Counter-Strike Global Offensive` folder; the application resolves the required map files itself.
-- Extract only the map used by the loaded replay.
-- Reuse completed map caches in later sessions without processing the VPK again.
-- Include the pinned Source 2 map component and all native dependencies in the Windows installer, with no end-user setup or download step.
+- Reduced the 3D smoke effect radius by 10% for a less oversized appearance.
+- Kept the 2D smoke visualization unchanged.
 
-## ⚡ Performance Improvements
+### 3D Presentation
 
-- Stream large map resources through bounded local slices instead of loading one enormous map buffer through the desktop asset protocol.
-- Version caches from the installed map VPK so changed game files produce a fresh map cache automatically.
-- Mark successful extractions as complete so cached maps can be loaded immediately and reliably.
-
-## 🐛 Bug Fixes
-
-- Prevented reactive loading-state changes from repeatedly recreating the Three.js scene and restarting the loading spinner.
-- Preserved an existing player selection when switching from 2D to 3D so the loaded map opens directly in that player's first-person view.
-- Replaced the planted-bomb countdown cleanly with a large blue `Bomb defused` message instead of stretching the previous countdown texture.
-- Oriented rectangular 3D utility models vertically instead of displaying them horizontally.
-- Replaced unsupported WebGL line-width behavior with real 3D beam geometry so the width slider visibly changes line of sight.
-- Prevented interrupted map extractions from being mistaken for complete caches.
-- Disabled the embedded WebView context menu so right-clicking no longer opens browser controls.
+- Increased dropped weapon icon size by 10% without changing other dropped-equipment sizes.
+- Removed the Drawing toolbar item from the 3D view while keeping drawing available in 2D.
+- Made 2D Player Equipment checkbox changes redraw only the inventory overlay, avoiding the previous full-canvas pause.
 
 ## 📦 Version and Documentation
 
-- Increased the application version from `0.1.12` to `0.2.0` across package, desktop-shell, and Rust metadata.
-- Updated the feature guide and implementation context for the complete 3D workflow.
+- Increased the application version from `0.2.0` to `0.2.1`.
+- Updated the feature guide and implementation context for the new 3D behavior.

@@ -78,6 +78,46 @@ func TestDroppedEquipmentCategory(t *testing.T) {
 	}
 }
 
+func TestDefuseKitFrameTransitions(t *testing.T) {
+	aliveWithKit := PlayerFrame{IsAlive: true, HasDefuseKit: true}
+	deadWithoutKit := PlayerFrame{IsAlive: false, HasDefuseKit: false}
+	aliveWithoutKit := PlayerFrame{IsAlive: true, HasDefuseKit: false}
+
+	if !defuseKitWasDropped(aliveWithKit, deadWithoutKit) {
+		t.Fatal("a kit carrier losing the kit on death should create a dropped kit")
+	}
+	if defuseKitWasDropped(aliveWithKit, aliveWithoutKit) {
+		t.Fatal("a living player losing the property should not create a death drop")
+	}
+	if !defuseKitWasPickedUp(aliveWithoutKit, aliveWithKit) {
+		t.Fatal("a living player gaining a kit should pick up the nearest dropped kit")
+	}
+}
+
+func TestDroppedDefuseKitLifecycle(t *testing.T) {
+	recorder := frameRecorder{currentRound: &RoundData{StartTick: 100}}
+	recorder.recordDroppedDefuseKit(120, PlayerFrame{SteamID: 42, X: 10, Y: 20, Z: 30})
+	recorder.recordDroppedDefuseKit(121, PlayerFrame{SteamID: 42, X: 10, Y: 20, Z: 30})
+
+	if len(recorder.droppedEquipment) != 1 || len(recorder.activeDroppedDefuseKits) != 1 {
+		t.Fatalf("dropped kits = %d, active = %d; want one deduplicated active kit", len(recorder.droppedEquipment), len(recorder.activeDroppedDefuseKits))
+	}
+	kit := recorder.droppedEquipment[0]
+	if kit.EquipmentName != "Defuse Kit" || kit.Category != "defuse_kit" || kit.X != 10 || kit.Y != 20 || kit.Z != 30 {
+		t.Fatalf("dropped kit = %#v; want a defuse-kit marker at the carrier position", kit)
+	}
+
+	recorder.extendDroppedDefuseKits(130)
+	if recorder.droppedEquipment[0].EndTick != 130 {
+		t.Fatalf("extended kit end tick = %d, want 130", recorder.droppedEquipment[0].EndTick)
+	}
+
+	recorder.pickUpDroppedDefuseKit(140, PlayerFrame{X: 12, Y: 20, Z: 30})
+	if recorder.droppedEquipment[0].EndTick != 139 || len(recorder.activeDroppedDefuseKits) != 0 {
+		t.Fatalf("picked-up kit end tick = %d, active = %d; want 139 and no active kit", recorder.droppedEquipment[0].EndTick, len(recorder.activeDroppedDefuseKits))
+	}
+}
+
 func TestPendingEquipmentDropMatchesDetectedCategory(t *testing.T) {
 	recorder := frameRecorder{
 		pendingEquipmentDrops: []pendingEquipmentDrop{

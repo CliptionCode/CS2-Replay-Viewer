@@ -18,6 +18,9 @@ export let showLineOfSight = false;
 export let lineOfSightLength = 300;
 export let lineOfSightWidth = 1.6;
 export let selectedPlayerSteamId: bigint | null = null;
+export let showPlayerUtilities = true;
+export let showPlayerC4 = true;
+export let showPlayerDefuseKit = true;
 export let showNoiseCircle = false;
 export let noiseForSelectedPlayer = false;
 export let enabledNoiseSources: Record<string, boolean> = {
@@ -33,6 +36,8 @@ export let enabledNoiseSources: Record<string, boolean> = {
 
 let container: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
+let equipmentCanvas: HTMLCanvasElement | null = null;
+let equipmentCtx: CanvasRenderingContext2D | null = null;
 let noiseCanvas: HTMLCanvasElement | null = null;
 let noiseCtx: CanvasRenderingContext2D | null = null;
 let sightCanvas: HTMLCanvasElement | null = null;
@@ -75,8 +80,8 @@ function getEquipmentIcon(equipmentName: string): HTMLImageElement | null {
 
     const image = new Image();
     image.decoding = 'async';
-    image.onload = scheduleRender;
-    image.onerror = scheduleRender;
+    image.onload = scheduleEquipmentRender;
+    image.onerror = scheduleEquipmentRender;
     image.src = path;
     equipmentIcons.set(path, image);
     return image;
@@ -744,10 +749,6 @@ function drawPlayer(
         const weapon = frame.weapon
             ? `${frame.weapon}${frame.isReloading ? ' (Reloading)' : ''}`
             : '';
-        const utilities = [
-            ...(frame.utilities ?? []),
-            ...(frame.hasBomb ? ['C4'] : []),
-        ].sort((a, b) => a.localeCompare(b));
         const nameY = weapon ? pos.y - 24 : pos.y - 10;
 
         ctx.font = '600 12px Inter, sans-serif';
@@ -761,9 +762,6 @@ function drawPlayer(
             ctx.strokeText(weapon, pos.x, pos.y - 10);
             ctx.fillText(weapon, pos.x, pos.y - 10);
         }
-        if (utilities.length > 0) {
-            drawUtilityInventory(ctx, utilities, pos.x, nameY - 15);
-        }
     }
     
     if (isAlive) {
@@ -774,6 +772,31 @@ function drawPlayer(
         ctx.fillStyle = healthColor;
         ctx.fillRect(pos.x - 10, pos.y + 8, 20 * health / 100, 3);
     }
+}
+
+function drawPlayerEquipment(
+    context: CanvasRenderingContext2D,
+    frame: PlayerFrame,
+    steamId: string,
+    mapMetadata: MapMetadata,
+    canvasSize: { width: number; height: number },
+    tick: number
+): void {
+    if (!(frame.isAlive ?? true)) return;
+
+    const team = getPlayerTeam(steamId, tick);
+    if (team !== TEAM_T && team !== TEAM_CT) return;
+
+    const utilities = [
+        ...(showPlayerUtilities ? (frame.utilities ?? []) : []),
+        ...(showPlayerC4 && frame.hasBomb ? ['C4'] : []),
+        ...(showPlayerDefuseKit && team === TEAM_CT && frame.hasDefuseKit ? ['Defuse Kit'] : []),
+    ].sort((a, b) => a.localeCompare(b));
+    if (utilities.length === 0) return;
+
+    const pos = worldToCanvas(frame.x, frame.y, mapMetadata, canvasSize);
+    const nameY = frame.weapon ? pos.y - 24 : pos.y - 10;
+    drawUtilityInventory(context, utilities, pos.x, nameY - 15);
 }
 
 function drawPlayerSightOverlay(
@@ -871,6 +894,7 @@ function drawKillMarkers(
 }
 
 let rafId: number | null = null;
+let equipmentRafId: number | null = null;
 let noiseRafId: number | null = null;
 let sightRafId: number | null = null;
 let renderLoopId: number | null = null;
@@ -880,6 +904,14 @@ function scheduleRender() {
     rafId = requestAnimationFrame(() => {
         rafId = null;
         render();
+    });
+}
+
+function scheduleEquipmentRender() {
+    if (equipmentRafId !== null) return;
+    equipmentRafId = requestAnimationFrame(() => {
+        equipmentRafId = null;
+        renderEquipmentOnly();
     });
 }
 
@@ -940,6 +972,28 @@ function renderSightLayer(tick: number, canvasSize: { width: number; height: num
     sightCtx.restore();
 }
 
+function renderEquipmentLayer(tick: number, canvasSize: { width: number; height: number }): void {
+    if (!equipmentCtx) return;
+
+    equipmentCtx.clearRect(0, 0, canvasSize.width, canvasSize.height);
+    equipmentCtx.save();
+    for (const [steamId, frame] of playerFrames) {
+        drawPlayerEquipment(equipmentCtx, frame, steamId, mapMetadata, canvasSize, tick);
+    }
+    equipmentCtx.restore();
+}
+
+function renderEquipmentOnly(): void {
+    if (!browser || !equipmentCtx || !equipmentCanvas || !replayData) return;
+
+    const playbackTick = getPlaybackTick();
+    updatePlayerFrames(playbackTick);
+    renderEquipmentLayer(Math.floor(playbackTick), {
+        width: equipmentCanvas.clientWidth,
+        height: equipmentCanvas.clientHeight,
+    });
+}
+
 function renderSightOnly(): void {
     if (!browser || !sightCtx || !sightCanvas || !replayData) return;
 
@@ -980,6 +1034,10 @@ function render() {
             cancelAnimationFrame(noiseRafId);
             noiseRafId = null;
         }
+        if (equipmentRafId !== null) {
+            cancelAnimationFrame(equipmentRafId);
+            equipmentRafId = null;
+        }
         const playbackTick = getPlaybackTick();
         const tick = Math.floor(playbackTick);
         updatePlayerFrames(playbackTick);
@@ -1006,6 +1064,7 @@ function render() {
             drawPlayer(ctx, frame, steamId, mapMetadata, canvasSize, tick);
         }
         ctx.restore();
+        renderEquipmentLayer(tick, canvasSize);
         renderNoiseLayer(tick, canvasSize);
         renderSightLayer(tick, canvasSize);
     } catch (error) {
@@ -1019,6 +1078,10 @@ onMount(() => {
     if (container) {
         ctx = container.getContext('2d')!;
         resizeCanvas(container, ctx);
+    }
+    if (equipmentCanvas) {
+        equipmentCtx = equipmentCanvas.getContext('2d')!;
+        resizeCanvas(equipmentCanvas, equipmentCtx);
     }
     if (noiseCanvas) {
         noiseCtx = noiseCanvas.getContext('2d')!;
@@ -1089,6 +1152,11 @@ $: {
 }
 
 $: {
+    void showPlayerUtilities, showPlayerC4, showPlayerDefuseKit;
+    if (browser && equipmentCtx) scheduleEquipmentRender();
+}
+
+$: {
     void showNoiseCircle, noiseForSelectedPlayer, enabledNoiseSources;
     if (browser && noiseCtx) {
         scheduleNoiseRender();
@@ -1101,6 +1169,9 @@ function handleResize() {
     resizeTimeout = setTimeout(() => {
         if (container) {
             resizeCanvas(container, ctx);
+        }
+        if (equipmentCanvas) {
+            resizeCanvas(equipmentCanvas, equipmentCtx);
         }
         if (noiseCanvas) {
             resizeCanvas(noiseCanvas, noiseCtx);
@@ -1125,6 +1196,7 @@ onDestroy(() => {
     }
     if (resizeTimeout) clearTimeout(resizeTimeout);
     if (rafId !== null) cancelAnimationFrame(rafId);
+    if (equipmentRafId !== null) cancelAnimationFrame(equipmentRafId);
     if (noiseRafId !== null) cancelAnimationFrame(noiseRafId);
     if (sightRafId !== null) cancelAnimationFrame(sightRafId);
     stopRenderLoop();
@@ -1157,6 +1229,10 @@ onDestroy(() => {
     pointer-events: none;
 }
 
+.equipment-layer {
+    pointer-events: none;
+}
+
 .noise-layer {
     pointer-events: none;
 }
@@ -1171,6 +1247,12 @@ onDestroy(() => {
 <canvas 
     bind:this={container}
     class="player-layer canvas"
+    style="width: 100%; height: 100%;"
+></canvas>
+
+<canvas
+    bind:this={equipmentCanvas}
+    class="player-layer equipment-layer canvas"
     style="width: 100%; height: 100%;"
 ></canvas>
 

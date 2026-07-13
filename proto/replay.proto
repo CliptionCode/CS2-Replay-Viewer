@@ -117,6 +117,7 @@ message PlayerFrame {
   float velocity_y = 22;
   float velocity_z = 23;
   int32 team = 24;
+  bool has_defuse_kit = 25;
 }
 
 message FlashEvent {

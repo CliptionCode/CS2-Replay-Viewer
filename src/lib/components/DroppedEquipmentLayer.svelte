@@ -13,6 +13,7 @@ export let isPlaying = false;
 export let showDroppedWeapons = true;
 export let showDroppedUtility = true;
 export let showDroppedC4 = true;
+export let showDroppedDefuseKit = true;
 
 const ICON_SIZE = 18;
 const ROUND_CARRYOVER_DETECTION_TICKS = 16;
@@ -105,6 +106,7 @@ function isVisible(item: DroppedEquipment, tick: number): boolean {
     if (item.category === 'weapon') return showDroppedWeapons;
     if (item.category === 'utility') return showDroppedUtility;
     if (item.category === 'c4') return showDroppedC4;
+    if (item.category === 'defuse_kit') return showDroppedDefuseKit;
     return false;
 }
 
@@ -195,7 +197,7 @@ $: {
 }
 
 $: {
-    void replayData, mapMetadata, showDroppedWeapons, showDroppedUtility, showDroppedC4;
+    void replayData, mapMetadata, showDroppedWeapons, showDroppedUtility, showDroppedC4, showDroppedDefuseKit;
     if (browser && ctx) scheduleRender();
 }
 

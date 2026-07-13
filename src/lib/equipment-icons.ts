@@ -6,6 +6,7 @@ const WEAPON_ICON_FILES: Readonly<Record<string, string>> = {
     awp: 'awp.svg',
     'pp-bizon': 'bizon.svg',
     c4: 'c4.svg',
+    'defuse kit': 'defuser.svg',
     'desert eagle': 'deagle.svg',
     'decoy grenade': 'decoy.svg',
     'dual berettas': 'elite.svg',

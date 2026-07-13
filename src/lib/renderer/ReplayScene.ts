@@ -26,14 +26,17 @@ import {
   Sprite,
   SpriteMaterial,
   SRGBColorSpace,
+  TextureLoader,
   Vector2,
   Vector3,
   WebGLRenderer
 } from 'three';
 import type { Material, MeshStandardMaterial, Object3D } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import type { BombEvent, NadeEvent, NadeTrajectoryPoint, PlayerFrame, ReplayData } from '$lib/types/replay/replay_pb';
+import type { BombEvent, DroppedEquipment, NadeEvent, NadeTrajectoryPoint, PlayerFrame, ReplayData } from '$lib/types/replay/replay_pb';
+import { getWeaponIconPath } from '$lib/equipment-icons';
 import { frameAt, indexFrames, lerpAngleDegrees, type FrameIndex } from '$lib/replay';
+import { getRoundDisplayEndTick, getRoundForTick } from '$lib/replay/rounds';
 import { SOURCE_UNIT_METERS, sourceToThree, sourceViewDirection } from './coordinates';
 
 export type CameraMode = 'free' | 'player';
@@ -54,6 +57,17 @@ const DEFUSE_SECONDS_WITHOUT_KIT = 10;
 const BOMB_LABEL_HEIGHT = 0.85;
 const BOMB_PRIMARY_LABEL_OFFSET = 1.35;
 const BOMB_SECONDARY_LABEL_OFFSET = 0.42;
+const PLAYER_NAME_LABEL_HEIGHT = 0.32;
+const PLAYER_WEAPON_LABEL_HEIGHT = 0.27;
+const PLAYER_NAME_LABEL_OFFSET = 0.7;
+const PLAYER_WEAPON_LABEL_OFFSET = 0.38;
+const PLAYER_INVENTORY_ICON_SIZE = 0.3;
+const PLAYER_INVENTORY_ICON_GAP = 0.06;
+const PLAYER_INVENTORY_OFFSET = 1.04;
+const DROPPED_EQUIPMENT_ICON_SIZE = 0.62;
+const DROPPED_EQUIPMENT_HEIGHT_OFFSET = 0.32;
+const ROUND_CARRYOVER_DETECTION_TICKS = 16;
+const ROUND_CARRYOVER_POSITION_DISTANCE_SQUARED = 64 * 64;
 const LOS_MAX_DISTANCE_METERS = 300;
 const LOS_RAYCAST_INTERVAL_MS = 500;
 const LOS_GLOBAL_INTERVAL_MS = 100;
@@ -82,12 +96,21 @@ interface PlayerVisual {
   body: Mesh<CapsuleGeometry, MeshBasicMaterial>;
   healthBar: Group;
   healthFill: Mesh<PlaneGeometry, MeshBasicMaterial>;
+  nameLabel: Sprite;
+  weaponLabel: Sprite;
+  inventory: Group;
+  inventoryKey: string;
   sightLine: Mesh<CylinderGeometry, MeshBasicMaterial>;
   eye: Vector3;
   direction: Vector3;
   sightDistance: number;
   alive: boolean;
   lastSightUpdate: number;
+}
+
+interface DroppedEquipmentVisual {
+  item: DroppedEquipment;
+  icon: Sprite;
 }
 
 interface UtilityVisual {
@@ -105,8 +128,12 @@ export class ReplayScene {
   private readonly clock = new Clock();
   private readonly players = new Group();
   private readonly utilities = new Group();
+  private readonly droppedEquipment = new Group();
   private readonly playerVisuals = new Map<bigint, PlayerVisual>();
   private readonly utilityVisuals: UtilityVisual[] = [];
+  private readonly droppedEquipmentVisuals: DroppedEquipmentVisual[] = [];
+  private droppedEquipmentCarryovers = new WeakSet<DroppedEquipment>();
+  private readonly equipmentTextureLoader = new TextureLoader();
   private bombMarker: Mesh<SphereGeometry, MeshBasicMaterial> | null = null;
   private bombPrimaryLabel: Sprite | null = null;
   private bombSecondaryLabel: Sprite | null = null;
@@ -141,8 +168,15 @@ export class ReplayScene {
   private lastSightRaycast = -Infinity;
   private showSightLines = false;
   private sightLineLength = LOS_MAX_DISTANCE_METERS;
-  private sightLineOpacity = 0.3;
+  private sightLineOpacity = 0.5;
   private sightLineWidth = 5;
+  private showDroppedWeapons = true;
+  private showDroppedUtility = true;
+  private showDroppedC4 = true;
+  private showDroppedDefuseKit = true;
+  private showPlayerUtilities = true;
+  private showPlayerC4 = true;
+  private showPlayerDefuseKit = true;
   private movementSpeed = 36;
   private zoomSpeed = 1;
   private movementKeys = { forward: 'KeyW', left: 'KeyA', backward: 'KeyS', right: 'KeyD' };
@@ -157,7 +191,7 @@ export class ReplayScene {
     this.scene.add(new AmbientLight(0xffffff, 1.8));
     const sun = new DirectionalLight(0xfff2dc, 2.2);
     sun.position.set(1000, 2200, 600);
-    this.scene.add(sun, this.players, this.utilities);
+    this.scene.add(sun, this.players, this.utilities, this.droppedEquipment);
 
     this.camera.position.set(30, 45, 30);
     this.camera.lookAt(0, 0, 0);
@@ -188,6 +222,7 @@ export class ReplayScene {
     this.canvas.removeEventListener('wheel', this.handleWheel);
     this.disposeObject(this.players);
     this.disposeObject(this.utilities);
+    this.disposeObject(this.droppedEquipment);
     if (this.physicsRoot) this.disposeObject(this.physicsRoot);
     this.analysisMaterials.forEach((material) => material.dispose());
     this.renderer.dispose();
@@ -198,8 +233,11 @@ export class ReplayScene {
     this.frames = indexFrames(replay);
     this.clearGroup(this.players);
     this.clearGroup(this.utilities);
+    this.clearGroup(this.droppedEquipment);
     this.playerVisuals.clear();
     this.utilityVisuals.length = 0;
+    this.droppedEquipmentVisuals.length = 0;
+    this.droppedEquipmentCarryovers = this.buildDroppedEquipmentCarryoverSet(replay);
     this.bombMarker = null;
     this.bombPrimaryLabel = null;
     this.bombSecondaryLabel = null;
@@ -244,18 +282,27 @@ export class ReplayScene {
       healthBar.add(healthBack, healthFill);
       healthBar.visible = false;
 
+      const nameLabel = this.createPlayerLabel();
+      const weaponLabel = this.createPlayerLabel();
+      const inventory = new Group();
+      inventory.visible = false;
+
       const sightLine = new Mesh(
         new CylinderGeometry(0.5, 0.5, 1, 10, 1, false),
-        new MeshBasicMaterial({ color: player.team === 3 ? CT_COLOR : T_COLOR, transparent: true, opacity: 0.3 })
+        new MeshBasicMaterial({ color: player.team === 3 ? CT_COLOR : T_COLOR, transparent: true, opacity: 0.5 })
       );
       sightLine.visible = false;
       sightLine.frustumCulled = false;
 
-      this.players.add(body, healthBar, sightLine);
+      this.players.add(body, healthBar, nameLabel, weaponLabel, inventory, sightLine);
       this.playerVisuals.set(player.steamId, {
         body,
         healthBar,
         healthFill,
+        nameLabel,
+        weaponLabel,
+        inventory,
+        inventoryKey: '',
         sightLine,
         eye: new Vector3(),
         direction: new Vector3(0, 0, 1),
@@ -290,6 +337,12 @@ export class ReplayScene {
         this.utilities.add(effect);
       }
       this.utilityVisuals.push({ nade, points: points3D, trajectory, projectile, effect });
+    }
+
+    for (const item of replay.droppedEquipment) {
+      const icon = this.createDroppedEquipmentIcon(item);
+      this.droppedEquipment.add(icon);
+      this.droppedEquipmentVisuals.push({ item, icon });
     }
 
     this.bombMarker = new Mesh(
@@ -382,6 +435,26 @@ export class ReplayScene {
     }
   }
 
+  setDroppedEquipmentSettings(
+    showWeapons: boolean,
+    showUtility: boolean,
+    showC4: boolean,
+    showDefuseKit: boolean
+  ): void {
+    this.showDroppedWeapons = showWeapons;
+    this.showDroppedUtility = showUtility;
+    this.showDroppedC4 = showC4;
+    this.showDroppedDefuseKit = showDefuseKit;
+    this.updateDroppedEquipment();
+  }
+
+  setPlayerEquipmentSettings(showUtilities: boolean, showC4: boolean, showDefuseKit: boolean): void {
+    this.showPlayerUtilities = showUtilities;
+    this.showPlayerC4 = showC4;
+    this.showPlayerDefuseKit = showDefuseKit;
+    this.updateScene();
+  }
+
   setCameraControls(
     movementKeys: { forward: string; left: string; backward: string; right: string },
     movementSpeed: number,
@@ -443,7 +516,8 @@ export class ReplayScene {
       visual.body.scale.y = ducking ? 0.72 : 1;
       visual.body.visible = true;
 
-      const team = a.team || (this.replay.players.find((player) => player.steamId === steamId)?.team ?? 2);
+      const player = this.replay.players.find((candidate) => candidate.steamId === steamId);
+      const team = a.team || (player?.team ?? 2);
       const teamColor = team === 3 ? CT_COLOR : T_COLOR;
       visual.body.material.color.setHex(alive ? teamColor : DEAD_COLOR);
       visual.body.material.transparent = !alive;
@@ -452,6 +526,9 @@ export class ReplayScene {
 
       visual.alive = alive;
       visual.healthBar.visible = alive;
+      visual.nameLabel.visible = alive;
+      visual.weaponLabel.visible = alive && Boolean(a.weapon);
+      visual.inventory.visible = alive;
       visual.sightLine.visible = alive && this.showSightLines;
       if (!alive) continue;
 
@@ -462,6 +539,31 @@ export class ReplayScene {
       visual.healthFill.material.color.setHex(health >= 70 ? HEALTH_GREEN : health >= 40 ? HEALTH_ORANGE : HEALTH_RED);
       visual.healthBar.position.copy(feet);
       visual.healthBar.position.y += (ducking ? 1.75 : 2.25);
+      visual.weaponLabel.position.copy(visual.healthBar.position);
+      visual.weaponLabel.position.y += PLAYER_WEAPON_LABEL_OFFSET;
+      visual.nameLabel.position.copy(visual.healthBar.position);
+      visual.nameLabel.position.y += PLAYER_NAME_LABEL_OFFSET;
+      visual.inventory.position.copy(visual.healthBar.position);
+      visual.inventory.position.y += PLAYER_INVENTORY_OFFSET;
+      this.setPlayerLabel(
+        visual.nameLabel,
+        player?.name ?? visual.body.name,
+        team === 3 ? '#62aef7' : '#e7a451',
+        PLAYER_NAME_LABEL_HEIGHT,
+        '700'
+      );
+      this.setPlayerLabel(
+        visual.weaponLabel,
+        a.weapon ? `${a.weapon}${a.isReloading ? ' (Reloading)' : ''}` : '',
+        '#e2e8f0',
+        PLAYER_WEAPON_LABEL_HEIGHT,
+        '500'
+      );
+      this.setPlayerInventory(visual, [
+        ...(this.showPlayerUtilities ? a.utilities : []),
+        ...(this.showPlayerC4 && a.hasBomb ? ['C4'] : []),
+        ...(this.showPlayerDefuseKit && team === 3 && a.hasDefuseKit ? ['Defuse Kit'] : [])
+      ].sort((left, right) => left.localeCompare(right)));
 
       const useEyes = a.hasEyePosition && b.hasEyePosition;
       const eyeX = useEyes ? a.eyeX + (b.eyeX - a.eyeX) * alpha : x;
@@ -482,6 +584,7 @@ export class ReplayScene {
       if (match) this.updatePlayerCamera(...match);
     }
     this.updateUtilities();
+    this.updateDroppedEquipment();
     this.updateBombMarker();
   }
 
@@ -591,6 +694,72 @@ export class ReplayScene {
     }
     sourceToThree(x, y, z, this.bombMarker.position);
     this.bombMarker.position.y += BOMB_MARKER_RADIUS;
+  }
+
+  private createPlayerLabel(): Sprite {
+    const canvas = document.createElement('canvas');
+    canvas.width = 2;
+    canvas.height = 96;
+    const material = new SpriteMaterial({
+      map: new CanvasTexture(canvas),
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    });
+    const sprite = new Sprite(material);
+    sprite.userData.canvas = canvas;
+    sprite.renderOrder = 100;
+    sprite.visible = false;
+    return sprite;
+  }
+
+  private setPlayerLabel(
+    sprite: Sprite,
+    text: string,
+    color: string,
+    height: number,
+    fontWeight: string
+  ): void {
+    if (
+      sprite.userData.text === text &&
+      sprite.userData.color === color &&
+      sprite.userData.height === height &&
+      sprite.userData.fontWeight === fontWeight
+    ) {
+      sprite.visible = text.length > 0;
+      return;
+    }
+    sprite.userData.text = text;
+    sprite.userData.color = color;
+    sprite.userData.height = height;
+    sprite.userData.fontWeight = fontWeight;
+    sprite.visible = text.length > 0;
+    if (!text) return;
+
+    const canvas = sprite.userData.canvas as HTMLCanvasElement;
+    const font = `${fontWeight} 56px system-ui, sans-serif`;
+    const measurement = canvas.getContext('2d');
+    if (!measurement) return;
+    measurement.font = font;
+    canvas.width = Math.max(2, Math.ceil(measurement.measureText(text).width + 32));
+    canvas.height = 96;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.font = font;
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.lineJoin = 'round';
+    context.lineWidth = 10;
+    context.strokeStyle = 'rgba(4, 8, 14, 0.95)';
+    context.strokeText(text, canvas.width / 2, canvas.height / 2);
+    context.fillStyle = color;
+    context.fillText(text, canvas.width / 2, canvas.height / 2);
+    const previousTexture = sprite.material.map;
+    sprite.material.map = new CanvasTexture(canvas);
+    sprite.material.needsUpdate = true;
+    previousTexture?.dispose();
+    sprite.scale.set(height * (canvas.width / canvas.height), height, 1);
   }
 
   private createBombLabel(): Sprite {
@@ -729,7 +898,11 @@ export class ReplayScene {
     const radiusSourceUnits = nade.nadeType === 'decoy'
       ? 5
       : Math.max(1, nade.effectRadius || this.defaultUtilityRadius(nade.nadeType));
-    const radiusScale = nade.nadeType === 'hegrenade' || nade.nadeType === 'flashbang' ? 0.5 : 1;
+    const radiusScale = nade.nadeType === 'smoke'
+      ? 0.9
+      : nade.nadeType === 'hegrenade' || nade.nadeType === 'flashbang'
+        ? 0.5
+        : 1;
     const material = new MeshBasicMaterial({
       color: UTILITY_COLORS[nade.nadeType],
       transparent: !isSmoke,
@@ -754,6 +927,123 @@ export class ReplayScene {
     if (nadeType === 'flashbang') return 400;
     if (nadeType === 'molotov' || nadeType === 'incendiary') return 150;
     return 5;
+  }
+
+  private createDroppedEquipmentIcon(item: DroppedEquipment): Sprite {
+    const iconSize = item.category === 'weapon'
+      ? DROPPED_EQUIPMENT_ICON_SIZE * 1.1
+      : DROPPED_EQUIPMENT_ICON_SIZE;
+    const icon = this.createEquipmentIcon(item.equipmentName, iconSize, 90);
+    sourceToThree(item.x, item.y, item.z, icon.position);
+    icon.position.y += DROPPED_EQUIPMENT_HEIGHT_OFFSET;
+    return icon;
+  }
+
+  private createEquipmentIcon(equipmentName: string, iconSize: number, renderOrder: number): Sprite {
+    let icon: Sprite;
+    const texture = this.equipmentTextureLoader.load(getWeaponIconPath(equipmentName), (loadedTexture) => {
+      const image = loadedTexture.image as HTMLImageElement | undefined;
+      const width = image?.naturalWidth || image?.width || 1;
+      const height = image?.naturalHeight || image?.height || 1;
+      const scale = iconSize / Math.max(width, height);
+      icon.scale.set(width * scale, height * scale, 1);
+    });
+    icon = new Sprite(new SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    }));
+    icon.scale.set(iconSize, iconSize, 1);
+    icon.renderOrder = renderOrder;
+    icon.visible = false;
+    return icon;
+  }
+
+  private setPlayerInventory(visual: PlayerVisual, equipmentNames: string[]): void {
+    const inventoryKey = equipmentNames.join('\u0000');
+    if (visual.inventoryKey !== inventoryKey) {
+      visual.inventoryKey = inventoryKey;
+      this.clearGroup(visual.inventory);
+      const totalWidth = equipmentNames.length * PLAYER_INVENTORY_ICON_SIZE +
+        Math.max(0, equipmentNames.length - 1) * PLAYER_INVENTORY_ICON_GAP;
+      const firstX = -totalWidth / 2 + PLAYER_INVENTORY_ICON_SIZE / 2;
+      equipmentNames.forEach((equipmentName, index) => {
+        const icon = this.createEquipmentIcon(equipmentName, PLAYER_INVENTORY_ICON_SIZE, 100);
+        icon.position.x = firstX + index * (PLAYER_INVENTORY_ICON_SIZE + PLAYER_INVENTORY_ICON_GAP);
+        icon.visible = true;
+        visual.inventory.add(icon);
+      });
+    }
+    visual.inventory.visible = equipmentNames.length > 0;
+  }
+
+  private updateDroppedEquipment(): void {
+    if (!this.replay) return;
+    for (const visual of this.droppedEquipmentVisuals) {
+      visual.icon.visible = this.isDroppedEquipmentVisible(visual.item);
+    }
+  }
+
+  private isDroppedEquipmentVisible(item: DroppedEquipment): boolean {
+    if (!this.replay || this.droppedEquipmentCarryovers.has(item)) return false;
+    if (item.startTick > this.tick || item.endTick < this.tick) return false;
+    const round = getRoundForTick(this.replay, this.tick);
+    if (
+      round &&
+      (item.startTick < round.startTick || item.startTick > getRoundDisplayEndTick(this.replay, round))
+    ) {
+      return false;
+    }
+    if (item.category === 'weapon') return this.showDroppedWeapons;
+    if (item.category === 'utility') return this.showDroppedUtility;
+    if (item.category === 'c4') return this.showDroppedC4;
+    if (item.category === 'defuse_kit') return this.showDroppedDefuseKit;
+    return false;
+  }
+
+  private buildDroppedEquipmentCarryoverSet(replay: ReplayData): WeakSet<DroppedEquipment> {
+    const carryovers = new WeakSet<DroppedEquipment>();
+    const priorSegmentsByEquipment = new Map<string, DroppedEquipment[]>();
+    const sortedItems = [...replay.droppedEquipment].sort((a, b) => a.startTick - b.startTick);
+    for (const item of sortedItems) {
+      const itemRound = replay.rounds.find(round =>
+        item.startTick >= round.startTick &&
+        item.startTick <= getRoundDisplayEndTick(replay, round)
+      );
+      const roundStart = itemRound?.startTick;
+      const key = `${item.category}:${item.equipmentName}`;
+      const priorSegments = priorSegmentsByEquipment.get(key) ?? [];
+      let continuousPreviousSegment: DroppedEquipment | undefined;
+      for (let index = priorSegments.length - 1; index >= 0; index--) {
+        const previous = priorSegments[index];
+        const dx = previous.x - item.x;
+        const dy = previous.y - item.y;
+        const dz = previous.z - item.z;
+        if (
+          previous.endTick >= item.startTick - 1 &&
+          dx * dx + dy * dy + dz * dz <= ROUND_CARRYOVER_POSITION_DISTANCE_SQUARED
+        ) {
+          continuousPreviousSegment = previous;
+          break;
+        }
+      }
+      const isRoundBoundaryCarryover = roundStart !== undefined &&
+        item.startTick <= roundStart + ROUND_CARRYOVER_DETECTION_TICKS &&
+        priorSegments.some(previous => {
+          const dx = previous.x - item.x;
+          const dy = previous.y - item.y;
+          const dz = previous.z - item.z;
+          return previous.startTick < roundStart &&
+            previous.endTick >= roundStart - 1 &&
+            dx * dx + dy * dy + dz * dz <= ROUND_CARRYOVER_POSITION_DISTANCE_SQUARED;
+        });
+      const continuesCarryoverMovement = continuousPreviousSegment !== undefined && carryovers.has(continuousPreviousSegment);
+      if (isRoundBoundaryCarryover || continuesCarryoverMovement) carryovers.add(item);
+      priorSegments.push(item);
+      priorSegmentsByEquipment.set(key, priorSegments);
+    }
+    return carryovers;
   }
 
   private utilityPositionAt(points: NadeTrajectoryPoint[], tick: number, target: Vector3): void {
@@ -1018,6 +1308,7 @@ export class ReplayScene {
     this.updateSightLines(now);
     for (const visual of this.playerVisuals.values()) {
       if (visual.healthBar.visible) visual.healthBar.quaternion.copy(this.camera.quaternion);
+      if (visual.inventory.visible) visual.inventory.quaternion.copy(this.camera.quaternion);
     }
     this.renderer.render(this.scene, this.camera);
     this.animationFrame = requestAnimationFrame(this.render);
@@ -1045,6 +1336,9 @@ export class ReplayScene {
   private hidePlayer(visual: PlayerVisual): void {
     visual.body.visible = false;
     visual.healthBar.visible = false;
+    visual.nameLabel.visible = false;
+    visual.weaponLabel.visible = false;
+    visual.inventory.visible = false;
     visual.sightLine.visible = false;
     visual.alive = false;
   }

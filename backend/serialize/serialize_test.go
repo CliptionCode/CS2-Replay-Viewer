@@ -14,6 +14,14 @@ func TestConvertFramePreservesReloadState(t *testing.T) {
 	}
 }
 
+func TestConvertFramePreservesDefuseKit(t *testing.T) {
+	frame := convertFrame(&parser.PlayerFrame{HasDefuseKit: true})
+
+	if !frame.HasDefuseKit {
+		t.Fatal("converted frame should preserve defuse-kit possession")
+	}
+}
+
 func TestConvertBombPreservesPlantPosition(t *testing.T) {
 	bomb := convertBomb(&parser.BombEvent{X: 123.5, Y: -456.25, Z: 78})
 

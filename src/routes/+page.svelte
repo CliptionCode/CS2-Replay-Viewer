@@ -123,7 +123,7 @@ const DEFAULT_SIGHT_CONE_HALF_ANGLE = 0.68;
 const EVENT_SEEK_LEAD_SECONDS = 2;
 const DEFAULT_LINE_OF_SIGHT_LENGTH = 300;
 const DEFAULT_LINE_OF_SIGHT_WIDTH = 1.6;
-const DEFAULT_3D_LINE_OF_SIGHT_LENGTH = 500;
+const DEFAULT_3D_LINE_OF_SIGHT_LENGTH = 650;
 const DEFAULT_3D_LINE_OF_SIGHT_WIDTH = 5;
 const DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT = 250;
 const MAX_MOUSE_VIEWPORT_ZOOM_SCALE = 5;
@@ -238,7 +238,7 @@ let lineOfSightWidth = DEFAULT_LINE_OF_SIGHT_WIDTH;
 let showLineOfSight3D = true;
 let lineOfSightLength3D = DEFAULT_3D_LINE_OF_SIGHT_LENGTH;
 let lineOfSightWidth3D = DEFAULT_3D_LINE_OF_SIGHT_WIDTH;
-let lineOfSightTransparency = 0.7;
+let lineOfSightTransparency = 0.5;
 let viewMode: ViewMode = '2d';
 let replay3DScene: ReplayScene | null = null;
 let localMap3D: LocalMapStatus | null = null;
@@ -273,6 +273,10 @@ let drawingClearSignal = 0;
 let showDroppedWeapons = true;
 let showDroppedUtility = true;
 let showDroppedC4 = true;
+let showDroppedDefuseKit = true;
+let showPlayerUtilities = true;
+let showPlayerC4 = true;
+let showPlayerDefuseKit = true;
 let selectedPlayerSteamId: bigint | null = null;
 let showNoiseCircle = false;
 let noiseForSelectedPlayer = false;
@@ -452,6 +456,8 @@ function applyLoadedReplay(data: ReplayData): void {
 
 function apply3DSceneSettings(): void {
     replay3DScene?.setSightSettings(showLineOfSight3D, lineOfSightLength3D, lineOfSightWidth3D, 1 - lineOfSightTransparency);
+    replay3DScene?.setDroppedEquipmentSettings(showDroppedWeapons, showDroppedUtility, showDroppedC4, showDroppedDefuseKit);
+    replay3DScene?.setPlayerEquipmentSettings(showPlayerUtilities, showPlayerC4, showPlayerDefuseKit);
     replay3DScene?.setCameraControls(
         viewerSettings.cameraMovementKeys,
         viewerSettings.cameraMovementSpeed,
@@ -510,6 +516,7 @@ async function setViewMode(mode: ViewMode): Promise<void> {
     try {
         if (!await chooseCs2GamePath()) return;
         viewMode = '3d';
+        if (activeToolbarSection === 'drawing') activeToolbarSection = null;
         await flushDom();
         await prepareCurrent3DMap();
     } catch (cause) {
@@ -2067,12 +2074,14 @@ $: {
 $: {
     void viewMode;
     visibleToolbarSections = viewMode === '3d'
-        ? TOOLBAR_SECTIONS
+        ? TOOLBAR_SECTIONS.filter(section => section.key !== 'drawing')
         : TOOLBAR_SECTIONS.filter(section => section.key !== 'camera');
 }
 
 $: {
-    void showLineOfSight3D, lineOfSightLength3D, lineOfSightWidth3D, lineOfSightTransparency, selectedPlayerSteamId, viewerSettings;
+    void showLineOfSight3D, lineOfSightLength3D, lineOfSightWidth3D, lineOfSightTransparency,
+        showDroppedWeapons, showDroppedUtility, showDroppedC4, showDroppedDefuseKit,
+        showPlayerUtilities, showPlayerC4, showPlayerDefuseKit, selectedPlayerSteamId, viewerSettings;
     apply3DSceneSettings();
 }
 
@@ -2150,6 +2159,7 @@ function setSpeed(speed: number) {
 }
 
 function toggleToolbarSection(section: ToolbarSectionKey, releaseToolbarFocus = false): void {
+    if (viewMode === '3d' && section === 'drawing') return;
     if (
         releaseToolbarFocus &&
         document.activeElement instanceof HTMLElement &&
@@ -2224,12 +2234,16 @@ function getShortcutLabel(actionId: string): string {
         'camera.zoom-speed.increase': 'Increase Camera Zoom Speed',
         'player.zoom.decrease': 'Decrease Player Selection Zoom',
         'player.zoom.increase': 'Increase Player Selection Zoom',
+        'player.utilities': 'Show Player Utilities',
+        'player.c4': 'Show Player C4',
+        'player.defuse-kit': 'Show Player Defuse Kit',
         'noise.show': 'Show Noise Circle',
         'noise.selected-only': 'Noise for Selected Player',
         'timeline.show-all-utilities': 'Show all Utilities',
         'equipment.weapons': 'Show Dropped Weapons',
         'equipment.utility': 'Show Dropped Utility',
         'equipment.c4': 'Show Dropped C4',
+        'equipment.defuse-kit': 'Show Dropped Defuse Kit',
         'drawing.setup': 'Drawing Setup',
         'drawing.stroke.decrease': 'Decrease Drawing Stroke Width',
         'drawing.stroke.increase': 'Increase Drawing Stroke Width',
@@ -2396,12 +2410,16 @@ function executeShortcut(actionId: string): void {
         case 'camera.zoom-speed.increase': updateCameraSetting('cameraZoomSpeed', clampStep(viewerSettings.cameraZoomSpeed, 1, 0.1, 0.1, 3)); break;
         case 'player.zoom.decrease': selectedPlayerZoomPercent = clampStep(selectedPlayerZoomPercent, -1, 25, 100, 500); break;
         case 'player.zoom.increase': selectedPlayerZoomPercent = clampStep(selectedPlayerZoomPercent, 1, 25, 100, 500); break;
+        case 'player.utilities': showPlayerUtilities = !showPlayerUtilities; break;
+        case 'player.c4': showPlayerC4 = !showPlayerC4; break;
+        case 'player.defuse-kit': showPlayerDefuseKit = !showPlayerDefuseKit; break;
         case 'noise.show': showNoiseCircle = !showNoiseCircle; break;
         case 'noise.selected-only': noiseForSelectedPlayer = !noiseForSelectedPlayer; break;
         case 'timeline.show-all-utilities': showAllTimelineUtilities = !showAllTimelineUtilities; break;
         case 'equipment.weapons': showDroppedWeapons = !showDroppedWeapons; break;
         case 'equipment.utility': showDroppedUtility = !showDroppedUtility; break;
         case 'equipment.c4': showDroppedC4 = !showDroppedC4; break;
+        case 'equipment.defuse-kit': showDroppedDefuseKit = !showDroppedDefuseKit; break;
         case 'drawing.stroke.decrease': drawingStrokeWidth = clampStep(drawingStrokeWidth, -1, 1, 1, 10); break;
         case 'drawing.stroke.increase': drawingStrokeWidth = clampStep(drawingStrokeWidth, 1, 1, 1, 10); break;
         case 'drawing.mode.permanent': drawingMode = 'permanent'; break;
@@ -3597,6 +3615,7 @@ onMount(() => {
         {showDroppedWeapons}
         {showDroppedUtility}
         {showDroppedC4}
+        {showDroppedDefuseKit}
     />
     <PlayerLayer 
         bind:replayData={replayData}
@@ -3610,6 +3629,9 @@ onMount(() => {
         {lineOfSightLength}
         {lineOfSightWidth}
         {selectedPlayerSteamId}
+        {showPlayerUtilities}
+        {showPlayerC4}
+        {showPlayerDefuseKit}
         {showNoiseCircle}
         {noiseForSelectedPlayer}
         {enabledNoiseSources}
@@ -3878,6 +3900,21 @@ onMount(() => {
                             </div>
                         </div>
                     </section>
+                    <section class="control-section">
+                        <div class="controls-heading">Player equipment</div>
+                        <div class="control-row">
+                            <label class="checkbox-control"><input type="checkbox" bind:checked={showPlayerUtilities} /><span>Show Player Utilities</span></label>
+                            <ShortcutBinding actionId="player.utilities" shortcut={getShortcut('player.utilities')} isCapturing={shortcutCaptureActionId === 'player.utilities'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        <div class="control-row">
+                            <label class="checkbox-control"><input type="checkbox" bind:checked={showPlayerC4} /><span>Show Player C4</span></label>
+                            <ShortcutBinding actionId="player.c4" shortcut={getShortcut('player.c4')} isCapturing={shortcutCaptureActionId === 'player.c4'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        <div class="control-row">
+                            <label class="checkbox-control"><input type="checkbox" bind:checked={showPlayerDefuseKit} /><span>Show Player Defuse Kit</span></label>
+                            <ShortcutBinding actionId="player.defuse-kit" shortcut={getShortcut('player.defuse-kit')} isCapturing={shortcutCaptureActionId === 'player.defuse-kit'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                    </section>
                 {:else if activeToolbarSection === 'noise'}
                     <section class="control-section">
                         <div class="controls-heading">Noise visibility</div>
@@ -3936,6 +3973,10 @@ onMount(() => {
                         <div class="control-row">
                             <label class="checkbox-control"><input type="checkbox" bind:checked={showDroppedC4} /><span>Show Dropped C4</span></label>
                             <ShortcutBinding actionId="equipment.c4" shortcut={getShortcut('equipment.c4')} isCapturing={shortcutCaptureActionId === 'equipment.c4'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        <div class="control-row">
+                            <label class="checkbox-control"><input type="checkbox" bind:checked={showDroppedDefuseKit} /><span>Show Dropped Defuse Kit</span></label>
+                            <ShortcutBinding actionId="equipment.defuse-kit" shortcut={getShortcut('equipment.defuse-kit')} isCapturing={shortcutCaptureActionId === 'equipment.defuse-kit'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
                         </div>
                     </section>
                 {:else if activeToolbarSection === 'drawing'}

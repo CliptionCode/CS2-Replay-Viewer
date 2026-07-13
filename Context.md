@@ -2,7 +2,7 @@
 
 Compact implementation context for future Codex work.
 
-> **Application version:** `0.2.0`. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application entry in `src-tauri/Cargo.lock` synchronized.
+> **Application version:** `0.2.1`. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application entry in `src-tauri/Cargo.lock` synchronized.
 
 ## Mandatory workflow
 
@@ -82,7 +82,9 @@ The active frontend is SvelteKit and starts at `src/routes/+page.svelte`. There 
 
 `src/lib/playback-state.ts` is the non-reactive high-frequency render clock. Canvas layers read it in animation frames. `displayTick` in `+page.svelte` is throttled for reactive UI. Do not pass a per-frame tick prop through the component tree.
 
-The loaded-replay workspace uses a compact left toolbar with Sight, Player, Noise, Timeline, Equipment, and Drawing sections. Only the selected section's controls render in the adjacent slide-out panel; selecting it again or using the panel's back button closes it. Donate is a direct toolbar action and opens the same PayPal page as the Welcome screen.
+The 2D player-equipment icons use a dedicated transparent canvas inside `PlayerLayer`. Player-equipment checkbox changes must redraw only this lightweight overlay; they must not schedule the full trails, kills, bomb, noise, and sight render path.
+
+The loaded-replay workspace uses a compact left toolbar with Sight, Player, Noise, Timeline, Equipment, and Drawing sections. Only the selected section's controls render in the adjacent slide-out panel; selecting it again or using the panel's back button closes it. Donate is a direct toolbar action and opens the same PayPal page as the Welcome screen. Drawing is a 2D-only toolbar item and must not render or open by section shortcut in 3D.
 
 The bottom View toggle defaults to 2D. In 3D, Camera is the first toolbar section and Sight contains only line-of-sight controls plus transparency. The existing timeline, roster, round navigation, playback controls, and roster shortcuts remain shared. `src/lib/renderer/ReplayScene.ts` owns the Three.js scene and `src/lib/maps/local-map.ts` owns the Tauri map commands.
 
@@ -92,7 +94,11 @@ Thrown utility has an additive protobuf `trajectory_3d` stream captured from eac
 
 Box-shaped 3D utility projectiles (Flashbang, Decoy, Molotov, and incendiary) use their long geometry dimension on the Three.js Y axis so they render as vertical rectangles. HE and smoke projectiles remain spherical.
 
-3D line of sight uses cylindrical mesh beams because platform WebGL implementations ignore native line widths. It is enabled by default with length 500; the 3D width range is 1–50 with step 1, and the length maximum is 1100. These 3D values are separate from the existing 2D line-of-sight values. The free-camera movement-speed default is 36. Initial W/A/S/D movement codes are written to the viewer-settings IndexedDB record on first startup and remain editable.
+3D line of sight uses cylindrical mesh beams because platform WebGL implementations ignore native line widths. It is enabled by default with length 650 and 50% transparency; the 3D width range is 1–50 with step 1, and the length maximum is 1100. These 3D values are separate from the existing 2D line-of-sight values. The free-camera movement-speed default is 36. Initial W/A/S/D movement codes are written to the viewer-settings IndexedDB record on first startup and remain editable.
+
+Living players in the 3D scene have billboarded labels above their health bars. The lower label shows the selected weapon or utility and appends `(Reloading)` while the recorded frame reports an active reload. The player-name label sits above it and follows the current side color: orange for T and blue for CT. A screen-aligned SVG row above the player name shows carried utility, carried C4, and a CT's defuse kit according to the three default-on Player-panel visibility controls. Dead-player visuals do not show these labels or inventory icons.
+
+The 3D scene renders ownerless weapons, utilities, C4, and defuse kits as billboarded equipment SVGs at their exact recorded positions. The same Weapons, Utility, C4, and Defuse Kit visibility settings control the 2D and 3D representations, and the 3D path applies the same tick, round, and old-data carryover filtering as the 2D layer. Dropped weapon SVGs are 10% larger in 3D than the other dropped-equipment icons.
 
 Bomb protobuf events include world X/Y/Z. The parser captures the event player's position, while `ReplayScene` uses the planter's recorded frame as a compatibility fallback for older replay data. Within the active round, the planted marker is orange, turns gray on `defused`, and red on `exploded`. The global context-menu handler suppresses the WebView menu for right-click interactions.
 
@@ -103,14 +109,14 @@ The 3D bomb marker has billboarded world-space status text: an orange whole-seco
 ## Data and replay rules
 
 - CS2 demos are treated as 64 tick unless the parsed header provides another positive rate.
-- `events.FrameDone` samples every player's position, view direction, health, armor, selected weapon, reload state, utilities, and bomb possession. The selected weapon label adds `(Reloading)` while demoinfocs reports `Player.IsReloading`, which clears on completion or cancellation.
+- `events.FrameDone` samples every player's position, view direction, health, armor, selected weapon, reload state, utilities, bomb possession, and defuse-kit possession. The selected weapon label adds `(Reloading)` while demoinfocs reports `Player.IsReloading`, which clears on completion or cancellation.
 - Only stored T/CT participants render as players. Stored teams represent the end of the match; canvas and roster logic flips sides by half.
 - CT and T roster entries are sorted independently by player name in ascending, case-insensitive, numeric-aware order. Steam ID is the deterministic tie-breaker for identical names.
 - Roster shortcuts belong to the sorted side position (`CT 1`, `CT 2`, `T 1`, and so on), not to a player identity. When teams switch sides, each shortcut stays with its CT/T position and selects the new occupant.
 - Round playback begins at `freezetimeEndTick`, with a 15-second fallback for old data.
 - Round display ends seven seconds after the terminal event, clamped before the next round.
 - The first verified knife-only round is removed and visible rounds are renumbered.
-- Older protobuf data decodes new fields as empty/default. Reparse the original `.dem` to populate newer events and equipment data.
+- Older protobuf data decodes new fields as empty/default. Reparse the original `.dem` to populate newer events, equipment data, and per-frame defuse-kit possession.
 
 ### Coordinates and maps
 
@@ -123,14 +129,15 @@ The 3D bomb marker has billboarded world-space status text: an orange whole-seco
 
 ### Dropped equipment and drop noise
 
-- Parser ground-item records must come only from exact ownerless equipment entities—never synthetic player/death positions.
-- Each record is a position segment with start/end ticks and category `weapon`, `utility`, or `c4`.
+- Weapon, utility, and C4 ground-item records must come only from exact ownerless equipment entities. Defuse kits are the sole exception because demoinfocs exposes them only through the player's `m_pItemServices.m_bHasDefuser` property and never as entries in `GameState().Weapons()`. Their lifecycle starts from the last recorded carrier state at the kill event (with the completed-frame transition as a fallback), and ends when a living CT gains the property or the round closes.
+- Each record is a position segment with start/end ticks and category `weapon`, `utility`, `c4`, or `defuse_kit`.
+- A defuse-kit segment starts at the recorded player position when a kit carrier transitions to dead without the kit. It remains active until the nearest living player transitions from no kit to having one, or until the round closes. This dedicated lifecycle is required; adding `EqDefuseKit` to `droppedEquipmentCategory()` cannot work because no equipment entity exists there.
 - The frontend additionally scopes records to the round in which their segment started. Selecting a new round must clear every prior-round ground item, even for older overlong sidecar data.
 - At parser round end/boundary, snapshot every currently ownerless equipment entity, close active segments, and suppress those entity IDs until they disappear or become owned. The frontend propagates carryover detection through continuous movement segments for older data. Final exact positions may remain through the finished round's seven-second tail.
 - Raw `item_remove` events provide category data when demoinfocs returns `ItemDrop.Weapon == nil`.
 - New ownerless entities are matched to queued drop events by category, tick, and proximity. If no usable event exists, associate the entity with the nearest T/CT player within 512 world units.
 - `BombDropped` queues C4 ownership for entity matching; it does not emit noise at throw time.
-- A dropped entity must remain within 0.5 world units for six ticks before `weapon_drop`, `utility_drop`, or `c4_drop` noise is emitted at its settled destination.
+- A dropped entity must remain within 0.5 world units for six ticks before `weapon_drop`, `utility_drop`, or `c4_drop` noise is emitted at its settled destination. Dropped defuse kits are visual-only and do not emit a noise event.
 
 ### Noise rendering
 
@@ -148,6 +155,7 @@ The 3D bomb marker has billboarded world-space status text: an orange whole-seco
 - Projectile destruction for Molotov/incendiary ends the projectile and must not start a second fire lifetime.
 - Nade trajectories are distance-retimed when raw timing is unreliable and reveal progressively.
 - Smoke/fire effects show icons and whole-second countdowns. Flash/HE/Decoy endpoints remain interactive briefly.
+- The 3D smoke effect radius is scaled to 90% of the recorded/default radius. The 2D smoke radius remains unchanged.
 
 ### Selection and interaction
 
