@@ -1,6 +1,6 @@
 # CS2 Replay Viewer
 
-An open-source 2D and 3D viewer (3D is available in the 0.2.x pre-release series) for Counter-Strike 2 replay demos. Load a `.dem` file to replay rounds on an interactive radar or directly inside extracted CS2 map geometry, inspect player movement and utility, and quickly jump to the moments that matter.
+An open-source 2D and 3D viewer (3D is available from Version 0.2.x) for Counter-Strike 2 replay demos. Load a `.dem` file to replay rounds on an interactive radar or directly inside extracted CS2 map geometry, inspect player movement and utility, and quickly jump to the moments that matter.
 
 ## Screenshots
 
