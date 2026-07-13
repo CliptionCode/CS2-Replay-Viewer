@@ -23,6 +23,8 @@ export let showPlayerC4 = true;
 export let showPlayerDefuseKit = true;
 export let showNoiseCircle = false;
 export let noiseForSelectedPlayer = false;
+export let showCtNoiseCircle = true;
+export let showTNoiseCircle = true;
 export let enabledNoiseSources: Record<string, boolean> = {
     running: true,
     jump: true,
@@ -354,6 +356,10 @@ function isNoiseEnabled(noise: NoiseEvent): boolean {
 
     const steamId = noise.steamId.toString();
     if (noiseForSelectedPlayer && !isSelectedPlayer(steamId)) return false;
+    const eventFrame = getPlayerFrameAtOrBefore(noise.steamId, noise.tick);
+    const team = eventFrame?.team || getPlayerTeam(steamId, noise.tick);
+    if (team === TEAM_CT && !showCtNoiseCircle) return false;
+    if (team === TEAM_T && !showTNoiseCircle) return false;
 
     const normalizedType = normalizeNoiseType(noise.noiseType);
     if (!normalizedType) return false;
@@ -1157,7 +1163,7 @@ $: {
 }
 
 $: {
-    void showNoiseCircle, noiseForSelectedPlayer, enabledNoiseSources;
+    void showNoiseCircle, noiseForSelectedPlayer, showCtNoiseCircle, showTNoiseCircle, enabledNoiseSources;
     if (browser && noiseCtx) {
         scheduleNoiseRender();
     }

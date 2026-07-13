@@ -33,7 +33,16 @@ import {
 } from 'three';
 import type { Material, MeshStandardMaterial, Object3D } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import type { BombEvent, DroppedEquipment, NadeEvent, NadeTrajectoryPoint, PlayerFrame, ReplayData } from '$lib/types/replay/replay_pb';
+import type {
+  BombEvent,
+  DroppedEquipment,
+  FlashEvent,
+  NadeEvent,
+  NadeTrajectoryPoint,
+  NoiseEvent,
+  PlayerFrame,
+  ReplayData
+} from '$lib/types/replay/replay_pb';
 import { getWeaponIconPath } from '$lib/equipment-icons';
 import { frameAt, indexFrames, lerpAngleDegrees, type FrameIndex } from '$lib/replay';
 import { getRoundDisplayEndTick, getRoundForTick } from '$lib/replay/rounds';
@@ -74,6 +83,14 @@ const LOS_GLOBAL_INTERVAL_MS = 100;
 const COLLIDER_CELL_SIZE_METERS = 12;
 const MAX_CELLS_PER_COLLIDER = 512;
 const MOUSE_LOOK_SENSITIVITY = 0.0022;
+const MAX_FULL_FLASH_DURATION_SECONDS = 5;
+const PLAYER_FLASH_SHEET_WIDTH = 0.82;
+const PLAYER_FLASH_SHEET_HEIGHT = 0.52;
+const PLAYER_FLASH_SHEET_DISTANCE = 0.58;
+const FIRST_PERSON_FLASH_DISTANCE = 0.02;
+const NOISE_GROUND_OFFSET = 0.035;
+const RUNNING_NOISE_HOLD_TICKS = 28;
+const RUNNING_NOISE_FADE_TICKS = 14;
 
 const UTILITY_COLORS: Record<string, number> = {
   smoke: 0x858b91,
@@ -100,6 +117,7 @@ interface PlayerVisual {
   weaponLabel: Sprite;
   inventory: Group;
   inventoryKey: string;
+  flashSheet: Mesh<PlaneGeometry, MeshBasicMaterial>;
   sightLine: Mesh<CylinderGeometry, MeshBasicMaterial>;
   eye: Vector3;
   direction: Vector3;
@@ -121,6 +139,10 @@ interface UtilityVisual {
   effect: Mesh<BufferGeometry, MeshBasicMaterial> | null;
 }
 
+interface NoiseVisual {
+  circle: Mesh<CircleGeometry, MeshBasicMaterial>;
+}
+
 export class ReplayScene {
   private readonly scene = new Scene();
   private readonly camera = new PerspectiveCamera(73.74, 1, 0.01, 10_000);
@@ -129,9 +151,14 @@ export class ReplayScene {
   private readonly players = new Group();
   private readonly utilities = new Group();
   private readonly droppedEquipment = new Group();
+  private readonly noises = new Group();
   private readonly playerVisuals = new Map<bigint, PlayerVisual>();
   private readonly utilityVisuals: UtilityVisual[] = [];
   private readonly droppedEquipmentVisuals: DroppedEquipmentVisual[] = [];
+  private readonly noiseVisuals: NoiseVisual[] = [];
+  private readonly flashEventsBySteamId = new Map<bigint, FlashEvent[]>();
+  private noiseEvents: NoiseEvent[] = [];
+  private maxNoiseLookbackTicks = 1;
   private droppedEquipmentCarryovers = new WeakSet<DroppedEquipment>();
   private readonly equipmentTextureLoader = new TextureLoader();
   private bombMarker: Mesh<SphereGeometry, MeshBasicMaterial> | null = null;
@@ -177,11 +204,18 @@ export class ReplayScene {
   private showPlayerUtilities = true;
   private showPlayerC4 = true;
   private showPlayerDefuseKit = true;
+  private showNoiseCircles = false;
+  private noiseForSelectedPlayer = false;
+  private showCtNoiseCircles = true;
+  private showTNoiseCircles = true;
+  private enabledNoiseSources: Record<string, boolean> = {};
+  private noiseOpacity = 0.15;
   private movementSpeed = 36;
   private zoomSpeed = 1;
   private movementKeys = { forward: 'KeyW', left: 'KeyA', backward: 'KeyS', right: 'KeyD' };
   private pointerStart: { x: number; y: number } | null = null;
   private onPlayerSelect: ((steamId: bigint) => void) | null = null;
+  private readonly firstPersonFlashOverlay: Mesh<PlaneGeometry, MeshBasicMaterial>;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
@@ -191,7 +225,24 @@ export class ReplayScene {
     this.scene.add(new AmbientLight(0xffffff, 1.8));
     const sun = new DirectionalLight(0xfff2dc, 2.2);
     sun.position.set(1000, 2200, 600);
-    this.scene.add(sun, this.players, this.utilities, this.droppedEquipment);
+    this.scene.add(sun, this.players, this.utilities, this.droppedEquipment, this.noises, this.camera);
+
+    this.firstPersonFlashOverlay = new Mesh(
+      new PlaneGeometry(1, 1),
+      new MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0,
+        depthTest: false,
+        depthWrite: false,
+        side: DoubleSide
+      })
+    );
+    this.firstPersonFlashOverlay.position.z = -FIRST_PERSON_FLASH_DISTANCE;
+    this.firstPersonFlashOverlay.renderOrder = 10_000;
+    this.firstPersonFlashOverlay.frustumCulled = false;
+    this.firstPersonFlashOverlay.visible = false;
+    this.camera.add(this.firstPersonFlashOverlay);
 
     this.camera.position.set(30, 45, 30);
     this.camera.lookAt(0, 0, 0);
@@ -223,6 +274,8 @@ export class ReplayScene {
     this.disposeObject(this.players);
     this.disposeObject(this.utilities);
     this.disposeObject(this.droppedEquipment);
+    this.disposeObject(this.noises);
+    this.disposeObject(this.firstPersonFlashOverlay);
     if (this.physicsRoot) this.disposeObject(this.physicsRoot);
     this.analysisMaterials.forEach((material) => material.dispose());
     this.renderer.dispose();
@@ -234,9 +287,27 @@ export class ReplayScene {
     this.clearGroup(this.players);
     this.clearGroup(this.utilities);
     this.clearGroup(this.droppedEquipment);
+    this.clearGroup(this.noises);
     this.playerVisuals.clear();
     this.utilityVisuals.length = 0;
     this.droppedEquipmentVisuals.length = 0;
+    this.noiseVisuals.length = 0;
+    this.flashEventsBySteamId.clear();
+    this.noiseEvents = [...replay.noises].sort((left, right) => left.tick - right.tick);
+    this.maxNoiseLookbackTicks = this.noiseEvents.reduce((maximum, noise) => {
+      const runningTail = this.normalizeNoiseType(noise.noiseType) === 'running'
+        ? RUNNING_NOISE_HOLD_TICKS + RUNNING_NOISE_FADE_TICKS
+        : 0;
+      return Math.max(maximum, Math.max(1, noise.endTick - noise.tick) + runningTail);
+    }, 1);
+    for (const flash of replay.flashes) {
+      const events = this.flashEventsBySteamId.get(flash.playerSteamId);
+      if (events) events.push(flash);
+      else this.flashEventsBySteamId.set(flash.playerSteamId, [flash]);
+    }
+    for (const events of this.flashEventsBySteamId.values()) {
+      events.sort((left, right) => left.tick - right.tick);
+    }
     this.droppedEquipmentCarryovers = this.buildDroppedEquipmentCarryoverSet(replay);
     this.bombMarker = null;
     this.bombPrimaryLabel = null;
@@ -287,6 +358,19 @@ export class ReplayScene {
       const inventory = new Group();
       inventory.visible = false;
 
+      const flashSheet = new Mesh(
+        new PlaneGeometry(PLAYER_FLASH_SHEET_WIDTH, PLAYER_FLASH_SHEET_HEIGHT),
+        new MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+          side: DoubleSide
+        })
+      );
+      flashSheet.visible = false;
+      flashSheet.renderOrder = 20;
+
       const sightLine = new Mesh(
         new CylinderGeometry(0.5, 0.5, 1, 10, 1, false),
         new MeshBasicMaterial({ color: player.team === 3 ? CT_COLOR : T_COLOR, transparent: true, opacity: 0.5 })
@@ -294,7 +378,7 @@ export class ReplayScene {
       sightLine.visible = false;
       sightLine.frustumCulled = false;
 
-      this.players.add(body, healthBar, nameLabel, weaponLabel, inventory, sightLine);
+      this.players.add(body, healthBar, nameLabel, weaponLabel, inventory, flashSheet, sightLine);
       this.playerVisuals.set(player.steamId, {
         body,
         healthBar,
@@ -303,6 +387,7 @@ export class ReplayScene {
         weaponLabel,
         inventory,
         inventoryKey: '',
+        flashSheet,
         sightLine,
         eye: new Vector3(),
         direction: new Vector3(0, 0, 1),
@@ -455,6 +540,23 @@ export class ReplayScene {
     this.updateScene();
   }
 
+  setNoiseSettings(
+    visible: boolean,
+    selectedPlayerOnly: boolean,
+    showCtCircles: boolean,
+    showTCircles: boolean,
+    enabledSources: Record<string, boolean>,
+    transparency: number
+  ): void {
+    this.showNoiseCircles = visible;
+    this.noiseForSelectedPlayer = selectedPlayerOnly;
+    this.showCtNoiseCircles = showCtCircles;
+    this.showTNoiseCircles = showTCircles;
+    this.enabledNoiseSources = { ...enabledSources };
+    this.noiseOpacity = 1 - Math.max(0, Math.min(1, transparency));
+    this.updateNoises();
+  }
+
   setCameraControls(
     movementKeys: { forward: string; left: string; backward: string; right: string },
     movementSpeed: number,
@@ -583,9 +685,198 @@ export class ReplayScene {
       const match = frameAt(this.frames.get(this.selectedPlayer) ?? [], this.tick);
       if (match) this.updatePlayerCamera(...match);
     }
+    this.updateFlashVisuals();
+    this.updateNoises();
     this.updateUtilities();
     this.updateDroppedEquipment();
     this.updateBombMarker();
+  }
+
+  private updateFlashVisuals(): void {
+    for (const [steamId, visual] of this.playerVisuals) {
+      const opacity = this.flashOpacityAt(steamId);
+      const visible = this.cameraMode === 'free' && visual.alive && opacity > 0;
+      visual.flashSheet.visible = visible;
+      if (!visible) continue;
+      visual.flashSheet.material.opacity = opacity;
+      visual.flashSheet.position.copy(visual.eye).addScaledVector(visual.direction, PLAYER_FLASH_SHEET_DISTANCE);
+      visual.flashSheet.quaternion.setFromUnitVectors(new Vector3(0, 0, 1), visual.direction);
+    }
+
+    const selectedVisual = this.selectedPlayer === null ? null : this.playerVisuals.get(this.selectedPlayer);
+    const opacity = this.cameraMode === 'player' && this.selectedPlayer !== null && selectedVisual?.alive
+      ? this.flashOpacityAt(this.selectedPlayer)
+      : 0;
+    this.firstPersonFlashOverlay.material.opacity = opacity;
+    this.firstPersonFlashOverlay.visible = opacity > 0;
+  }
+
+  private flashOpacityAt(steamId: bigint): number {
+    const events = this.flashEventsBySteamId.get(steamId);
+    if (!events?.length) return 0;
+    let low = 0;
+    let high = events.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (events[middle].tick <= this.tick) low = middle + 1;
+      else high = middle;
+    }
+    const flash = events[low - 1];
+    if (!flash || flash.endTick <= flash.tick || this.tick >= flash.endTick) return 0;
+    const remainingRatio = Math.max(0, Math.min(1, (flash.endTick - this.tick) / (flash.endTick - flash.tick)));
+    const initialIntensity = Math.max(0, Math.min(1, flash.durationSeconds / MAX_FULL_FLASH_DURATION_SECONDS));
+    return initialIntensity * remainingRatio;
+  }
+
+  private updateNoises(): void {
+    if (!this.replay || !this.showNoiseCircles) {
+      this.hideUnusedNoiseVisuals(0);
+      return;
+    }
+
+    let visibleCount = 0;
+    const activeRunningNoises = new Map<bigint, NoiseEvent>();
+    const firstRelevantTick = this.tick - this.maxNoiseLookbackTicks;
+    let low = 0;
+    let high = this.noiseEvents.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (this.noiseEvents[middle].tick < firstRelevantTick) low = middle + 1;
+      else high = middle;
+    }
+
+    for (let index = low; index < this.noiseEvents.length; index++) {
+      const noise = this.noiseEvents[index];
+      if (noise.tick > this.tick) break;
+      if (noise.radius <= 0 || !this.isNoiseEnabled(noise)) continue;
+      const normalizedType = this.normalizeNoiseType(noise.noiseType);
+      if (normalizedType === 'running') {
+        if (this.tick <= noise.endTick + RUNNING_NOISE_HOLD_TICKS + RUNNING_NOISE_FADE_TICKS) {
+          activeRunningNoises.set(noise.steamId, noise);
+        }
+        continue;
+      }
+      if (noise.endTick < this.tick) continue;
+
+      const followsPlayer = normalizedType === 'shooting' || normalizedType === 'weapon_reload';
+      const playerPosition = followsPlayer ? this.playerPositionAt(noise.steamId) : null;
+      if (followsPlayer && !playerPosition) continue;
+      const totalTicks = Math.max(1, noise.endTick - noise.tick);
+      const remainingRatio = Math.max(0.22, Math.min(1, (noise.endTick - this.tick) / totalTicks));
+      visibleCount = this.showNoiseVisual(
+        visibleCount,
+        playerPosition?.x ?? noise.x,
+        playerPosition?.y ?? noise.y,
+        playerPosition?.z ?? noise.z,
+        noise.radius,
+        this.noiseOpacity * remainingRatio,
+        this.noiseTeamColor(noise)
+      );
+    }
+
+    for (const [steamId, noise] of activeRunningNoises) {
+      const playerPosition = this.playerPositionAt(steamId);
+      if (!playerPosition) continue;
+      const fadeTicks = Math.max(0, this.tick - noise.endTick - RUNNING_NOISE_HOLD_TICKS);
+      if (fadeTicks > RUNNING_NOISE_FADE_TICKS) continue;
+      const fadeRatio = 1 - fadeTicks / RUNNING_NOISE_FADE_TICKS;
+      visibleCount = this.showNoiseVisual(
+        visibleCount,
+        playerPosition.x,
+        playerPosition.y,
+        playerPosition.z,
+        noise.radius,
+        this.noiseOpacity * fadeRatio,
+        this.noiseTeamColor(noise)
+      );
+    }
+    this.hideUnusedNoiseVisuals(visibleCount);
+  }
+
+  private normalizeNoiseType(noiseType: string): string {
+    if (!noiseType || noiseType === 'sound' || noiseType === 'footstep') return 'running';
+    if (
+      noiseType === 'jump' || noiseType === 'running' || noiseType === 'shooting' ||
+      noiseType === 'falling' || noiseType === 'weapon_drop' || noiseType === 'utility_drop' ||
+      noiseType === 'c4_drop' || noiseType === 'weapon_reload'
+    ) {
+      return noiseType;
+    }
+    return '';
+  }
+
+  private isNoiseEnabled(noise: NoiseEvent): boolean {
+    if (this.noiseForSelectedPlayer && noise.steamId !== this.selectedPlayer) return false;
+    const team = this.noiseTeamAtEvent(noise);
+    if (team === 3 && !this.showCtNoiseCircles) return false;
+    if (team === 2 && !this.showTNoiseCircles) return false;
+    const normalizedType = this.normalizeNoiseType(noise.noiseType);
+    return normalizedType.length > 0 && (this.enabledNoiseSources[normalizedType] ?? false);
+  }
+
+  private noiseTeamColor(noise: NoiseEvent): number {
+    return this.noiseTeamAtEvent(noise) === 3 ? CT_COLOR : T_COLOR;
+  }
+
+  private noiseTeamAtEvent(noise: NoiseEvent): number {
+    const eventFrame = frameAt(this.frames.get(noise.steamId) ?? [], noise.tick)?.[0];
+    const storedPlayer = this.replay?.players.find(player => player.steamId === noise.steamId);
+    return eventFrame?.team || storedPlayer?.team || 2;
+  }
+
+  private playerPositionAt(steamId: bigint): { x: number; y: number; z: number } | null {
+    const match = frameAt(this.frames.get(steamId) ?? [], this.tick);
+    if (!match || !match[0].isAlive) return null;
+    const [a, b, alpha] = match;
+    return {
+      x: a.x + (b.x - a.x) * alpha,
+      y: a.y + (b.y - a.y) * alpha,
+      z: a.z + (b.z - a.z) * alpha
+    };
+  }
+
+  private showNoiseVisual(
+    index: number,
+    x: number,
+    y: number,
+    z: number,
+    radiusSourceUnits: number,
+    opacity: number,
+    color: number
+  ): number {
+    let visual = this.noiseVisuals[index];
+    if (!visual) {
+      const circle = new Mesh(
+        new CircleGeometry(1, 64),
+        new MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity: this.noiseOpacity,
+          depthTest: false,
+          depthWrite: false,
+          side: DoubleSide
+        })
+      );
+      circle.rotation.x = -Math.PI / 2;
+      circle.renderOrder = 2;
+      visual = { circle };
+      this.noiseVisuals.push(visual);
+      this.noises.add(circle);
+    }
+    const radius = Math.max(1, radiusSourceUnits) * SOURCE_UNIT_METERS;
+    sourceToThree(x, y, z, visual.circle.position);
+    visual.circle.position.y += NOISE_GROUND_OFFSET;
+    visual.circle.scale.setScalar(radius);
+    visual.circle.material.color.setHex(color);
+    visual.circle.material.opacity = Math.max(0, Math.min(this.noiseOpacity, opacity));
+    visual.circle.visible = visual.circle.material.opacity > 0;
+    return index + 1;
+  }
+
+  private hideUnusedNoiseVisuals(firstUnusedIndex: number): void {
+    for (let index = firstUnusedIndex; index < this.noiseVisuals.length; index++) {
+      this.noiseVisuals[index].circle.visible = false;
+    }
   }
 
   private updateBombMarker(): void {
@@ -1188,6 +1479,8 @@ export class ReplayScene {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    const overlayHeight = 2 * Math.tan((this.camera.fov * Math.PI) / 360) * FIRST_PERSON_FLASH_DISTANCE * 1.02;
+    this.firstPersonFlashOverlay.scale.set(overlayHeight * this.camera.aspect, overlayHeight, 1);
   }
 
   private applyMapMaterialMode(): void {
@@ -1339,6 +1632,7 @@ export class ReplayScene {
     visual.nameLabel.visible = false;
     visual.weaponLabel.visible = false;
     visual.inventory.visible = false;
+    visual.flashSheet.visible = false;
     visual.sightLine.visible = false;
     visual.alive = false;
   }

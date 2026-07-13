@@ -94,11 +94,14 @@ Draw routes, callouts, positions, and tactical plans directly on the replay rada
 - Select the `steamapps\common\Counter-Strike Global Offensive` installation folder once; the validated path is kept in the local settings database for later sessions, and the viewer resolves `game\csgo\maps` itself.
 - Extract only the map used by the loaded replay and stream its Source 2 geometry and textures from a versioned local cache. Completed caches are reused in later sessions, while interrupted extractions are never treated as valid.
 - Select players from the roster, by shortcut, or directly in the 3D scene to enter their recorded eye view.
+- Experience recorded flashes in first person: a full flash covers the entire 3D view in white, then fades as the player's vision returns. In free-camera mode, a fading white sheet in front of each flashed player indicates their obstructed vision.
 - Move the free camera with editable, database-backed <kbd>W</kbd>, <kbd>A</kbd>, <kbd>S</kbd>, and <kbd>D</kbd> defaults. Movement speed starts at 36, and movement and mouse-wheel zoom speed remain configurable from the 3D-only Camera panel.
 - Keep 3D line of sight enabled by default with a starting length of 650 and 50% transparency. Configure its real beam width from 1–50, length up to 1100, and transparency while retaining the full existing Sight panel in 2D mode.
 - Follow thrown utility along its recorded per-tick 3D arc and wall/floor bounces, with box-shaped utility shown vertically, without changing the established 2D utility rendering.
 - Read each living player's team-colored name and currently selected weapon directly above their 3D health bar, including a `(Reloading)` suffix while a reload is active. A row of SVG icons above the name shows carried utility, C4 possession, and CT defuse-kit possession.
 - See ownerless weapons, utility, and C4 at their recorded 3D positions using the matching equipment SVGs and the existing Equipment visibility filters.
+- Independently show or hide CT and T noise circles in both replay views with default-on team filters that become available when `Show Noise Circle` is enabled.
+- Use the Noise controls in 3D to show flat ground circles at the recorded sound radius—orange for T and blue for CT—for running, shooting, jumping, falling, reloads, and dropped weapons, utility, or C4, with the same source, team, and selected-player filters as 2D. Adjust 3D circle transparency from 0% to 100% in 1% steps, starting at 85%.
 - View a 3D smoke effect that is 10% smaller while leaving the established 2D smoke visualization unchanged.
 - Mark the planted bomb with a small orange sphere at its planted position; the marker turns gray after a defuse and red after an explosion.
 - Read an in-world explosion countdown above the planted bomb, a blue active-defuse countdown beneath it, and clear `Bomb defused` or `Bomb exploded` status text when the bomb reaches a terminal state.

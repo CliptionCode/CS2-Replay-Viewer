@@ -221,6 +221,8 @@ const SLIDER_SHORTCUT_ACTIONS = new Set([
     'camera.zoom-speed.increase',
     'player.zoom.decrease',
     'player.zoom.increase',
+    'noise.transparency.decrease',
+    'noise.transparency.increase',
     'drawing.stroke.decrease',
     'drawing.stroke.increase',
     'drawing.fade.decrease',
@@ -280,6 +282,9 @@ let showPlayerDefuseKit = true;
 let selectedPlayerSteamId: bigint | null = null;
 let showNoiseCircle = false;
 let noiseForSelectedPlayer = false;
+let showCtNoiseCircle = true;
+let showTNoiseCircle = true;
+let noiseTransparencyPercent = 85;
 let enabledNoiseSources: Record<NoiseSourceKey, boolean> = {
     running: true,
     jump: true,
@@ -458,6 +463,14 @@ function apply3DSceneSettings(): void {
     replay3DScene?.setSightSettings(showLineOfSight3D, lineOfSightLength3D, lineOfSightWidth3D, 1 - lineOfSightTransparency);
     replay3DScene?.setDroppedEquipmentSettings(showDroppedWeapons, showDroppedUtility, showDroppedC4, showDroppedDefuseKit);
     replay3DScene?.setPlayerEquipmentSettings(showPlayerUtilities, showPlayerC4, showPlayerDefuseKit);
+    replay3DScene?.setNoiseSettings(
+        showNoiseCircle,
+        noiseForSelectedPlayer,
+        showCtNoiseCircle,
+        showTNoiseCircle,
+        enabledNoiseSources,
+        noiseTransparencyPercent / 100
+    );
     replay3DScene?.setCameraControls(
         viewerSettings.cameraMovementKeys,
         viewerSettings.cameraMovementSpeed,
@@ -2081,7 +2094,10 @@ $: {
 $: {
     void showLineOfSight3D, lineOfSightLength3D, lineOfSightWidth3D, lineOfSightTransparency,
         showDroppedWeapons, showDroppedUtility, showDroppedC4, showDroppedDefuseKit,
-        showPlayerUtilities, showPlayerC4, showPlayerDefuseKit, selectedPlayerSteamId, viewerSettings;
+        showPlayerUtilities, showPlayerC4, showPlayerDefuseKit,
+        showNoiseCircle, noiseForSelectedPlayer, showCtNoiseCircle, showTNoiseCircle,
+        enabledNoiseSources, noiseTransparencyPercent,
+        selectedPlayerSteamId, viewerSettings;
     apply3DSceneSettings();
 }
 
@@ -2239,6 +2255,10 @@ function getShortcutLabel(actionId: string): string {
         'player.defuse-kit': 'Show Player Defuse Kit',
         'noise.show': 'Show Noise Circle',
         'noise.selected-only': 'Noise for Selected Player',
+        'noise.show-ct': 'Show CT Circle',
+        'noise.show-t': 'Show T Circle',
+        'noise.transparency.decrease': 'Decrease Noise Transparency',
+        'noise.transparency.increase': 'Increase Noise Transparency',
         'timeline.show-all-utilities': 'Show all Utilities',
         'equipment.weapons': 'Show Dropped Weapons',
         'equipment.utility': 'Show Dropped Utility',
@@ -2415,6 +2435,10 @@ function executeShortcut(actionId: string): void {
         case 'player.defuse-kit': showPlayerDefuseKit = !showPlayerDefuseKit; break;
         case 'noise.show': showNoiseCircle = !showNoiseCircle; break;
         case 'noise.selected-only': noiseForSelectedPlayer = !noiseForSelectedPlayer; break;
+        case 'noise.show-ct': if (showNoiseCircle) showCtNoiseCircle = !showCtNoiseCircle; break;
+        case 'noise.show-t': if (showNoiseCircle) showTNoiseCircle = !showTNoiseCircle; break;
+        case 'noise.transparency.decrease': noiseTransparencyPercent = clampStep(noiseTransparencyPercent, -1, 1, 0, 100); break;
+        case 'noise.transparency.increase': noiseTransparencyPercent = clampStep(noiseTransparencyPercent, 1, 1, 0, 100); break;
         case 'timeline.show-all-utilities': showAllTimelineUtilities = !showAllTimelineUtilities; break;
         case 'equipment.weapons': showDroppedWeapons = !showDroppedWeapons; break;
         case 'equipment.utility': showDroppedUtility = !showDroppedUtility; break;
@@ -3634,6 +3658,8 @@ onMount(() => {
         {showPlayerDefuseKit}
         {showNoiseCircle}
         {noiseForSelectedPlayer}
+        {showCtNoiseCircle}
+        {showTNoiseCircle}
         {enabledNoiseSources}
     />
     <NadeLayer
@@ -3923,9 +3949,27 @@ onMount(() => {
                             <ShortcutBinding actionId="noise.show" shortcut={getShortcut('noise.show')} isCapturing={shortcutCaptureActionId === 'noise.show'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
                         </div>
                         <div class="control-row">
+                            <label class="checkbox-control"><input type="checkbox" bind:checked={showCtNoiseCircle} disabled={!showNoiseCircle} /><span>Show CT Circle</span></label>
+                            <ShortcutBinding actionId="noise.show-ct" shortcut={getShortcut('noise.show-ct')} isCapturing={shortcutCaptureActionId === 'noise.show-ct'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        <div class="control-row">
+                            <label class="checkbox-control"><input type="checkbox" bind:checked={showTNoiseCircle} disabled={!showNoiseCircle} /><span>Show T Circle</span></label>
+                            <ShortcutBinding actionId="noise.show-t" shortcut={getShortcut('noise.show-t')} isCapturing={shortcutCaptureActionId === 'noise.show-t'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        <div class="control-row">
                             <label class="checkbox-control"><input type="checkbox" bind:checked={noiseForSelectedPlayer} disabled={!showNoiseCircle} /><span>Noise for Selected Player</span></label>
                             <ShortcutBinding actionId="noise.selected-only" shortcut={getShortcut('noise.selected-only')} isCapturing={shortcutCaptureActionId === 'noise.selected-only'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
                         </div>
+                        {#if viewMode === '3d'}
+                            <div class="slider-control">
+                                <div class="control-label-line"><span>Noise Transparency</span><output>{Math.round(noiseTransparencyPercent)}%</output></div>
+                                <div class="slider-input-line">
+                                    <ShortcutBinding actionId="noise.transparency.decrease" shortcut={getShortcut('noise.transparency.decrease')} isCapturing={shortcutCaptureActionId === 'noise.transparency.decrease'} emptyIcon="minus" oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                                    <input type="range" min="0" max="100" step="1" bind:value={noiseTransparencyPercent} disabled={!showNoiseCircle} aria-label="3D noise circle transparency" />
+                                    <ShortcutBinding actionId="noise.transparency.increase" shortcut={getShortcut('noise.transparency.increase')} isCapturing={shortcutCaptureActionId === 'noise.transparency.increase'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                                </div>
+                            </div>
+                        {/if}
                     </section>
                     <section class="control-section">
                         <div class="controls-heading">Sources</div>

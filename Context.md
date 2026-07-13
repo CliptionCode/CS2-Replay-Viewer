@@ -2,7 +2,7 @@
 
 Compact implementation context for future Codex work.
 
-> **Application version:** `0.2.1`. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application entry in `src-tauri/Cargo.lock` synchronized.
+> **Application version:** `0.2.2`. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application entry in `src-tauri/Cargo.lock` synchronized.
 
 ## Mandatory workflow
 
@@ -100,6 +100,10 @@ Living players in the 3D scene have billboarded labels above their health bars. 
 
 The 3D scene renders ownerless weapons, utilities, C4, and defuse kits as billboarded equipment SVGs at their exact recorded positions. The same Weapons, Utility, C4, and Defuse Kit visibility settings control the 2D and 3D representations, and the 3D path applies the same tick, round, and old-data carryover filtering as the 2D layer. Dropped weapon SVGs are 10% larger in 3D than the other dropped-equipment icons.
 
+3D flash visibility uses the existing per-player flash event duration. A selected player's first-person camera receives a screen-filling white overlay whose opacity starts at the recorded flash intensity, fully covers the view for a full flash, and fades to clear at the event end tick. In free-camera mode, each living flashed player has a thin white plane positioned in front of their recorded eye direction with the same fading opacity.
+
+The Noise panel controls both replay views. Default-on `Show CT Circle` and `Show T Circle` checkboxes independently filter noise by the source player's team at the event tick in both 2D and 3D; both controls are disabled while the master `Show Noise Circle` checkbox is off. In 3D, enabled noise events render as flat ground circles scaled to the recorded world radius and colored orange for T and blue for CT. A 3D-only Noise Transparency slider appears under Noise visibility, ranges from 0% to 100% in 1% steps, and defaults to 85%. Running follows the current player with the established hold/fade behavior, shooting and reload noises follow the player during their event, and jump, fall, weapon-drop, utility-drop, and C4-drop circles remain at the recorded event origin. The selected-player and per-source filters are shared with 2D. Active 3D circles use a reusable visual pool rather than permanent meshes per event.
+
 Bomb protobuf events include world X/Y/Z. The parser captures the event player's position, while `ReplayScene` uses the planter's recorded frame as a compatibility fallback for older replay data. Within the active round, the planted marker is orange, turns gray on `defused`, and red on `exploded`. The global context-menu handler suppresses the WebView menu for right-click interactions.
 
 The 3D bomb marker has billboarded world-space status text: an orange whole-second explosion countdown after planting, a blue kit-aware defuse countdown while a living CT is actively defusing, and blue/red terminal messages after defuse/explosion. Label canvas-size changes replace the Three.js texture instead of mutating its dimensions in place, preventing the prior countdown texture from stretching when terminal text appears. Free-camera forward/backward movement follows the camera's complete view vector, including pitch, while strafing uses the camera's local right vector.
@@ -144,9 +148,11 @@ The 3D bomb marker has billboarded world-space status text: an orange whole-seco
 - Types: `running`, `jump`, `shooting`, `falling`, `weapon_drop`, `utility_drop`, `c4_drop`, `weapon_reload`.
 - Empty/`sound`/`footstep` values normalize to `running`; unknown types stay hidden.
 - `Show Noise Circle` is the master toggle; source filters default on; selected-player mode filters by Steam ID.
+- `Show CT Circle` and `Show T Circle` default on and independently filter both replay views by the noise source's recorded team; they are disabled while the master toggle is off.
 - Noise has a dedicated transparent canvas below players. Checkbox changes redraw only this layer.
 - Noise events are sorted once. Rendering binary-searches to the earliest event whose lifetime can overlap the current tick.
 - Running follows the current player position with a short hold/fade. Shooting/reload follow the current player. Jump, fall, and drops remain at event origin.
+- In 3D, the same settings and event lifetimes render flat ground circles using the recorded world radius, colored orange for T and blue for CT, including weapon, utility, and C4 drop noises. Transparency is independently adjustable from 0% to 100% in 1% steps and defaults to 85%.
 
 ### Utility and effects
 
