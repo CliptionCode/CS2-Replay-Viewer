@@ -2,6 +2,11 @@
 
 An open-source 2D and 3D viewer (3D is available from Version 0.2.x) for Counter-Strike 2 replay demos. Load a `.dem` file to replay rounds on an interactive radar or directly inside extracted CS2 map geometry, inspect player movement and utility, and quickly jump to the moments that matter.
 
+> [!IMPORTANT]
+> **The 3D View requires at least 8 GB of free (currently available) system RAM.** This is a mandatory requirement—not simply a recommendation—because the application must load and process the CS2 map data, geometry, textures, and replay data. Having 8 GB of RAM installed is not sufficient if less than 8 GB is available when opening the 3D View. Close other memory-intensive applications before using it.
+>
+> **Expect the application to use approximately 2 GB of RAM even in 2D mode** (increased from approximately 500 MB). Data required by the 3D View is preloaded while using the 2D View so that switching to 3D is significantly faster. The 2D View does not require 8 GB of free RAM, but its normal memory usage now includes this preload.
+
 ## Screenshots
 
 ### Welcome screen
@@ -83,6 +88,8 @@ Draw routes, callouts, positions, and tactical plans directly on the replay rada
 
 ### 2D and 3D views
 
+- **Mandatory 3D View requirement:** At least **8 GB of free system RAM** must be available before opening the 3D View so the viewer can load and process the map data, geometry, textures, and replay data.
+- Expect approximately **2 GB of application RAM usage even in 2D mode**, rather than the previous approximately 500 MB, because data is preloaded to make switching to the 3D View significantly faster.
 - Switch between the existing 2D radar and an interactive 3D map without changing the current round, timeline, playback position, or selected player.
 - Select the `steamapps\common\Counter-Strike Global Offensive` installation folder once; the validated path is kept in the local settings database for later sessions, and the viewer resolves `game\csgo\maps` itself.
 - Extract only the map used by the loaded replay and stream its Source 2 geometry and textures from a versioned local cache. Completed caches are reused in later sessions, while interrupted extractions are never treated as valid.
