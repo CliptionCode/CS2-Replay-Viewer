@@ -208,6 +208,7 @@ func convertFlash(f *parser.FlashEvent) *pb.FlashEvent {
 		AttackerSteamId: f.AttackerSteamID,
 		DurationSeconds: f.DurationSeconds,
 		EndTick:         int32(f.EndTick),
+		MaxAlpha:        f.MaxAlpha,
 	}
 }
 

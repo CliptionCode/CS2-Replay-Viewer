@@ -142,6 +142,7 @@ type FlashEvent struct {
 	AttackerSteamID uint64
 	DurationSeconds float32
 	EndTick         int
+	MaxAlpha        float32
 }
 
 type NoiseEvent struct {
@@ -922,12 +923,20 @@ func (r *frameRecorder) recordPlayerFlashed(e events.PlayerFlashed, p demoinfocs
 		attackerSteamID = e.Attacker.SteamID64
 	}
 
+	maxAlpha := float32(0)
+	if pawn := e.Player.PlayerPawnEntity(); pawn != nil {
+		if value, ok := pawn.PropertyValue("m_flFlashMaxAlpha"); ok {
+			maxAlpha = value.Float()
+		}
+	}
+
 	r.flashes = append(r.flashes, FlashEvent{
 		Tick:            tick,
 		PlayerSteamID:   e.Player.SteamID64,
 		AttackerSteamID: attackerSteamID,
 		DurationSeconds: durationSeconds,
 		EndTick:         tick + secondsToTicks(float64(durationSeconds), p),
+		MaxAlpha:        maxAlpha,
 	})
 }
 

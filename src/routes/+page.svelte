@@ -3561,7 +3561,7 @@ onMount(() => {
                 }
             }}
             onkeydown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
+                if (e.key === 'Enter') {
                     e.preventDefault();
                     e.currentTarget.click();
                 }

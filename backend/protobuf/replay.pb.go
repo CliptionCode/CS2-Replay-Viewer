@@ -1068,6 +1068,7 @@ type FlashEvent struct {
 	AttackerSteamId uint64                 `protobuf:"varint,3,opt,name=attacker_steam_id,json=attackerSteamId,proto3" json:"attacker_steam_id,omitempty"`
 	DurationSeconds float32                `protobuf:"fixed32,4,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`
 	EndTick         int32                  `protobuf:"varint,5,opt,name=end_tick,json=endTick,proto3" json:"end_tick,omitempty"`
+	MaxAlpha        float32                `protobuf:"fixed32,6,opt,name=max_alpha,json=maxAlpha,proto3" json:"max_alpha,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1133,6 +1134,13 @@ func (x *FlashEvent) GetDurationSeconds() float32 {
 func (x *FlashEvent) GetEndTick() int32 {
 	if x != nil {
 		return x.EndTick
+	}
+	return 0
+}
+
+func (x *FlashEvent) GetMaxAlpha() float32 {
+	if x != nil {
+		return x.MaxAlpha
 	}
 	return 0
 }
@@ -1656,14 +1664,15 @@ const file_replay_proto_rawDesc = "" +
 	"\n" +
 	"velocity_z\x18\x17 \x01(\x02R\tvelocityZ\x12\x12\n" +
 	"\x04team\x18\x18 \x01(\x05R\x04team\x12$\n" +
-	"\x0ehas_defuse_kit\x18\x19 \x01(\bR\fhasDefuseKit\"\xba\x01\n" +
+	"\x0ehas_defuse_kit\x18\x19 \x01(\bR\fhasDefuseKit\"\xd7\x01\n" +
 	"\n" +
 	"FlashEvent\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12&\n" +
 	"\x0fplayer_steam_id\x18\x02 \x01(\x04R\rplayerSteamId\x12*\n" +
 	"\x11attacker_steam_id\x18\x03 \x01(\x04R\x0fattackerSteamId\x12)\n" +
 	"\x10duration_seconds\x18\x04 \x01(\x02R\x0fdurationSeconds\x12\x19\n" +
-	"\bend_tick\x18\x05 \x01(\x05R\aendTick\"\xb7\x01\n" +
+	"\bend_tick\x18\x05 \x01(\x05R\aendTick\x12\x1b\n" +
+	"\tmax_alpha\x18\x06 \x01(\x02R\bmaxAlpha\"\xb7\x01\n" +
 	"\n" +
 	"NoiseEvent\x12\x12\n" +
 	"\x04tick\x18\x01 \x01(\x05R\x04tick\x12\x19\n" +

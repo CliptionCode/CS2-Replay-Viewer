@@ -126,6 +126,7 @@ message FlashEvent {
   uint64 attacker_steam_id = 3;
   float duration_seconds = 4;
   int32 end_tick = 5;
+  float max_alpha = 6;
 }
 
 message NoiseEvent {

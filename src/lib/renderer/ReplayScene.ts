@@ -18,6 +18,8 @@ import {
   LoadingManager,
   Mesh,
   MeshBasicMaterial,
+  NoBlending,
+  NormalBlending,
   PerspectiveCamera,
   PlaneGeometry,
   Raycaster,
@@ -84,6 +86,9 @@ const COLLIDER_CELL_SIZE_METERS = 12;
 const MAX_CELLS_PER_COLLIDER = 512;
 const MOUSE_LOOK_SENSITIVITY = 0.0022;
 const MAX_FULL_FLASH_DURATION_SECONDS = 5;
+const MAX_FLASH_ALPHA = 255;
+const FULL_FLASH_INTENSITY_THRESHOLD = 0.99;
+const FIRST_PERSON_FLASH_FADE_START_RATIO = 0.6;
 const PLAYER_FLASH_SHEET_WIDTH = 0.82;
 const PLAYER_FLASH_SHEET_HEIGHT = 0.52;
 const PLAYER_FLASH_SHEET_DISTANCE = 0.58;
@@ -141,6 +146,11 @@ interface UtilityVisual {
 
 interface NoiseVisual {
   circle: Mesh<CircleGeometry, MeshBasicMaterial>;
+}
+
+interface FlashVisibility {
+  initialIntensity: number;
+  remainingRatio: number;
 }
 
 export class ReplayScene {
@@ -705,15 +715,32 @@ export class ReplayScene {
 
     const selectedVisual = this.selectedPlayer === null ? null : this.playerVisuals.get(this.selectedPlayer);
     const opacity = this.cameraMode === 'player' && this.selectedPlayer !== null && selectedVisual?.alive
-      ? this.flashOpacityAt(this.selectedPlayer)
+      ? this.firstPersonFlashOpacityAt(this.selectedPlayer)
       : 0;
-    this.firstPersonFlashOverlay.material.opacity = opacity;
+    const material = this.firstPersonFlashOverlay.material;
+    material.opacity = opacity;
+    material.blending = opacity >= 1 ? NoBlending : NormalBlending;
     this.firstPersonFlashOverlay.visible = opacity > 0;
   }
 
   private flashOpacityAt(steamId: bigint): number {
+    const visibility = this.flashVisibilityAt(steamId);
+    return visibility ? visibility.initialIntensity * visibility.remainingRatio : 0;
+  }
+
+  private firstPersonFlashOpacityAt(steamId: bigint): number {
+    const visibility = this.flashVisibilityAt(steamId);
+    if (!visibility) return 0;
+    if (visibility.initialIntensity < FULL_FLASH_INTENSITY_THRESHOLD) {
+      return visibility.initialIntensity * visibility.remainingRatio;
+    }
+    if (visibility.remainingRatio >= FIRST_PERSON_FLASH_FADE_START_RATIO) return 1;
+    return visibility.remainingRatio / FIRST_PERSON_FLASH_FADE_START_RATIO;
+  }
+
+  private flashVisibilityAt(steamId: bigint): FlashVisibility | null {
     const events = this.flashEventsBySteamId.get(steamId);
-    if (!events?.length) return 0;
+    if (!events?.length) return null;
     let low = 0;
     let high = events.length;
     while (low < high) {
@@ -722,10 +749,12 @@ export class ReplayScene {
       else high = middle;
     }
     const flash = events[low - 1];
-    if (!flash || flash.endTick <= flash.tick || this.tick >= flash.endTick) return 0;
+    if (!flash || flash.endTick <= flash.tick || this.tick >= flash.endTick) return null;
     const remainingRatio = Math.max(0, Math.min(1, (flash.endTick - this.tick) / (flash.endTick - flash.tick)));
-    const initialIntensity = Math.max(0, Math.min(1, flash.durationSeconds / MAX_FULL_FLASH_DURATION_SECONDS));
-    return initialIntensity * remainingRatio;
+    const durationIntensity = flash.durationSeconds / MAX_FULL_FLASH_DURATION_SECONDS;
+    const recordedIntensity = flash.maxAlpha > 0 ? flash.maxAlpha / MAX_FLASH_ALPHA : durationIntensity;
+    const initialIntensity = Math.max(0, Math.min(1, recordedIntensity));
+    return { initialIntensity, remainingRatio };
   }
 
   private updateNoises(): void {

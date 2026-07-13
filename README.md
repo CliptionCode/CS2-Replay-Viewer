@@ -75,6 +75,7 @@ Draw routes, callouts, positions, and tactical plans directly on the replay rada
 
 ### Welcome and project support
 
+- Use all core replay features without an internet connection after installing the application. Three.js, fonts, icons, the demo parser, and the map extractor are packaged with the app; 3D maps are extracted from the selected local CS2 installation. Opening the optional PayPal donation page still requires internet access.
 - Open the PayPal donation page directly from the Welcome screen to support continued development.
 
 ### Replay navigation
@@ -94,7 +95,8 @@ Draw routes, callouts, positions, and tactical plans directly on the replay rada
 - Select the `steamapps\common\Counter-Strike Global Offensive` installation folder once; the validated path is kept in the local settings database for later sessions, and the viewer resolves `game\csgo\maps` itself.
 - Extract only the map used by the loaded replay and stream its Source 2 geometry and textures from a versioned local cache. Completed caches are reused in later sessions, while interrupted extractions are never treated as valid.
 - Select players from the roster, by shortcut, or directly in the 3D scene to enter their recorded eye view.
-- Experience recorded flashes in first person: a full flash covers the entire 3D view in white, then fades as the player's vision returns. In free-camera mode, a fading white sheet in front of each flashed player indicates their obstructed vision.
+- Experience recorded flashes in first person using CS2's recorded maximum flash alpha: a full value of 255 keeps the entire 3D view at true 0%-transparency white during its initial fully flashed phase, then fades as the player's vision returns. In free-camera mode, a fading white sheet in front of each flashed player indicates their obstructed vision.
+- Read flash strength accurately in 2D from each player's gray flash circle, which uses CS2's recorded maximum flash alpha and fades completely away with the effect.
 - Move the free camera with editable, database-backed <kbd>W</kbd>, <kbd>A</kbd>, <kbd>S</kbd>, and <kbd>D</kbd> defaults. Movement speed starts at 36, and movement and mouse-wheel zoom speed remain configurable from the 3D-only Camera panel.
 - Keep 3D line of sight enabled by default with a starting length of 650 and 50% transparency. Configure its real beam width from 1–50, length up to 1100, and transparency while retaining the full existing Sight panel in 2D mode.
 - Follow thrown utility along its recorded per-tick 3D arc and wall/floor bounces, with box-shaped utility shown vertically, without changing the established 2D utility rendering.

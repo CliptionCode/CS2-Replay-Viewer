@@ -65,7 +65,7 @@ const HIGHLIGHT_COLOR = '#22c55e';
 const RUNNING_NOISE_HOLD_TICKS = 28;
 const RUNNING_NOISE_FADE_TICKS = 14;
 const MAX_FULL_FLASH_DURATION_SECONDS = 5;
-const MIN_FLASH_ALPHA = 0.06;
+const MAX_FLASH_ALPHA = 255;
 const DEATH_ICON_PATH = equipmentIconPath('icon-death.svg');
 const DEATH_ICON_SIZE = 18;
 const UTILITY_ICON_SIZE = 13;
@@ -556,8 +556,10 @@ function drawFlashCircle(
 
     const totalTicks = Math.max(1, flash.endTick - flash.tick);
     const remainingRatio = Math.max(0, Math.min(1, (flash.endTick - tick) / totalTicks));
-    const flashIntensity = Math.max(0, Math.min(1, flash.durationSeconds / MAX_FULL_FLASH_DURATION_SECONDS));
-    const alpha = Math.max(MIN_FLASH_ALPHA, flashIntensity * remainingRatio);
+    const durationIntensity = flash.durationSeconds / MAX_FULL_FLASH_DURATION_SECONDS;
+    const recordedIntensity = flash.maxAlpha > 0 ? flash.maxAlpha / MAX_FLASH_ALPHA : durationIntensity;
+    const flashIntensity = Math.max(0, Math.min(1, recordedIntensity));
+    const alpha = flashIntensity * remainingRatio;
     if (alpha <= 0) return;
 
     ctx.save();

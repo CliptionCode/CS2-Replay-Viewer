@@ -2,7 +2,7 @@
 
 Compact implementation context for future Codex work.
 
-> **Application version:** `0.2.2`. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application entry in `src-tauri/Cargo.lock` synchronized.
+> **Application version:** `0.2.3`. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application entry in `src-tauri/Cargo.lock` synchronized.
 
 ## Mandatory workflow
 
@@ -67,6 +67,8 @@ The 3D path is additive: `<map>.vpk` → bundled ValveResourceFormat CLI → ver
 
 `pnpm tauri dev` and `pnpm tauri build` run the idempotent `ensure:extractor` step before the frontend command. It provisions the pinned ValveResourceFormat Windows CLI plus every required native DLL into `tools/source2viewer`; Tauri bundles that directory as application resources. Runtime must never ask end users to install the extractor themselves.
 
+Installed releases support offline replay viewing. Vite bundles Three.js, its GLTF loader, Svelte, protobuf support, and the other frontend modules into the local application output; Tauri bundles the parser sidecar and map extractor; icons, radar images, Inter, and JetBrains Mono are shipped as local static assets. `src/app.html` must not introduce runtime CDN, remote font, or remote module dependencies. The PayPal donation action is the only intentional user-triggered web navigation and naturally requires a connection.
+
 The active frontend is SvelteKit and starts at `src/routes/+page.svelte`. There is no standalone `App.svelte` entry point. Rendering layers are:
 
 | Layer | Component | Purpose |
@@ -100,7 +102,9 @@ Living players in the 3D scene have billboarded labels above their health bars. 
 
 The 3D scene renders ownerless weapons, utilities, C4, and defuse kits as billboarded equipment SVGs at their exact recorded positions. The same Weapons, Utility, C4, and Defuse Kit visibility settings control the 2D and 3D representations, and the 3D path applies the same tick, round, and old-data carryover filtering as the 2D layer. Dropped weapon SVGs are 10% larger in 3D than the other dropped-equipment icons.
 
-3D flash visibility uses the existing per-player flash event duration. A selected player's first-person camera receives a screen-filling white overlay whose opacity starts at the recorded flash intensity, fully covers the view for a full flash, and fades to clear at the event end tick. In free-camera mode, each living flashed player has a thin white plane positioned in front of their recorded eye direction with the same fading opacity.
+3D flash visibility uses each flash event's recorded `m_flFlashMaxAlpha` and duration. A selected player's first-person camera receives a screen-filling white overlay whose opacity starts at the recorded max alpha. A full-intensity value of 255 disables blending so the initial fully flashed phase is true opaque white, then normal alpha blending fades the overlay to clear at the event end tick. Partial flashes keep their recorded alpha-and-time fade, and older protobuf data without max alpha falls back to duration-derived intensity. In free-camera mode, each living flashed player has a thin white plane positioned in front of their recorded eye direction with the original fading opacity. Reparse the original `.dem` to populate max alpha in replay data created before this field existed.
+
+The 2D player layer uses the same recorded max alpha for each gray flash circle around an affected player, multiplied by the remaining event ratio. The circle fades all the way to transparent without an artificial minimum opacity. Older protobuf data without max alpha uses the same duration-derived compatibility fallback as 3D.
 
 The Noise panel controls both replay views. Default-on `Show CT Circle` and `Show T Circle` checkboxes independently filter noise by the source player's team at the event tick in both 2D and 3D; both controls are disabled while the master `Show Noise Circle` checkbox is off. In 3D, enabled noise events render as flat ground circles scaled to the recorded world radius and colored orange for T and blue for CT. A 3D-only Noise Transparency slider appears under Noise visibility, ranges from 0% to 100% in 1% steps, and defaults to 85%. Running follows the current player with the established hold/fade behavior, shooting and reload noises follow the player during their event, and jump, fall, weapon-drop, utility-drop, and C4-drop circles remain at the recorded event origin. The selected-player and per-source filters are shared with 2D. Active 3D circles use a reusable visual pool rather than permanent meshes per event.
 
@@ -170,6 +174,7 @@ The 3D bomb marker has billboarded world-space status text: an orange whole-seco
 - Map wheel zoom targets the pointer without selection; with selection it changes follow zoom.
 - Hold the editable keyboard-only Drawing Setup shortcut and drag either mouse button to draw. Shift is the default; releasing the shortcut finalizes the stroke.
 - Timeline event single-click seeks with a lead-in; double-click copies `demo_goto`.
+- A focused timeline track must not handle Space as a synthetic click. Space must bubble to the global shortcut handler so the editable Play/Pause shortcut cannot reset playback to the round start.
 
 ### Toolbar and shortcuts
 
@@ -214,5 +219,7 @@ Describe visible outcomes, not source files, internal types, parser implementati
 - Serialization: Protocol Buffers / `@bufbuild/protobuf`
 - Desktop shell: Tauri v2
 - UI: Svelte 5 / SvelteKit / Vite
+- 3D rendering: Three.js, compiled into the local Vite application bundle
+- Fonts: local variable Inter and JetBrains Mono files under `static/fonts`, with their OFL license texts
 - Radar assets: MurkyYT `cs2-map-icons`
 - Equipment SVGs: Juknum `counter-strike-icons`, stored under `static/equipment-icons`
