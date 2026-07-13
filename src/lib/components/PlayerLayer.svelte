@@ -12,6 +12,7 @@ export let mapMetadata: MapMetadata;
 export let isPlaying: boolean = false;
 export let sightConeLength: number = 75;
 export let sightConeHalfAngle: number = 0.68;
+export let sightConeTransparencyPercent = 84;
 export let showSightCone = true;
 export let sightConeForSelectedPlayer = false;
 export let showLineOfSight = false;
@@ -493,7 +494,8 @@ function drawPlayerSightCone(
     const tipY = pos.y + Math.sin(angle) * (coneLength + 4);
 
     ctx.save();
-    ctx.fillStyle = hexToRgba(color, 0.16);
+    const fillOpacity = 1 - Math.max(0, Math.min(100, sightConeTransparencyPercent)) / 100;
+    ctx.fillStyle = hexToRgba(color, fillOpacity);
     ctx.strokeStyle = hexToRgba(color, 0.88);
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -662,19 +664,26 @@ function getBombEventsForRound(round: { startTick: number; endTick: number }): {
         .sort((a, b) => a.tick - b.tick);
 }
 
-function getActiveBombPlant(tick: number): { x: number; y: number } | null {
+function getActiveBombPlant(tick: number): { x: number; y: number; plantTick: number } | null {
     const round = getCurrentRoundData(tick);
     if (!round) return null;
 
-    const planted = getBombEventsForRound(round)
+    const events = getBombEventsForRound(round);
+    const planted = events
         .filter(event => event.eventType === 'planted' && event.tick <= tick)
         .pop();
     if (!planted || planted.playerSteamId === 0n) return null;
+    const terminal = events.find(event =>
+        (event.eventType === 'defused' || event.eventType === 'exploded') &&
+        event.tick >= planted.tick &&
+        event.tick <= tick
+    );
+    if (terminal) return null;
 
     const planterFrame = getPlayerFrameAtOrBefore(planted.playerSteamId, planted.tick);
     if (!planterFrame) return null;
 
-    return { x: planterFrame.x, y: planterFrame.y };
+    return { x: planterFrame.x, y: planterFrame.y, plantTick: planted.tick };
 }
 
 function drawBombDot(
@@ -687,6 +696,11 @@ function drawBombDot(
     if (!bombPosition) return;
 
     const pos = worldToCanvas(bombPosition.x, bombPosition.y, mapMetadata, canvasSize);
+    const tickRate = replayData?.header?.tickRate || 64;
+    const bombTimeSeconds = replayData?.header?.bombTimeSeconds || 40;
+    const explosionTick = bombPosition.plantTick + Math.round(bombTimeSeconds * tickRate);
+    const secondsLeft = Math.max(0, Math.ceil((explosionTick - tick) / tickRate));
+    const bombLabel = `Bomb ${secondsLeft}s`;
 
     ctx.save();
     ctx.textAlign = 'center';
@@ -695,8 +709,8 @@ function drawBombDot(
     ctx.strokeStyle = 'rgba(15, 23, 42, 0.9)';
     ctx.fillStyle = '#ef4444';
     ctx.font = '800 12px Inter, sans-serif';
-    ctx.strokeText('Bomb', pos.x, pos.y - 10);
-    ctx.fillText('Bomb', pos.x, pos.y - 10);
+    ctx.strokeText(bombLabel, pos.x, pos.y - 10);
+    ctx.fillText(bombLabel, pos.x, pos.y - 10);
     ctx.beginPath();
     ctx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
     ctx.fillStyle = '#ef4444';
@@ -1143,7 +1157,7 @@ $: {
 }
 
 $: {
-    void sightConeLength, sightConeHalfAngle, showSightCone, sightConeForSelectedPlayer, showLineOfSight, lineOfSightLength, lineOfSightWidth;
+    void sightConeLength, sightConeHalfAngle, sightConeTransparencyPercent, showSightCone, sightConeForSelectedPlayer, showLineOfSight, lineOfSightLength, lineOfSightWidth;
     if (browser && sightCtx) {
         scheduleSightRender();
     }

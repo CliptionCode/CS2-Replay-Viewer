@@ -224,7 +224,9 @@ export class ReplayScene {
   private zoomSpeed = 1;
   private movementKeys = { forward: 'KeyW', left: 'KeyA', backward: 'KeyS', right: 'KeyD' };
   private pointerStart: { x: number; y: number } | null = null;
+  private pointerTravelDistance = 0;
   private onPlayerSelect: ((steamId: bigint) => void) | null = null;
+  private onCameraMovement: (() => void) | null = null;
   private readonly firstPersonFlashOverlay: Mesh<PlaneGeometry, MeshBasicMaterial>;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
@@ -264,6 +266,7 @@ export class ReplayScene {
     window.addEventListener('keyup', this.handleKeyUp);
     window.addEventListener('blur', this.clearInputState);
     window.addEventListener('pointerup', this.handlePointerUp);
+    document.addEventListener('pointerlockchange', this.handlePointerLockChange);
     canvas.addEventListener('pointerdown', this.handlePointerDown);
     canvas.addEventListener('pointermove', this.handlePointerMove);
     canvas.addEventListener('wheel', this.handleWheel, { passive: false });
@@ -278,9 +281,12 @@ export class ReplayScene {
     window.removeEventListener('keyup', this.handleKeyUp);
     window.removeEventListener('blur', this.clearInputState);
     window.removeEventListener('pointerup', this.handlePointerUp);
+    document.removeEventListener('pointerlockchange', this.handlePointerLockChange);
     this.canvas.removeEventListener('pointerdown', this.handlePointerDown);
     this.canvas.removeEventListener('pointermove', this.handlePointerMove);
     this.canvas.removeEventListener('wheel', this.handleWheel);
+    if (document.pointerLockElement === this.canvas) document.exitPointerLock();
+    this.canvas.style.cursor = '';
     this.disposeObject(this.players);
     this.disposeObject(this.utilities);
     this.disposeObject(this.droppedEquipment);
@@ -579,6 +585,10 @@ export class ReplayScene {
 
   setPlayerSelectHandler(handler: ((steamId: bigint) => void) | null): void {
     this.onPlayerSelect = handler;
+  }
+
+  setCameraMovementHandler(handler: (() => void) | null): void {
+    this.onCameraMovement = handler;
   }
 
   private async loadPhysicsColliders(mapUrl: string): Promise<void> {
@@ -1550,6 +1560,9 @@ export class ReplayScene {
   private handleKeyDown = (event: KeyboardEvent): void => {
     const target = event.target as HTMLElement | null;
     if (target?.matches('input, select, button, textarea')) return;
+    if (this.cameraMode === 'player' && Object.values(this.movementKeys).includes(event.code)) {
+      this.onCameraMovement?.();
+    }
     this.pressedKeys.add(event.code);
   };
 
@@ -1560,15 +1573,19 @@ export class ReplayScene {
   private handlePointerDown = (event: PointerEvent): void => {
     if (this.cameraMode !== 'free' || event.button !== 0) return;
     this.pointerStart = { x: event.clientX, y: event.clientY };
+    this.pointerTravelDistance = 0;
     this.looking = true;
     this.lookEuler.setFromQuaternion(this.camera.quaternion, 'YXZ');
     this.canvas.setPointerCapture(event.pointerId);
+    this.canvas.style.cursor = 'none';
+    void this.canvas.requestPointerLock().catch(() => undefined);
     this.canvas.focus();
     event.preventDefault();
   };
 
   private handlePointerMove = (event: PointerEvent): void => {
     if (!this.looking || this.cameraMode !== 'free') return;
+    this.pointerTravelDistance += Math.hypot(event.movementX, event.movementY);
     this.lookEuler.y -= event.movementX * MOUSE_LOOK_SENSITIVITY;
     this.lookEuler.x -= event.movementY * MOUSE_LOOK_SENSITIVITY;
     this.lookEuler.x = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, this.lookEuler.x));
@@ -1580,18 +1597,32 @@ export class ReplayScene {
     const pointerStart = this.pointerStart;
     this.pointerStart = null;
     this.looking = false;
+    this.canvas.style.cursor = '';
+    if (document.pointerLockElement === this.canvas) document.exitPointerLock();
     if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
-    if (pointerStart && Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y) < 5) {
+    if (pointerStart && this.pointerTravelDistance < 5) {
       const rect = this.canvas.getBoundingClientRect();
       const pointer = new Vector2(
-        ((event.clientX - rect.left) / rect.width) * 2 - 1,
-        -((event.clientY - rect.top) / rect.height) * 2 + 1
+        ((pointerStart.x - rect.left) / rect.width) * 2 - 1,
+        -((pointerStart.y - rect.top) / rect.height) * 2 + 1
       );
       this.raycaster.setFromCamera(pointer, this.camera);
       const hit = this.raycaster.intersectObjects([...this.playerVisuals.values()].map((visual) => visual.body), false)[0];
       const steamId = hit?.object.userData.steamId;
       if (typeof steamId === 'bigint') this.onPlayerSelect?.(steamId);
     }
+  };
+
+  private handlePointerLockChange = (): void => {
+    if (document.pointerLockElement === this.canvas) {
+      if (!this.looking) document.exitPointerLock();
+      return;
+    }
+    if (!this.looking) return;
+    this.pointerStart = null;
+    this.pointerTravelDistance = 0;
+    this.looking = false;
+    this.canvas.style.cursor = '';
   };
 
   private handleWheel = (event: WheelEvent): void => {
@@ -1605,7 +1636,11 @@ export class ReplayScene {
 
   private clearInputState = (): void => {
     this.pressedKeys.clear();
+    this.pointerStart = null;
+    this.pointerTravelDistance = 0;
     this.looking = false;
+    this.canvas.style.cursor = '';
+    if (document.pointerLockElement === this.canvas) document.exitPointerLock();
   };
 
   private moveFreeCamera(deltaSeconds: number): void {

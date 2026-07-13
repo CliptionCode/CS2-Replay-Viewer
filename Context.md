@@ -2,7 +2,7 @@
 
 Compact implementation context for future Codex work.
 
-> **Application version:** `0.2.3`. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application entry in `src-tauri/Cargo.lock` synchronized.
+> **Application version:** `0.2.4`. Keep `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the application entry in `src-tauri/Cargo.lock` synchronized.
 
 ## Mandatory workflow
 
@@ -86,7 +86,7 @@ The active frontend is SvelteKit and starts at `src/routes/+page.svelte`. There 
 
 The 2D player-equipment icons use a dedicated transparent canvas inside `PlayerLayer`. Player-equipment checkbox changes must redraw only this lightweight overlay; they must not schedule the full trails, kills, bomb, noise, and sight render path.
 
-The loaded-replay workspace uses a compact left toolbar with Sight, Player, Noise, Timeline, Equipment, and Drawing sections. Only the selected section's controls render in the adjacent slide-out panel; selecting it again or using the panel's back button closes it. Donate is a direct toolbar action and opens the same PayPal page as the Welcome screen. Drawing is a 2D-only toolbar item and must not render or open by section shortcut in 3D.
+The loaded-replay workspace uses a compact left toolbar with Sight, Player, Noise, Timeline, Equipment, Drawing, and Settings sections. Only the selected section's controls render in the adjacent slide-out panel; selecting it again or using the panel's back button closes it. Settings uses a gear icon, stays available in both replay views, and follows Drawing in the 2D toolbar. Donate is a direct toolbar action and opens the same PayPal page as the Welcome screen. Drawing is a 2D-only toolbar item and must not render or open by section shortcut in 3D.
 
 The bottom View toggle defaults to 2D. In 3D, Camera is the first toolbar section and Sight contains only line-of-sight controls plus transparency. The existing timeline, roster, round navigation, playback controls, and roster shortcuts remain shared. `src/lib/renderer/ReplayScene.ts` owns the Three.js scene and `src/lib/maps/local-map.ts` owns the Tauri map commands.
 
@@ -98,6 +98,8 @@ Box-shaped 3D utility projectiles (Flashbang, Decoy, Molotov, and incendiary) us
 
 3D line of sight uses cylindrical mesh beams because platform WebGL implementations ignore native line widths. It is enabled by default with length 650 and 50% transparency; the 3D width range is 1–50 with step 1, and the length maximum is 1100. These 3D values are separate from the existing 2D line-of-sight values. The free-camera movement-speed default is 36. Initial W/A/S/D movement codes are written to the viewer-settings IndexedDB record on first startup and remain editable.
 
+Free-camera mouse look requests browser pointer lock while the left mouse button is held. The cursor is hidden and movement remains trapped in the 3D canvas until release; pointer capture remains the fallback if pointer lock is unavailable. Pressing any configured camera movement key while a player is selected clears that selection and returns to free-camera mode before applying the movement.
+
 Living players in the 3D scene have billboarded labels above their health bars. The lower label shows the selected weapon or utility and appends `(Reloading)` while the recorded frame reports an active reload. The player-name label sits above it and follows the current side color: orange for T and blue for CT. A screen-aligned SVG row above the player name shows carried utility, carried C4, and a CT's defuse kit according to the three default-on Player-panel visibility controls. Dead-player visuals do not show these labels or inventory icons.
 
 The 3D scene renders ownerless weapons, utilities, C4, and defuse kits as billboarded equipment SVGs at their exact recorded positions. The same Weapons, Utility, C4, and Defuse Kit visibility settings control the 2D and 3D representations, and the 3D path applies the same tick, round, and old-data carryover filtering as the 2D layer. Dropped weapon SVGs are 10% larger in 3D than the other dropped-equipment icons.
@@ -106,13 +108,23 @@ The 3D scene renders ownerless weapons, utilities, C4, and defuse kits as billbo
 
 The 2D player layer uses the same recorded max alpha for each gray flash circle around an affected player, multiplied by the remaining event ratio. The circle fades all the way to transparent without an artificial minimum opacity. Older protobuf data without max alpha uses the same duration-derived compatibility fallback as 3D.
 
+The 2D Sight panel has an independently persisted Sight Cone Transparency slider from 0% to 100% in 1% steps. Its default is 84%, matching the previous hard-coded `0.16` cone-fill opacity. It changes the filled cone area while retaining the established high-contrast outline.
+
 The Noise panel controls both replay views. Default-on `Show CT Circle` and `Show T Circle` checkboxes independently filter noise by the source player's team at the event tick in both 2D and 3D; both controls are disabled while the master `Show Noise Circle` checkbox is off. In 3D, enabled noise events render as flat ground circles scaled to the recorded world radius and colored orange for T and blue for CT. A 3D-only Noise Transparency slider appears under Noise visibility, ranges from 0% to 100% in 1% steps, and defaults to 85%. Running follows the current player with the established hold/fade behavior, shooting and reload noises follow the player during their event, and jump, fall, weapon-drop, utility-drop, and C4-drop circles remain at the recorded event origin. The selected-player and per-source filters are shared with 2D. Active 3D circles use a reusable visual pool rather than permanent meshes per event.
 
 Bomb protobuf events include world X/Y/Z. The parser captures the event player's position, while `ReplayScene` uses the planter's recorded frame as a compatibility fallback for older replay data. Within the active round, the planted marker is orange, turns gray on `defused`, and red on `exploded`. The global context-menu handler suppresses the WebView menu for right-click interactions.
 
-The 3D bomb marker has billboarded world-space status text: an orange whole-second explosion countdown after planting, a blue kit-aware defuse countdown while a living CT is actively defusing, and blue/red terminal messages after defuse/explosion. Label canvas-size changes replace the Three.js texture instead of mutating its dimensions in place, preventing the prior countdown texture from stretching when terminal text appears. Free-camera forward/backward movement follows the camera's complete view vector, including pitch, while strafing uses the camera's local right vector.
+The 3D bomb marker has billboarded world-space status text: an orange whole-second explosion countdown after planting, a blue kit-aware defuse countdown while a living CT is actively defusing, and blue/red terminal messages after defuse/explosion. The 2D planted-bomb marker includes the same header-aware whole-second explosion countdown in its label (`Bomb 34s`) and stops rendering after a recorded defuse or explosion. Label canvas-size changes replace the Three.js texture instead of mutating its dimensions in place, preventing the prior countdown texture from stretching when terminal text appears. Free-camera forward/backward movement follows the camera's complete view vector, including pitch, while strafing uses the camera's local right vector.
 
 `src/lib/shortcuts.ts` owns shortcut normalization and the IndexedDB-backed `shortcut_bindings` database. The database is the source of truth for both editable assignments and fixed reservations. `ShortcutBinding.svelte` is the shared add/edit/remove UI used by panel controls, playback controls, section headers, and roster slots. An assigned keycap is itself the edit button; only the remove icon remains beside it.
+
+`src/lib/settings.ts` owns the separate IndexedDB-backed viewer-settings record. It persists the CS2 path, camera bindings/speeds, every configurable checkbox and slider, source/timeline filters, equipment visibility, and drawing colors/mode across restarts. UI changes save automatically without a Save action. The reactive persistence block in `+page.svelte` observes every configurable value and uses a 150 ms trailing debounce, then flushes any pending latest value during teardown; shortcut assignments continue to write immediately through their separate database. The Settings panel exports a versioned JSON document containing normalized settings and shortcut records to a user-selected path. Import first validates the document, then a modal offers `Import Everything`, `Import only Shortcuts`, `Import only Settings`, or `Cancel Import`; camera movement keys belong to the shortcut partition even though they reside in the viewer-settings record. Locked system reservations are never replaced by imported data. The red-tinted `Restore Default Settings` action requires modal confirmation, then replaces every viewer value with `DEFAULT_VIEWER_SETTINGS` and restores the shipped editable and locked shortcut assignments.
+
+Settings transfer uses `readTextFile` and `writeTextFile`; the main-window capability must therefore include `fs:allow-read-text-file` and `fs:allow-write-text-file`. The file dialog dynamically scopes access to the user-selected import or export path. Keep the separate scoped `fs:allow-read-file` permission for parser protobuf files under `$TEMP`. Transfer failures log their technical details internally, while the visible toast remains non-technical and tells the user to choose another destination or a valid exported settings file.
+
+The build imports the root `RELEASE_NOTES.md` as bundled text for the Welcome-screen release-notes modal. The current Tauri application version is compared with a dedicated seen-version value in the settings database, so notes open automatically only once per version. Closing the modal records the version. `Release Notes...` on the Welcome screen reopens the same scrollable modal at any time.
+
+The Welcome-screen donation button is visually separated below the primary Load Demo and Release Notes actions. The current application version is shown persistently at the bottom center as `Version: <version>`, using Tauri's runtime version with the bundled release-notes version as its initial fallback. In the selective settings-import modal, `Import Everything` is green, `Import only Shortcuts` is orange, and `Import only Settings` remains blue; Cancel retains the neutral secondary treatment.
 
 ## Data and replay rules
 
@@ -164,6 +176,7 @@ The 3D bomb marker has billboarded world-space status text: an orange whole-seco
 - Inferno expiry events are authoritative because smoke can extinguish fire early.
 - Projectile destruction for Molotov/incendiary ends the projectile and must not start a second fire lifetime.
 - Nade trajectories are distance-retimed when raw timing is unreliable and reveal progressively.
+- Every 2D projectile, effect, and destination marker is scoped by its trajectory/throw origin to the current round. A prior-round smoke or other utility must never render after the next round starts, even if old data reports an overlapping fade lifetime.
 - Smoke/fire effects show icons and whole-second countdowns. Flash/HE/Decoy endpoints remain interactive briefly.
 - The 3D smoke effect radius is scaled to 90% of the recorded/default radius. The 2D smoke radius remains unchanged.
 
@@ -197,6 +210,7 @@ The 3D bomb marker has billboarded world-space status text: an orange whole-seco
 
 - `static/app-icon.png` is the browser favicon source.
 - Tauri bundle icons in `src-tauri/icons` are generated from the same two-cherry application logo.
+- The packaged Windows executable embeds `icons/icon.ico`, so shortcuts targeting the installed application inherit the Cherry logo. The NSIS installer and uninstaller explicitly use the same icon so setup branding does not fall back to the old blue icon.
 
 ## Release documentation
 

@@ -161,6 +161,67 @@ export async function removeShortcut(actionId: string): Promise<void> {
     }
 }
 
+export async function replaceShortcutRecords(importedRecords: readonly ShortcutRecord[]): Promise<ShortcutRecord[]> {
+    const recordsByAction = new Map<string, ShortcutRecord>();
+    const actionsByShortcut = new Map<string, string>();
+
+    for (const imported of importedRecords) {
+        if (
+            !imported ||
+            typeof imported.actionId !== 'string' ||
+            typeof imported.shortcut !== 'string' ||
+            typeof imported.label !== 'string' ||
+            !imported.actionId ||
+            !imported.shortcut ||
+            imported.locked ||
+            imported.actionId.startsWith('system.')
+        ) {
+            continue;
+        }
+        const duplicateAction = actionsByShortcut.get(imported.shortcut);
+        if (duplicateAction && duplicateAction !== imported.actionId) {
+            throw new Error(`The imported shortcut ${imported.shortcut} is assigned more than once`);
+        }
+        actionsByShortcut.set(imported.shortcut, imported.actionId);
+        recordsByAction.set(imported.actionId, {
+            actionId: imported.actionId,
+            shortcut: imported.shortcut,
+            label: imported.label,
+            locked: false,
+            updatedAt: Date.now(),
+        });
+    }
+
+    for (const locked of LOCKED_SHORTCUTS) {
+        const conflictingAction = actionsByShortcut.get(locked.shortcut);
+        if (conflictingAction) {
+            throw new Error(`${locked.shortcut} is reserved for ${locked.label}`);
+        }
+    }
+
+    const database = await openShortcutDatabase();
+    try {
+        await seedShortcutDatabase(database);
+        const transaction = database.transaction(BINDINGS_STORE, 'readwrite');
+        const store = transaction.objectStore(BINDINGS_STORE);
+        store.clear();
+        for (const locked of LOCKED_SHORTCUTS) {
+            store.put({ ...locked, updatedAt: Date.now() });
+        }
+        for (const record of recordsByAction.values()) {
+            store.put(record);
+        }
+        await transactionDone(transaction);
+        return [...LOCKED_SHORTCUTS, ...recordsByAction.values()];
+    } finally {
+        database.close();
+    }
+}
+
+export async function restoreDefaultShortcutRecords(): Promise<ShortcutRecord[]> {
+    return replaceShortcutRecords([...DEFAULT_SHORTCUTS, DRAWING_DEFAULT_SHORTCUT]);
+}
+
 const MODIFIER_CODES = new Set([
     'ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRight', 'AltLeft', 'AltRight', 'CapsLock',
 ]);

@@ -76,6 +76,8 @@ Draw routes, callouts, positions, and tactical plans directly on the replay rada
 ### Welcome and project support
 
 - Use all core replay features without an internet connection after installing the application. Three.js, fonts, icons, the demo parser, and the map extractor are packaged with the app; 3D maps are extracted from the selected local CS2 installation. Opening the optional PayPal donation page still requires internet access.
+- See the Cherry application logo on installed Windows shortcuts as well as the taskbar and setup executable.
+- Read the current version's release notes in a scrollable Welcome-screen dialog shown once per version, and reopen them at any time with `Release Notes...`.
 - Open the PayPal donation page directly from the Welcome screen to support continued development.
 
 ### Replay navigation
@@ -94,10 +96,10 @@ Draw routes, callouts, positions, and tactical plans directly on the replay rada
 - Switch between the existing 2D radar and an interactive 3D map without changing the current round, timeline, playback position, or selected player.
 - Select the `steamapps\common\Counter-Strike Global Offensive` installation folder once; the validated path is kept in the local settings database for later sessions, and the viewer resolves `game\csgo\maps` itself.
 - Extract only the map used by the loaded replay and stream its Source 2 geometry and textures from a versioned local cache. Completed caches are reused in later sessions, while interrupted extractions are never treated as valid.
-- Select players from the roster, by shortcut, or directly in the 3D scene to enter their recorded eye view.
+- Select players from the roster, by shortcut, or directly in the 3D scene to enter their recorded eye view. Pressing any configured free-camera movement key while following a player immediately returns to the free camera.
 - Experience recorded flashes in first person using CS2's recorded maximum flash alpha: a full value of 255 keeps the entire 3D view at true 0%-transparency white during its initial fully flashed phase, then fades as the player's vision returns. In free-camera mode, a fading white sheet in front of each flashed player indicates their obstructed vision.
 - Read flash strength accurately in 2D from each player's gray flash circle, which uses CS2's recorded maximum flash alpha and fades completely away with the effect.
-- Move the free camera with editable, database-backed <kbd>W</kbd>, <kbd>A</kbd>, <kbd>S</kbd>, and <kbd>D</kbd> defaults. Movement speed starts at 36, and movement and mouse-wheel zoom speed remain configurable from the 3D-only Camera panel.
+- Move the free camera with editable, database-backed <kbd>W</kbd>, <kbd>A</kbd>, <kbd>S</kbd>, and <kbd>D</kbd> defaults. Movement speed starts at 36, and movement and mouse-wheel zoom speed remain configurable from the 3D-only Camera panel. Holding the left mouse button hides and locks the pointer inside the 3D view until release for uninterrupted camera look.
 - Keep 3D line of sight enabled by default with a starting length of 650 and 50% transparency. Configure its real beam width from 1–50, length up to 1100, and transparency while retaining the full existing Sight panel in 2D mode.
 - Follow thrown utility along its recorded per-tick 3D arc and wall/floor bounces, with box-shaped utility shown vertically, without changing the established 2D utility rendering.
 - Read each living player's team-colored name and currently selected weapon directly above their 3D health bar, including a `(Reloading)` suffix while a reload is active. A row of SVG icons above the name shows carried utility, C4 possession, and CT defuse-kit possession.
@@ -111,7 +113,7 @@ Draw routes, callouts, positions, and tactical plans directly on the replay rada
 
 ### Toolbar and custom shortcuts
 
-- Open Sight, Player, Noise, Timeline, Equipment, and Drawing controls from a compact icon-and-label toolbar on the left; select an open section again or use the panel's back button to close it. Drawing is available only in the 2D toolbar and is hidden in 3D.
+- Open Sight, Player, Noise, Timeline, Equipment, Drawing, and Settings controls from a compact icon-and-label toolbar on the left; select an open section again or use the panel's back button to close it. Drawing is available only in the 2D toolbar and is hidden in 3D, while the gear-shaped Settings item is available in both views.
 - See each assigned section shortcut as readable bracketed text directly on its toolbar item, with highlighting that always follows the currently open panel.
 - Open the PayPal support page directly from the toolbar's Donate item.
 - Assign, edit, and remove globally unique keyboard or mouse shortcuts for section headers, checkboxes, supported buttons, playback actions, map variants, and individual roster players. Replay-speed preset buttons remain direct click controls without shortcuts.
@@ -119,6 +121,9 @@ Draw routes, callouts, positions, and tactical plans directly on the replay rada
 - Use shortcuts while their control panel is closed. Player shortcuts belong to sorted CT/T roster positions rather than Steam IDs, so they stay on the same visible slot when teams switch sides and trigger the current occupant.
 - Click an assigned shortcut keycap to edit it directly; use the adjacent remove icon to clear it.
 - Keep shortcut assignments across sessions in the application's local database, with existing mouse-wheel zoom inputs protected from reassignment.
+- Keep every configurable checkbox, slider, filter, camera binding, and drawing color/mode in the local settings database across application restarts. Changes save automatically without a Save button; rapidly changing controls use a short trailing debounce so only the latest value is written.
+- Export all settings and shortcuts to a chosen JSON file, then import everything, only shortcuts, or only value settings through the Settings panel.
+- Restore the application to its first-install defaults from the Settings panel after confirming the red-tinted reset action; this resets saved values and shortcut assignments.
 - Press <kbd>Escape</kbd> while adding or editing any shortcut to cancel and preserve the previous assignment.
 
 ### Timeline and event review
@@ -134,9 +139,10 @@ Draw routes, callouts, positions, and tactical plans directly on the replay rada
 
 ### Tactical information
 
-- Adjust responsive player sight-cone and line-of-sight overlays without redrawing the full player layer.
+- Adjust responsive player sight-cone and line-of-sight overlays without redrawing the full player layer. The 2D Sight panel includes a 0–100% Sight Cone Transparency slider in 1% steps, defaulting to the previous 84% appearance.
 - Show responsive, independently filterable noise circles for running, shooting, jumping, falling, weapon drops, utility drops, C4 drops, and weapon reloads. Drop circles appear at the item's destination after it lands, including when the demo event omits weapon details.
-- Review grenade and utility activity directly on the map, including smoke/fire center icons and countdowns; Molotovs and incendiaries are hard-capped at 7 seconds and disappear sooner at their actual smoke-extinguished expiry time.
+- Review grenade and utility activity directly on the map, including smoke/fire center icons and countdowns; Molotovs and incendiaries are hard-capped at 7 seconds and disappear sooner at their actual smoke-extinguished expiry time. Utility is scoped to the round in which it was thrown and never carries into the next round.
+- Read the remaining whole seconds before explosion directly in the 2D planted-bomb marker, such as `Bomb 34s`.
 - Track living-player health accurately; dead CT players use a blue death icon, dead T players use an orange death icon, and neither shows a health bar.
 - See each living player's currently selected weapon or utility name, including a `(Reloading)` status for the full reload lifecycle, plus all remaining utility and carried C4 as stable icons above their name, including both carried Flashbangs when applicable. CT players with a defuse kit show the `defuser.svg` icon in both 2D and 3D. Default-on Player-panel checkboxes independently control utility, C4, and defuse-kit indicators.
 - Show exact parser-reported dropped weapon, utility, and ownerless C4 icons alongside death/pickup-tracked defuse-kit icons in both replay views through the current round's seven-second post-round window, with separate visibility checkboxes enabled by default and automatic clearing when another round is selected. Dropped weapon icons are 10% larger in 3D.

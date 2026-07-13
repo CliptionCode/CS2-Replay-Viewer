@@ -4,6 +4,7 @@ import { browser } from '$app/environment';
 import { worldToCanvas } from '$lib/canvas/transforms';
 import { equipmentIconPath } from '$lib/equipment-icons';
 import { getPlaybackTick, subscribePlaybackTick } from '$lib/playback-state';
+import { getRoundForTick } from '$lib/replay/rounds';
 import type { ReplayData, NadeEvent, NadeTrajectoryPoint, MapData as MapMetadata } from '$lib/types/replay/replay_pb';
 
 export let replayData: ReplayData | null = null;
@@ -633,13 +634,8 @@ function resizeCanvas(container: HTMLCanvasElement): { width: number; height: nu
 }
 
 function getCurrentRoundRange(tick: number): { startTick: number; endTick: number } | null {
-    if (!replayData?.rounds || replayData.rounds.length === 0) return null;
-    for (const round of replayData.rounds) {
-        if (tick >= round.startTick && tick <= round.endTick) {
-            return { startTick: round.startTick, endTick: round.endTick };
-        }
-    }
-    return null;
+    const round = getRoundForTick(replayData, tick);
+    return round ? { startTick: round.startTick, endTick: round.endTick } : null;
 }
 
 function getActiveNades(tick: number): NadeEvent[] {
@@ -789,13 +785,10 @@ function getNadeTimelineStartTick(nade: NadeEvent): number {
     return path[0]?.tick ?? getDetonationTick(nade);
 }
 
-function getNadeTimelineEndTick(nade: NadeEvent): number {
-    return Math.max(getCanonicalFadeTick(nade) || 0, getCanonicalDetonationTick(nade), getNadeTimelineStartTick(nade));
-}
-
 function isNadeInRoundRange(nade: NadeEvent, roundRange: { startTick: number; endTick: number } | null): boolean {
-    if (!roundRange) return true;
-    return getNadeTimelineStartTick(nade) <= roundRange.endTick && getNadeTimelineEndTick(nade) >= roundRange.startTick;
+    if (!roundRange) return false;
+    const originTick = getNadeTimelineStartTick(nade);
+    return originTick >= roundRange.startTick && originTick <= roundRange.endTick;
 }
 
 function render() {

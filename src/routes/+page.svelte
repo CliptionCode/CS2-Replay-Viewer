@@ -1,10 +1,12 @@
 <script lang="ts">
 import { onMount, tick as flushDom } from 'svelte';
 import { browser } from '$app/environment';
+import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
-import { readFile } from '@tauri-apps/plugin-fs';
-import { open } from '@tauri-apps/plugin-dialog';
+import { readFile, readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { create, fromBinary } from '@bufbuild/protobuf';
+import releaseNotesMarkdown from '../../RELEASE_NOTES.md?raw';
 import { ReplayDataSchema, MapDataSchema } from '$lib/types/replay/replay_pb';
 import type {
     BombEvent,
@@ -33,12 +35,15 @@ import {
     loadShortcutRecords,
     modifierShortcutFromKeyboardEvent,
     removeShortcut,
+    replaceShortcutRecords,
+    restoreDefaultShortcutRecords,
     shortcutBindingsStore,
     shortcutFromKeyboardEvent,
     shortcutFromMouseEvent,
     shortcutFromWheelEvent,
     shortcutForDisplay,
     type ShortcutConflict,
+    type ShortcutRecord,
 } from '$lib/shortcuts';
 import { DEFAULT_RADAR_MAP, getRadarInfo } from '$lib/maps/radar-info';
 import { ReplayScene } from '$lib/renderer/ReplayScene';
@@ -46,7 +51,10 @@ import { getMapStatus, mapSceneUrl, prepareMap, validateCs2Folder, type LocalMap
 import {
     DEFAULT_VIEWER_SETTINGS,
     keyCodeForDisplay,
+    loadLastSeenReleaseNotesVersion,
     loadViewerSettings,
+    normalizeViewerSettings,
+    saveLastSeenReleaseNotesVersion,
     saveViewerSettings,
     type CameraMovementDirection,
     type ViewerSettings,
@@ -120,6 +128,7 @@ const TEAM_CT_COLOR = '#3b82f6';
 const DEAD_PLAYER_COLOR = '#6b7280';
 const DEFAULT_SIGHT_CONE_LENGTH = 75;
 const DEFAULT_SIGHT_CONE_HALF_ANGLE = 0.68;
+const DEFAULT_SIGHT_CONE_TRANSPARENCY_PERCENT = 84;
 const EVENT_SEEK_LEAD_SECONDS = 2;
 const DEFAULT_LINE_OF_SIGHT_LENGTH = 300;
 const DEFAULT_LINE_OF_SIGHT_WIDTH = 1.6;
@@ -132,6 +141,7 @@ const MAP_PAN_MAP_PADDING = 0.25;
 const PLAYER_DOT_CLICK_RADIUS = 12;
 const DEFAULT_DRAWING_STROKE_WIDTH = 4;
 const DEFAULT_DRAWING_FADE_SECONDS = 3;
+const SETTINGS_SAVE_DEBOUNCE_MS = 150;
 const TOAST_DURATION_MS = 2600;
 const DEFAULT_BOMB_TIME_SECONDS = 40;
 const DEFAULT_PLANT_SECONDS = 3.2;
@@ -185,7 +195,7 @@ type ViewMode = '2d' | '3d';
 type NoiseSourceKey = typeof NOISE_SOURCE_OPTIONS[number]['key'];
 type TimelineUtilityKey = typeof TIMELINE_UTILITY_OPTIONS[number]['key'];
 type TimelineCombatEventKey = typeof TIMELINE_COMBAT_EVENT_OPTIONS[number]['key'];
-type ToolbarSectionKey = 'camera' | 'sight' | 'player' | 'noise' | 'timeline' | 'equipment' | 'drawing';
+type ToolbarSectionKey = 'camera' | 'sight' | 'player' | 'noise' | 'timeline' | 'equipment' | 'drawing' | 'settings';
 
 const TOOLBAR_SECTIONS: { key: ToolbarSectionKey; label: string }[] = [
     { key: 'camera', label: 'Camera' },
@@ -195,6 +205,7 @@ const TOOLBAR_SECTIONS: { key: ToolbarSectionKey; label: string }[] = [
     { key: 'timeline', label: 'Timeline' },
     { key: 'equipment', label: 'Equipment' },
     { key: 'drawing', label: 'Drawing' },
+    { key: 'settings', label: 'Settings' },
 ];
 
 const CAMERA_MOVEMENT_CONTROLS: { direction: CameraMovementDirection; label: string }[] = [
@@ -209,6 +220,8 @@ const SLIDER_SHORTCUT_ACTIONS = new Set([
     'sight.width.increase',
     'sight.length.decrease',
     'sight.length.increase',
+    'sight.transparency.decrease',
+    'sight.transparency.increase',
     'sight.los-width.decrease',
     'sight.los-width.increase',
     'sight.los-length.decrease',
@@ -232,6 +245,7 @@ const SLIDER_SHORTCUT_ACTIONS = new Set([
 let activeStart: number = 0;
 let sightConeLength = DEFAULT_SIGHT_CONE_LENGTH;
 let sightConeHalfAngle = DEFAULT_SIGHT_CONE_HALF_ANGLE;
+let sightConeTransparencyPercent = DEFAULT_SIGHT_CONE_TRANSPARENCY_PERCENT;
 let showSightCone = true;
 let sightConeForSelectedPlayer = false;
 let showLineOfSight = false;
@@ -248,6 +262,8 @@ let map3DLoading = false;
 let map3DLoadingText = 'Loading map…';
 let map3DError = '';
 let viewerSettings: ViewerSettings = structuredClone(DEFAULT_VIEWER_SETTINGS);
+let viewerSettingsLoaded = false;
+let viewerSettingsSaveTimeout: ReturnType<typeof setTimeout> | null = null;
 let cameraKeyCapture: CameraMovementDirection | null = null;
 let selectedPlayerZoomPercent = DEFAULT_SELECTED_PLAYER_ZOOM_PERCENT;
 let mouseViewportZoomScale = 1;
@@ -325,6 +341,11 @@ let activeToolbarSection: ToolbarSectionKey | null = null;
 let visibleToolbarSections = TOOLBAR_SECTIONS.filter(section => section.key !== 'camera');
 let shortcutBindings: Record<string, string> = {};
 let shortcutCaptureActionId: string | null = null;
+let pendingSettingsImport: SettingsTransferFile | null = null;
+let showRestoreDefaultsModal = false;
+let isRestoringDefaults = false;
+let showReleaseNotesModal = false;
+let currentAppVersion = /^#\s+CS2 Replay Viewer v([^\s]+)/m.exec(releaseNotesMarkdown)?.[1] ?? '';
 let pendingCaptureKeyboardShortcut: { code: string; shortcut: string } | null = null;
 const heldShortcutCodes = new Set<string>();
 let bombStatus: BombStatus = { bombText: '', bombClass: '', defuseText: '', defuseClass: '' };
@@ -386,6 +407,283 @@ type MatchScore = {
     left: MatchScoreSegment;
     right: MatchScoreSegment;
 };
+
+type SettingsTransferFile = {
+    format: 'cs2-replay-viewer-settings';
+    formatVersion: 1;
+    applicationVersion: string;
+    exportedAt: string;
+    settings: ViewerSettings;
+    shortcuts: ShortcutRecord[];
+};
+
+type ReleaseNotesBlock = {
+    type: 'heading' | 'paragraph' | 'list-item';
+    level?: number;
+    text: string;
+};
+
+const RELEASE_NOTES_BLOCKS = parseReleaseNotes(releaseNotesMarkdown);
+
+function applyViewerSettings(settings: ViewerSettings): void {
+    viewerSettings = normalizeViewerSettings(settings);
+    showSightCone = viewerSettings.showSightCone;
+    sightConeForSelectedPlayer = viewerSettings.sightConeForSelectedPlayer;
+    sightConeHalfAngle = viewerSettings.sightConeHalfAngle;
+    sightConeLength = viewerSettings.sightConeLength;
+    sightConeTransparencyPercent = viewerSettings.sightConeTransparencyPercent;
+    showLineOfSight = viewerSettings.showLineOfSight2D;
+    lineOfSightWidth = viewerSettings.lineOfSightWidth2D;
+    lineOfSightLength = viewerSettings.lineOfSightLength2D;
+    showLineOfSight3D = viewerSettings.showLineOfSight3D;
+    lineOfSightWidth3D = viewerSettings.lineOfSightWidth3D;
+    lineOfSightLength3D = viewerSettings.lineOfSightLength3D;
+    lineOfSightTransparency = viewerSettings.lineOfSightTransparency3D;
+    selectedPlayerZoomPercent = viewerSettings.selectedPlayerZoomPercent;
+    showPlayerUtilities = viewerSettings.showPlayerUtilities;
+    showPlayerC4 = viewerSettings.showPlayerC4;
+    showPlayerDefuseKit = viewerSettings.showPlayerDefuseKit;
+    showNoiseCircle = viewerSettings.showNoiseCircle;
+    noiseForSelectedPlayer = viewerSettings.noiseForSelectedPlayer;
+    showCtNoiseCircle = viewerSettings.showCtNoiseCircle;
+    showTNoiseCircle = viewerSettings.showTNoiseCircle;
+    noiseTransparencyPercent = viewerSettings.noiseTransparencyPercent;
+    enabledNoiseSources = { ...viewerSettings.enabledNoiseSources } as Record<NoiseSourceKey, boolean>;
+    showAllTimelineUtilities = viewerSettings.showAllTimelineUtilities;
+    enabledTimelineUtilities = { ...viewerSettings.enabledTimelineUtilities } as Record<TimelineUtilityKey, boolean>;
+    enabledTimelineCombatEvents = { ...viewerSettings.enabledTimelineCombatEvents } as Record<TimelineCombatEventKey, boolean>;
+    showDroppedWeapons = viewerSettings.showDroppedWeapons;
+    showDroppedUtility = viewerSettings.showDroppedUtility;
+    showDroppedC4 = viewerSettings.showDroppedC4;
+    showDroppedDefuseKit = viewerSettings.showDroppedDefuseKit;
+    leftDrawingColor = viewerSettings.leftDrawingColor;
+    rightDrawingColor = viewerSettings.rightDrawingColor;
+    drawingStrokeWidth = viewerSettings.drawingStrokeWidth;
+    drawingMode = viewerSettings.drawingMode;
+    drawingFadeSeconds = viewerSettings.drawingFadeSeconds;
+    apply3DSceneSettings();
+}
+
+function captureViewerSettings(): ViewerSettings {
+    return normalizeViewerSettings({
+        ...viewerSettings,
+        showSightCone,
+        sightConeForSelectedPlayer,
+        sightConeHalfAngle,
+        sightConeLength,
+        sightConeTransparencyPercent,
+        showLineOfSight2D: showLineOfSight,
+        lineOfSightWidth2D: lineOfSightWidth,
+        lineOfSightLength2D: lineOfSightLength,
+        showLineOfSight3D,
+        lineOfSightWidth3D,
+        lineOfSightLength3D,
+        lineOfSightTransparency3D: lineOfSightTransparency,
+        selectedPlayerZoomPercent,
+        showPlayerUtilities,
+        showPlayerC4,
+        showPlayerDefuseKit,
+        showNoiseCircle,
+        noiseForSelectedPlayer,
+        showCtNoiseCircle,
+        showTNoiseCircle,
+        noiseTransparencyPercent,
+        enabledNoiseSources,
+        showAllTimelineUtilities,
+        enabledTimelineUtilities,
+        enabledTimelineCombatEvents,
+        showDroppedWeapons,
+        showDroppedUtility,
+        showDroppedC4,
+        showDroppedDefuseKit,
+        leftDrawingColor,
+        rightDrawingColor,
+        drawingStrokeWidth,
+        drawingMode,
+        drawingFadeSeconds,
+    });
+}
+
+function scheduleViewerSettingsSave(): void {
+    if (!viewerSettingsLoaded) return;
+    if (viewerSettingsSaveTimeout) clearTimeout(viewerSettingsSaveTimeout);
+    viewerSettingsSaveTimeout = setTimeout(() => {
+        viewerSettingsSaveTimeout = null;
+        void saveViewerSettings(captureViewerSettings()).catch((error) => {
+            console.error('Failed to save viewer settings:', error);
+        });
+    }, SETTINGS_SAVE_DEBOUNCE_MS);
+}
+
+async function exportSettings(): Promise<void> {
+    try {
+        const exportPath = await save({
+            title: 'Export CS2 Replay Viewer Settings',
+            defaultPath: 'CS2-Replay-Viewer-Settings.json',
+            filters: [{ name: 'JSON settings', extensions: ['json'] }]
+        });
+        if (!exportPath) return;
+        const transfer: SettingsTransferFile = {
+            format: 'cs2-replay-viewer-settings',
+            formatVersion: 1,
+            applicationVersion: currentAppVersion,
+            exportedAt: new Date().toISOString(),
+            settings: captureViewerSettings(),
+            shortcuts: await loadShortcutRecords()
+        };
+        await writeTextFile(exportPath, `${JSON.stringify(transfer, null, 2)}\n`);
+        showToast('Settings and shortcuts exported');
+    } catch (error) {
+        console.error('Failed to export settings:', error);
+        showToast('Settings could not be exported. Please choose another folder and try again.');
+    }
+}
+
+async function chooseSettingsImport(): Promise<void> {
+    try {
+        const importPath = await open({
+            title: 'Import CS2 Replay Viewer Settings',
+            multiple: false,
+            directory: false,
+            filters: [{ name: 'JSON settings', extensions: ['json'] }]
+        });
+        if (typeof importPath !== 'string') return;
+        const parsed = JSON.parse(await readTextFile(importPath)) as Partial<SettingsTransferFile>;
+        if (
+            parsed.format !== 'cs2-replay-viewer-settings' ||
+            parsed.formatVersion !== 1 ||
+            !parsed.settings ||
+            !Array.isArray(parsed.shortcuts)
+        ) {
+            throw new Error('This is not a supported CS2 Replay Viewer settings file');
+        }
+        pendingSettingsImport = {
+            format: parsed.format,
+            formatVersion: parsed.formatVersion,
+            applicationVersion: typeof parsed.applicationVersion === 'string' ? parsed.applicationVersion : '',
+            exportedAt: typeof parsed.exportedAt === 'string' ? parsed.exportedAt : '',
+            settings: normalizeViewerSettings(parsed.settings),
+            shortcuts: parsed.shortcuts as ShortcutRecord[]
+        };
+    } catch (error) {
+        console.error('Failed to read imported settings:', error);
+        showToast('Settings could not be imported. Please choose a valid settings file and try again.');
+    }
+}
+
+async function confirmSettingsImport(mode: 'everything' | 'shortcuts' | 'settings'): Promise<void> {
+    const transfer = pendingSettingsImport;
+    if (!transfer) return;
+    try {
+        if (mode === 'everything' || mode === 'settings') {
+            applyViewerSettings(mode === 'settings'
+                ? { ...transfer.settings, cameraMovementKeys: { ...viewerSettings.cameraMovementKeys } }
+                : transfer.settings
+            );
+            viewerSettings = captureViewerSettings();
+            await saveViewerSettings(viewerSettings);
+        }
+        if (mode === 'everything' || mode === 'shortcuts') {
+            const records = await replaceShortcutRecords(transfer.shortcuts);
+            publishShortcutBindings(Object.fromEntries(records.map(record => [record.actionId, record.shortcut])));
+            if (mode === 'shortcuts') {
+                applyViewerSettings({
+                    ...captureViewerSettings(),
+                    cameraMovementKeys: { ...transfer.settings.cameraMovementKeys }
+                });
+                viewerSettings = captureViewerSettings();
+                await saveViewerSettings(viewerSettings);
+            }
+        }
+        pendingSettingsImport = null;
+        showToast(
+            mode === 'everything'
+                ? 'Settings and shortcuts imported'
+                : mode === 'shortcuts'
+                    ? 'Shortcuts imported'
+                    : 'Settings imported'
+        );
+    } catch (error) {
+        console.error('Failed to apply imported settings:', error);
+        showToast(error instanceof Error ? error.message : 'Could not apply imported settings');
+    }
+}
+
+async function restoreDefaultSettings(): Promise<void> {
+    if (isRestoringDefaults) return;
+    isRestoringDefaults = true;
+    try {
+        if (viewerSettingsSaveTimeout) {
+            clearTimeout(viewerSettingsSaveTimeout);
+            viewerSettingsSaveTimeout = null;
+        }
+        applyViewerSettings(structuredClone(DEFAULT_VIEWER_SETTINGS));
+        viewerSettings = captureViewerSettings();
+        await saveViewerSettings(viewerSettings);
+        const records = await restoreDefaultShortcutRecords();
+        publishShortcutBindings(Object.fromEntries(records.map(record => [record.actionId, record.shortcut])));
+        showRestoreDefaultsModal = false;
+        showToast('Default settings restored');
+    } catch (error) {
+        console.error('Failed to restore default settings:', error);
+        showToast('Could not restore default settings');
+    } finally {
+        isRestoringDefaults = false;
+    }
+}
+
+function parseReleaseNotes(markdown: string): ReleaseNotesBlock[] {
+    const cleanText = (text: string) => text
+        .replace(/\*\*(.*?)\*\*/g, '$1')
+        .replace(/`([^`]+)`/g, '$1')
+        .trim();
+    const blocks: ReleaseNotesBlock[] = [];
+    for (const rawLine of markdown.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        const heading = /^(#{1,4})\s+(.+)$/.exec(line);
+        if (heading) {
+            blocks.push({ type: 'heading', level: heading[1].length, text: cleanText(heading[2]) });
+            continue;
+        }
+        const listItem = /^-\s+(.+)$/.exec(line);
+        if (listItem) {
+            blocks.push({ type: 'list-item', text: cleanText(listItem[1]) });
+            continue;
+        }
+        blocks.push({ type: 'paragraph', text: cleanText(line) });
+    }
+    return blocks;
+}
+
+async function initializeReleaseNotes(): Promise<void> {
+    try {
+        currentAppVersion = await getVersion();
+    } catch {
+        currentAppVersion = /^#\s+CS2 Replay Viewer v([^\s]+)/m.exec(releaseNotesMarkdown)?.[1] ?? '';
+    }
+    if (!currentAppVersion) return;
+    try {
+        if (await loadLastSeenReleaseNotesVersion() !== currentAppVersion) {
+            showReleaseNotesModal = true;
+        }
+    } catch (error) {
+        console.error('Failed to load release notes state:', error);
+    }
+}
+
+function openReleaseNotes(): void {
+    showReleaseNotesModal = true;
+}
+
+function closeReleaseNotes(): void {
+    showReleaseNotesModal = false;
+    if (currentAppVersion) {
+        void saveLastSeenReleaseNotesVersion(currentAppVersion).catch((error) => {
+            console.error('Failed to save release notes state:', error);
+        });
+    }
+}
 
 type ViewportTransform = {
     scale: number;
@@ -483,6 +781,7 @@ function mount3DScene(canvas: HTMLCanvasElement): { destroy: () => void } {
     const scene = new ReplayScene(canvas);
     replay3DScene = scene;
     scene.setPlayerSelectHandler(selectPlayer);
+    scene.setCameraMovementHandler(deselectPlayerPreservingViewport);
     if (replayData) scene.setReplay(replayData);
     scene.setTick(getPlaybackTick());
     apply3DSceneSettings();
@@ -2101,6 +2400,22 @@ $: {
     apply3DSceneSettings();
 }
 
+$: {
+    void showSightCone, sightConeForSelectedPlayer, sightConeHalfAngle, sightConeLength, sightConeTransparencyPercent,
+        showLineOfSight, lineOfSightWidth, lineOfSightLength,
+        showLineOfSight3D, lineOfSightWidth3D, lineOfSightLength3D, lineOfSightTransparency,
+        selectedPlayerZoomPercent,
+        showPlayerUtilities, showPlayerC4, showPlayerDefuseKit,
+        showNoiseCircle, noiseForSelectedPlayer, showCtNoiseCircle, showTNoiseCircle,
+        noiseTransparencyPercent, enabledNoiseSources,
+        showAllTimelineUtilities, enabledTimelineUtilities, enabledTimelineCombatEvents,
+        showDroppedWeapons, showDroppedUtility, showDroppedC4, showDroppedDefuseKit,
+        leftDrawingColor, rightDrawingColor, drawingStrokeWidth, drawingMode, drawingFadeSeconds,
+        viewerSettings.cameraMovementKeys, viewerSettings.cameraMovementSpeed, viewerSettings.cameraZoomSpeed,
+        viewerSettings.cs2GamePath;
+    scheduleViewerSettingsSave();
+}
+
 function startPlayback() {
     if (!browser || !replayData || rafId) return;
 
@@ -2237,6 +2552,8 @@ function getShortcutLabel(actionId: string): string {
         'sight.width.increase': 'Increase Sight Cone Width',
         'sight.length.decrease': 'Decrease Sight Cone Length',
         'sight.length.increase': 'Increase Sight Cone Length',
+        'sight.transparency.decrease': 'Decrease Sight Cone Transparency',
+        'sight.transparency.increase': 'Increase Sight Cone Transparency',
         'sight.show-los': 'Show Line of Sight',
         'sight.los-width.decrease': 'Decrease Line of Sight Width',
         'sight.los-width.increase': 'Increase Line of Sight Width',
@@ -2272,6 +2589,9 @@ function getShortcutLabel(actionId: string): string {
         'drawing.fade.decrease': 'Decrease Drawing Fade Time',
         'drawing.fade.increase': 'Increase Drawing Fade Time',
         'drawing.clear': 'Clear all Drawings',
+        'settings.import': 'Import Settings',
+        'settings.export': 'Export Settings',
+        'settings.restore-defaults': 'Restore Default Settings',
     };
     return labels[actionId] ?? actionId;
 }
@@ -2402,6 +2722,8 @@ function executeShortcut(actionId: string): void {
         case 'sight.width.increase': sightConeHalfAngle = clampStep(sightConeHalfAngle, 1, 0.02, 0.16, 0.8); break;
         case 'sight.length.decrease': sightConeLength = clampStep(sightConeLength, -1, 1, 18, 240); break;
         case 'sight.length.increase': sightConeLength = clampStep(sightConeLength, 1, 1, 18, 240); break;
+        case 'sight.transparency.decrease': sightConeTransparencyPercent = clampStep(sightConeTransparencyPercent, -1, 1, 0, 100); break;
+        case 'sight.transparency.increase': sightConeTransparencyPercent = clampStep(sightConeTransparencyPercent, 1, 1, 0, 100); break;
         case 'sight.show-los':
             if (viewMode === '3d') showLineOfSight3D = !showLineOfSight3D;
             else showLineOfSight = !showLineOfSight;
@@ -2451,6 +2773,9 @@ function executeShortcut(actionId: string): void {
         case 'drawing.fade.decrease': drawingFadeSeconds = clampStep(drawingFadeSeconds, -1, 1, 1, 6); break;
         case 'drawing.fade.increase': drawingFadeSeconds = clampStep(drawingFadeSeconds, 1, 1, 1, 6); break;
         case 'drawing.clear': clearAllDrawings(); break;
+        case 'settings.import': void chooseSettingsImport(); break;
+        case 'settings.export': void exportSettings(); break;
+        case 'settings.restore-defaults': showRestoreDefaultsModal = true; break;
     }
 }
 
@@ -2480,6 +2805,16 @@ function tryActivateDrawingShortcut(event: KeyboardEvent): void {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+    if (showReleaseNotesModal || pendingSettingsImport || showRestoreDefaultsModal) {
+        e.stopImmediatePropagation();
+        if (e.code === 'Escape') {
+            e.preventDefault();
+            if (pendingSettingsImport) pendingSettingsImport = null;
+            else if (showRestoreDefaultsModal) showRestoreDefaultsModal = false;
+            else closeReleaseNotes();
+        }
+        return;
+    }
     heldShortcutCodes.add(e.code);
 
     if (shortcutCaptureActionId) {
@@ -2529,6 +2864,7 @@ function handleKeyup(e: KeyboardEvent) {
 }
 
 function handleShortcutMouseDown(event: MouseEvent): void {
+    if (showReleaseNotesModal || pendingSettingsImport || showRestoreDefaultsModal) return;
     if (shortcutCaptureActionId) {
         event.preventDefault();
         event.stopPropagation();
@@ -2551,6 +2887,7 @@ function handleShortcutMouseDown(event: MouseEvent): void {
 }
 
 function handleShortcutWheel(event: WheelEvent): void {
+    if (showReleaseNotesModal || pendingSettingsImport || showRestoreDefaultsModal) return;
     const shortcut = shortcutFromWheelEvent(event, heldShortcutCodes);
     if (shortcutCaptureActionId) {
         event.preventDefault();
@@ -2593,9 +2930,10 @@ function handleViewportResize() {
 onMount(() => {
     if (!browser) return;
     void initializeShortcuts();
+    void initializeReleaseNotes();
     void loadViewerSettings().then((settings) => {
-        viewerSettings = settings;
-        apply3DSceneSettings();
+        applyViewerSettings(settings);
+        viewerSettingsLoaded = true;
     }).catch((error) => console.error('Failed to load viewer settings:', error));
     window.addEventListener('keydown', handleKeydown);
     window.addEventListener('keyup', handleKeyup);
@@ -2615,6 +2953,10 @@ onMount(() => {
         window.removeEventListener('resize', handleViewportResize);
         if (rafId) cancelAnimationFrame(rafId);
         if (toastTimeout) clearTimeout(toastTimeout);
+        if (viewerSettingsSaveTimeout) {
+            clearTimeout(viewerSettingsSaveTimeout);
+            void saveViewerSettings(captureViewerSettings());
+        }
         if (nadeClickTimeout) clearTimeout(nadeClickTimeout);
         if (deadIconClickTimeout) clearTimeout(deadIconClickTimeout);
     };
@@ -3203,6 +3545,19 @@ onMount(() => {
     border-color: #475569;
 }
 
+.panel-button.danger {
+    border-color: rgba(248, 113, 113, 0.48);
+    background: rgba(127, 29, 29, 0.54);
+    color: #fecaca;
+}
+
+.panel-button.danger:hover,
+.panel-button.danger:focus-visible {
+    border-color: #f87171;
+    background: rgba(153, 27, 27, 0.72);
+    color: #ffffff;
+}
+
 .checkbox-control {
     display: flex;
     min-width: 0;
@@ -3338,6 +3693,17 @@ onMount(() => {
     text-align: center;
 }
 
+.welcome-version {
+    position: absolute;
+    bottom: 18px;
+    left: 50%;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    transform: translateX(-50%);
+}
+
 .empty-state-title {
     font-size: 28px;
     font-weight: 700;
@@ -3353,7 +3719,7 @@ onMount(() => {
 
 .empty-state-actions {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 12px;
@@ -3386,6 +3752,24 @@ onMount(() => {
     transform: none;
 }
 
+.release-notes-button {
+    padding: 4px 8px;
+    border: 0;
+    background: transparent;
+    color: #93c5fd;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.release-notes-button:hover,
+.release-notes-button:focus-visible {
+    color: #dbeafe;
+}
+
 .donation-button {
     display: inline-flex;
     align-items: center;
@@ -3402,6 +3786,10 @@ onMount(() => {
     font-weight: 700;
     box-shadow: 0 8px 22px rgba(0, 48, 135, 0.24);
     transition: filter 0.15s ease, transform 0.1s ease;
+}
+
+.empty-state-actions .donation-button {
+    margin-top: 24px;
 }
 
 .donation-button:hover {
@@ -3430,6 +3818,179 @@ onMount(() => {
     font-size: 15px;
     font-style: italic;
     font-weight: 900;
+}
+
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: grid;
+    padding: 28px;
+    place-items: center;
+    background: rgba(3, 7, 18, 0.78);
+    backdrop-filter: blur(8px);
+}
+
+.app-modal {
+    display: flex;
+    width: min(720px, calc(100vw - 56px));
+    max-height: min(760px, calc(100vh - 56px));
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid rgba(96, 165, 250, 0.42);
+    border-radius: 10px;
+    background: #181823;
+    color: #e2e8f0;
+    box-shadow: 0 28px 80px rgba(0, 0, 0, 0.55);
+}
+
+.app-modal-header {
+    display: flex;
+    min-height: 68px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+    background: linear-gradient(90deg, rgba(59, 130, 246, 0.15), transparent 75%);
+}
+
+.app-modal-header h2 {
+    margin: 2px 0 0;
+    font-size: 20px;
+}
+
+.modal-close {
+    width: 36px;
+    height: 36px;
+    padding: 0 0 3px;
+    border: 1px solid rgba(148, 163, 184, 0.32);
+    border-radius: 6px;
+    background: #20202d;
+    color: #cbd5e1;
+    cursor: pointer;
+    font-size: 26px;
+    line-height: 1;
+}
+
+.modal-close:hover,
+.modal-close:focus-visible {
+    border-color: #60a5fa;
+    color: #ffffff;
+}
+
+.release-notes-scroll {
+    min-height: 0;
+    padding: 18px 22px 24px;
+    overflow-y: auto;
+}
+
+.release-heading {
+    margin: 20px 0 8px;
+    color: #bfdbfe;
+    font-size: 16px;
+    font-weight: 800;
+}
+
+.release-heading:first-child {
+    margin-top: 0;
+}
+
+.release-heading.level-2 {
+    color: #f1f5f9;
+    font-size: 18px;
+}
+
+.release-heading.level-3,
+.release-heading.level-4 {
+    color: #cbd5e1;
+    font-size: 14px;
+}
+
+.release-heading.release-title {
+    display: none;
+}
+
+.release-notes-scroll p {
+    margin: 7px 0;
+    color: #cbd5e1;
+    font-size: 14px;
+    line-height: 1.55;
+}
+
+.release-list-item {
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr);
+    gap: 5px;
+    margin: 6px 0;
+    color: #cbd5e1;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.release-list-item > span:first-child {
+    color: #60a5fa;
+}
+
+.import-modal {
+    width: min(500px, calc(100vw - 56px));
+    padding-bottom: 18px;
+}
+
+.import-modal > p {
+    margin: 16px 18px 8px;
+    color: #94a3b8;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.import-choice-list {
+    display: grid;
+    gap: 9px;
+    padding: 8px 18px 0;
+}
+
+.import-choice-list button {
+    min-height: 40px;
+    border: 1px solid rgba(96, 165, 250, 0.45);
+    border-radius: 6px;
+    background: #2563eb;
+    color: #ffffff;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.import-choice-list button:hover,
+.import-choice-list button:focus-visible {
+    filter: brightness(1.15);
+}
+
+.import-choice-list button.secondary {
+    border-color: rgba(148, 163, 184, 0.32);
+    background: #29293a;
+    color: #cbd5e1;
+}
+
+.import-choice-list button.danger {
+    border-color: rgba(248, 113, 113, 0.6);
+    background: #991b1b;
+}
+
+.import-choice-list button.import-everything {
+    border-color: rgba(74, 222, 128, 0.68);
+    background: #15803d;
+}
+
+.import-choice-list button.import-shortcuts {
+    border-color: rgba(251, 146, 60, 0.72);
+    background: #c2410c;
+}
+
+.import-choice-list button.import-settings {
+    border-color: rgba(96, 165, 250, 0.58);
+    background: #2563eb;
 }
 
 .three-d-viewport {
@@ -3647,6 +4208,7 @@ onMount(() => {
         bind:isPlaying={isPlaying}
         {sightConeLength}
         {sightConeHalfAngle}
+        {sightConeTransparencyPercent}
         {showSightCone}
         {sightConeForSelectedPlayer}
         {showLineOfSight}
@@ -3746,8 +4308,10 @@ onMount(() => {
                         <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="7" cy="17" r="1.5"/></svg>
                     {:else if section.key === 'equipment'}
                         <svg viewBox="0 0 24 24"><path d="M4 8h16v11H4zM9 8V5h6v3M4 13h16M10 13v2h4v-2"/></svg>
-                    {:else}
+                    {:else if section.key === 'drawing'}
                         <svg viewBox="0 0 24 24"><path d="m4 17 9-9 3 3-9 9H4v-3ZM14 7l2-2 3 3-2 2M4 4l4 1M4 4l1 4"/></svg>
+                    {:else}
+                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>
                     {/if}
                 </span>
                 <span class="toolbar-label">{section.label}</span>
@@ -3864,6 +4428,14 @@ onMount(() => {
                                 <ShortcutBinding actionId="sight.length.decrease" shortcut={getShortcut('sight.length.decrease')} isCapturing={shortcutCaptureActionId === 'sight.length.decrease'} emptyIcon="minus" oncapture={startShortcutCapture} onremove={deleteShortcut} />
                                 <input type="range" min="18" max="240" step="1" bind:value={sightConeLength} disabled={!showSightCone} aria-label="Sight cone length" />
                                 <ShortcutBinding actionId="sight.length.increase" shortcut={getShortcut('sight.length.increase')} isCapturing={shortcutCaptureActionId === 'sight.length.increase'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                            </div>
+                        </div>
+                        <div class="slider-control">
+                            <div class="control-label-line"><span>Sight Cone Transparency</span><output>{Math.round(sightConeTransparencyPercent)}%</output></div>
+                            <div class="slider-input-line">
+                                <ShortcutBinding actionId="sight.transparency.decrease" shortcut={getShortcut('sight.transparency.decrease')} isCapturing={shortcutCaptureActionId === 'sight.transparency.decrease'} emptyIcon="minus" oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                                <input type="range" min="0" max="100" step="1" bind:value={sightConeTransparencyPercent} disabled={!showSightCone} aria-label="Sight cone transparency" />
+                                <ShortcutBinding actionId="sight.transparency.increase" shortcut={getShortcut('sight.transparency.increase')} isCapturing={shortcutCaptureActionId === 'sight.transparency.increase'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
                             </div>
                         </div>
                     </section>
@@ -4067,6 +4639,23 @@ onMount(() => {
                             <ShortcutBinding actionId="drawing.clear" shortcut={getShortcut('drawing.clear')} isCapturing={shortcutCaptureActionId === 'drawing.clear'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
                         </div>
                     </section>
+                {:else if activeToolbarSection === 'settings'}
+                    <section class="control-section">
+                        <div class="controls-heading">Backup and transfer</div>
+                        <p class="panel-description">Export or restore all configurable values and shortcut assignments as one JSON file.</p>
+                        <div class="button-control-row">
+                            <button type="button" class="panel-button" onclick={chooseSettingsImport}>Import Settings</button>
+                            <ShortcutBinding actionId="settings.import" shortcut={getShortcut('settings.import')} isCapturing={shortcutCaptureActionId === 'settings.import'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        <div class="button-control-row">
+                            <button type="button" class="panel-button" onclick={exportSettings}>Export Settings</button>
+                            <ShortcutBinding actionId="settings.export" shortcut={getShortcut('settings.export')} isCapturing={shortcutCaptureActionId === 'settings.export'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                        <div class="button-control-row">
+                            <button type="button" class="panel-button danger" onclick={() => showRestoreDefaultsModal = true}>Restore Default Settings</button>
+                            <ShortcutBinding actionId="settings.restore-defaults" shortcut={getShortcut('settings.restore-defaults')} isCapturing={shortcutCaptureActionId === 'settings.restore-defaults'} oncapture={startShortcutCapture} onremove={deleteShortcut} />
+                        </div>
+                    </section>
                 {/if}
             </div>
         </aside>
@@ -4134,6 +4723,7 @@ onMount(() => {
             <button class="load-button" onclick={loadDemo} disabled={isLoading}>
                 {isLoading ? 'Loading...' : 'Load Demo File'}
             </button>
+            <button type="button" class="release-notes-button" onclick={openReleaseNotes}>Release Notes...</button>
             <button
                 type="button"
                 class="donation-button"
@@ -4145,5 +4735,69 @@ onMount(() => {
             </button>
         </div>
     </div>
+    <div class="welcome-version">Version: {currentAppVersion}</div>
 </div>
+{/if}
+
+{#if pendingSettingsImport}
+    <div class="modal-backdrop" role="presentation">
+        <div class="app-modal import-modal" role="dialog" aria-modal="true" aria-labelledby="import-settings-title">
+            <header class="app-modal-header">
+                <div>
+                    <div class="panel-eyebrow">Settings import</div>
+                    <h2 id="import-settings-title">Choose what to replace</h2>
+                </div>
+            </header>
+            <p>The imported file can replace every preference and shortcut, or only one of those groups.</p>
+            <div class="import-choice-list">
+                <button type="button" class="import-everything" onclick={() => void confirmSettingsImport('everything')}>Import Everything</button>
+                <button type="button" class="import-shortcuts" onclick={() => void confirmSettingsImport('shortcuts')}>Import only Shortcuts</button>
+                <button type="button" class="import-settings" onclick={() => void confirmSettingsImport('settings')}>Import only Settings</button>
+                <button type="button" class="secondary" onclick={() => pendingSettingsImport = null}>Cancel Import</button>
+            </div>
+        </div>
+    </div>
+{/if}
+
+{#if showRestoreDefaultsModal}
+    <div class="modal-backdrop" role="presentation">
+        <div class="app-modal import-modal" role="alertdialog" aria-modal="true" aria-labelledby="restore-defaults-title" aria-describedby="restore-defaults-description">
+            <header class="app-modal-header">
+                <div>
+                    <div class="panel-eyebrow">Restore defaults</div>
+                    <h2 id="restore-defaults-title">Reset all settings?</h2>
+                </div>
+            </header>
+            <p id="restore-defaults-description">Are you sure you want to reset all values? Every saved preference and shortcut assignment will return to the defaults included with the application.</p>
+            <div class="import-choice-list">
+                <button type="button" class="danger" disabled={isRestoringDefaults} onclick={() => void restoreDefaultSettings()}>{isRestoringDefaults ? 'Restoring...' : 'Restore Default Settings'}</button>
+                <button type="button" class="secondary" disabled={isRestoringDefaults} onclick={() => showRestoreDefaultsModal = false}>Cancel</button>
+            </div>
+        </div>
+    </div>
+{/if}
+
+{#if showReleaseNotesModal}
+    <div class="modal-backdrop" role="presentation">
+        <div class="app-modal release-notes-modal" role="dialog" aria-modal="true" aria-labelledby="release-notes-title">
+            <header class="app-modal-header">
+                <div>
+                    <div class="panel-eyebrow">What is new</div>
+                    <h2 id="release-notes-title">Release Notes{currentAppVersion ? ` · v${currentAppVersion}` : ''}</h2>
+                </div>
+                <button type="button" class="modal-close" aria-label="Close release notes" title="Close release notes" onclick={closeReleaseNotes}>×</button>
+            </header>
+            <div class="release-notes-scroll">
+                {#each RELEASE_NOTES_BLOCKS as block}
+                    {#if block.type === 'heading'}
+                        <div class:release-title={block.level === 1} class="release-heading level-{block.level}">{block.text}</div>
+                    {:else if block.type === 'list-item'}
+                        <div class="release-list-item"><span aria-hidden="true">•</span><span>{block.text}</span></div>
+                    {:else}
+                        <p>{block.text}</p>
+                    {/if}
+                {/each}
+            </div>
+        </div>
+    </div>
 {/if}
