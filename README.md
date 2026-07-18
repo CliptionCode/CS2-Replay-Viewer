@@ -31,7 +31,7 @@ Open only the controls you need. Section shortcuts can be left unassigned or dis
 
 ### Color-coded teams and roster shortcuts
 
-CT and T players remain color-coded and alphabetically sorted. Shortcuts belong to roster positions, while unassigned positions show an add button.
+CT and T players remain color-coded and alphabetically sorted. Each roster button also shows the player's money at the current replay moment in green. Shortcuts belong to roster positions, while unassigned positions show an add button.
 
 ![Color-coded CT and T rosters with assigned and unassigned player shortcuts](docs/images/Color_Coded_Teams_with_and_without_shortcuts.png)
 
@@ -88,6 +88,7 @@ Draw routes, callouts, positions, and tactical plans directly on the replay rada
 - Browse a timeline for every round.
 - View color-coded round results, including the winning side and surviving Terrorists and Counter-Terrorists.
 - Keep CT and T player lists consistently sorted by player name in ascending order whenever a replay is loaded.
+- See every player's current money in green beside their name in the CT and T rosters.
 
 ### 2D and 3D views
 

@@ -369,6 +369,7 @@ type RosterEntry = {
     player: PlayerInfo;
     side: number;
     isAlive: boolean;
+    money: number;
     color: string;
 };
 
@@ -1089,6 +1090,7 @@ function buildRosterEntries(round: RoundData | null, tick: number): RosterEntry[
                 player,
                 side,
                 isAlive,
+                money: frame?.money ?? 0,
                 color: isAlive ? getTeamColor(side) : DEAD_PLAYER_COLOR,
             };
         })
@@ -3619,7 +3621,8 @@ onMount(() => {
 }
 
 .roster-player {
-    display: block;
+    display: flex;
+    align-items: center;
     min-width: 0;
     width: auto;
     flex: 1 1 auto;
@@ -3676,7 +3679,22 @@ onMount(() => {
 
 .roster-player.dead {
     color: #6b7280;
+}
+
+.roster-player.dead .roster-player-name {
     text-decoration: line-through;
+}
+
+.roster-player-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.roster-player-money {
+    flex: 0 0 auto;
+    margin-left: auto;
+    color: #4ade80;
 }
 
 /* Empty state */
@@ -4671,10 +4689,11 @@ onMount(() => {
                             class="roster-player"
                             class:dead={!entry.isAlive}
                             class:selected={isSelectedPlayer(entry.player.steamId)}
-                            title={entry.player.name}
+                            title={`${entry.player.name} $${entry.money}`}
                             onclick={() => handleRosterPlayerClick(entry)}
                         >
-                            {entry.player.name}
+                            <span class="roster-player-name">{entry.player.name}</span>
+                            <span class="roster-player-money">${entry.money}</span>
                         </button>
                         <ShortcutBinding
                             actionId={`player-slot.ct.${slotIndex}`}
@@ -4694,10 +4713,11 @@ onMount(() => {
                             class="roster-player"
                             class:dead={!entry.isAlive}
                             class:selected={isSelectedPlayer(entry.player.steamId)}
-                            title={entry.player.name}
+                            title={`${entry.player.name} $${entry.money}`}
                             onclick={() => handleRosterPlayerClick(entry)}
                         >
-                            {entry.player.name}
+                            <span class="roster-player-name">{entry.player.name}</span>
+                            <span class="roster-player-money">${entry.money}</span>
                         </button>
                         <ShortcutBinding
                             actionId={`player-slot.t.${slotIndex}`}

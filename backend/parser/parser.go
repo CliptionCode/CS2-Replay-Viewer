@@ -134,6 +134,7 @@ type PlayerFrame struct {
 	VelocityZ      float32
 	Team           int
 	HasDefuseKit   bool
+	Money          int
 }
 
 type FlashEvent struct {
@@ -1229,6 +1230,7 @@ func (r *frameRecorder) recordFrameDone(p demoinfocs.Parser) {
 			OnGround:     player.Flags().OnGround(),
 			Team:         int(player.Team),
 			HasDefuseKit: player.HasDefuseKit(),
+			Money:        player.Money(),
 		}
 		if eyePos, ok := player.PositionEyes(); ok {
 			frame.EyeX = float32(eyePos.X)

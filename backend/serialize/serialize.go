@@ -198,6 +198,7 @@ func convertFrame(f *parser.PlayerFrame) *pb.PlayerFrame {
 		VelocityZ:      f.VelocityZ,
 		Team:           int32(f.Team),
 		HasDefuseKit:   f.HasDefuseKit,
+		Money:          int32(f.Money),
 	}
 }
 

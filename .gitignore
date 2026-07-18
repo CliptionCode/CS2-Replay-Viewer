@@ -81,3 +81,7 @@ Desktop.ini
 tmp/
 temp/
 *.tmp
+
+# Local project context
+/Context.md
+/REPLAY.md

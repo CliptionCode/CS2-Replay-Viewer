@@ -22,6 +22,14 @@ func TestConvertFramePreservesDefuseKit(t *testing.T) {
 	}
 }
 
+func TestConvertFramePreservesMoney(t *testing.T) {
+	frame := convertFrame(&parser.PlayerFrame{Money: 1850})
+
+	if frame.Money != 1850 {
+		t.Fatalf("converted frame money = %d, want 1850", frame.Money)
+	}
+}
+
 func TestConvertBombPreservesPlantPosition(t *testing.T) {
 	bomb := convertBomb(&parser.BombEvent{X: 123.5, Y: -456.25, Z: 78})
 
